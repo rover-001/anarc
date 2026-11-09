@@ -126,6 +126,8 @@ pub(crate) struct Lumen {
     sidebar_transition_serial: u64,
     theme_transition: Option<(visual::SpaceTheme, Instant, u64)>,
     theme_transition_id: u64,
+    space_switch_transition: Option<(Space, space_switcher::SpaceSwitchState, Instant, u64)>,
+    space_switch_transition_id: u64,
     #[cfg(all(target_os = "linux", not(test)))]
     resize_drag: split_view::ResizeDrag,
     started_at: Instant,
@@ -397,6 +399,8 @@ impl Lumen {
             sidebar_transition_serial: 0,
             theme_transition: None,
             theme_transition_id: 0,
+            space_switch_transition: None,
+            space_switch_transition_id: 0,
             #[cfg(all(target_os = "linux", not(test)))]
             resize_drag: split_view::ResizeDrag::default(),
             started_at: Instant::now(),
@@ -454,13 +458,45 @@ impl Lumen {
         if self.active_space == id {
             return;
         }
-        if self.spaces.iter().any(|space| space.id == id) {
+        if let Some(to_index) = self.spaces.iter().position(|space| space.id == id) {
+            let from_index = self
+                .spaces
+                .iter()
+                .position(|space| space.id == self.active_space)
+                .unwrap_or(0);
+            let current_space = self.active_space().clone();
+            let (outgoing_space, switch_state) = self.space_switch_transition.as_ref().map_or_else(
+                || {
+                    (
+                        current_space.clone(),
+                        space_switcher::SpaceSwitchState::new(from_index, to_index),
+                    )
+                },
+                |(previous_space, state, started, _)| {
+                    let progress = ui::motion::ease_out_quint(
+                        started.elapsed().as_secs_f32()
+                            / ui::motion::MOTION_SPACE_SWITCH.as_secs_f32(),
+                    );
+                    let keep_incoming = progress >= 0.5;
+                    let outgoing_space = if keep_incoming {
+                        current_space.clone()
+                    } else {
+                        previous_space.clone()
+                    };
+                    (
+                        outgoing_space,
+                        state.retarget(to_index, progress, keep_incoming),
+                    )
+                },
+            );
             let current_theme = visual::space_theme(self.active_space().color);
             let displayed_theme =
                 self.theme_transition
                     .map_or(current_theme, |(from, started, _)| {
                         let progress = started.elapsed().as_secs_f32()
-                            / ui::motion::MOTION_THEME.as_secs_f32().max(f32::EPSILON);
+                            / ui::motion::MOTION_SPACE_SWITCH
+                                .as_secs_f32()
+                                .max(f32::EPSILON);
                         visual::interpolate_theme(
                             from,
                             current_theme,
@@ -470,6 +506,17 @@ impl Lumen {
             self.theme_transition_id = self.theme_transition_id.wrapping_add(1);
             self.theme_transition =
                 Some((displayed_theme, Instant::now(), self.theme_transition_id));
+            self.space_switch_transition_id = self.space_switch_transition_id.wrapping_add(1);
+            self.space_switch_transition = if ui::motion::reduced_motion() {
+                None
+            } else {
+                Some((
+                    outgoing_space,
+                    switch_state,
+                    Instant::now(),
+                    self.space_switch_transition_id,
+                ))
+            };
         }
         self.show_suggestions = false;
         self.active_space = id.to_owned();
@@ -570,7 +617,7 @@ impl Lumen {
                 space.active = Some(tab_id);
 
                 self.spaces.push(space);
-                self.active_space = id;
+                self.activate_space(&id);
             }
             SpaceModalMode::Edit { space_id } => {
                 if let Some(space) = self.spaces.iter_mut().find(|s| s.id == space_id) {
@@ -741,21 +788,24 @@ impl Lumen {
             tab.id = id.clone();
             space.tabs.push(tab);
             space.active = Some(id);
-            self.active_space = space_id;
+            let _ = space;
+            self.activate_space(&space_id);
         }
         self.save_state();
     }
 
     fn open_popup_tab(&mut self, space_id: &str, url: String) {
-        let Some(space) = self.spaces.iter_mut().find(|space| space.id == space_id) else {
-            return;
-        };
-        let id = next_tab_id(space);
-        let mut tab = Tab::new(&id, "New tab", url);
-        tab.state = TabState::Live;
-        space.tabs.push(tab);
-        space.active = Some(id);
-        self.active_space = space_id.to_owned();
+        {
+            let Some(space) = self.spaces.iter_mut().find(|space| space.id == space_id) else {
+                return;
+            };
+            let id = next_tab_id(space);
+            let mut tab = Tab::new(&id, "New tab", url);
+            tab.state = TabState::Live;
+            space.tabs.push(tab);
+            space.active = Some(id);
+        }
+        self.activate_space(space_id);
         self.save_state();
     }
 
@@ -1201,12 +1251,20 @@ impl Lumen {
         self.show_command_palette = false;
         match item.target {
             PaletteTarget::Tab { space_id, tab_id } => {
-                if let Some(space) = self.spaces.iter_mut().find(|space| space.id == space_id)
-                    && space.tabs.iter().any(|tab| tab.id == tab_id)
+                let valid = if let Some(space) =
+                    self.spaces.iter_mut().find(|space| space.id == space_id)
                 {
-                    space.active = Some(tab_id);
-                    self.active_space = space_id;
-                    self.save_state();
+                    if space.tabs.iter().any(|tab| tab.id == tab_id) {
+                        space.active = Some(tab_id);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if valid {
+                    self.activate_space(&space_id);
                 }
             }
             PaletteTarget::History(url) => self.navigate_to(&url, window, cx),
@@ -1787,7 +1845,29 @@ impl Render for Lumen {
                     active_space.color
                 }
             });
-        let theme = visual::space_theme(selected_color);
+        let target_theme = visual::space_theme(selected_color);
+        let theme = if ui::motion::reduced_motion() {
+            target_theme
+        } else {
+            self.theme_transition
+                .map_or(target_theme, |(from, started, _)| {
+                    let progress = started.elapsed().as_secs_f32()
+                        / ui::motion::MOTION_SPACE_SWITCH
+                            .as_secs_f32()
+                            .max(f32::EPSILON);
+                    visual::interpolate_theme(
+                        from,
+                        target_theme,
+                        ui::motion::ease_out_quint(progress),
+                    )
+                })
+        };
+        let space_switch_transition =
+            self.space_switch_transition
+                .clone()
+                .filter(|(_, _, started, _)| {
+                    started.elapsed() < ui::motion::duration(ui::motion::MOTION_SPACE_SWITCH)
+                });
         let tabs: Vec<(
             String,
             String,
@@ -2028,7 +2108,6 @@ impl Render for Lumen {
                         .right(px(-2.0 * UI_SCALE))
                         .w(px(6.0 * UI_SCALE))
                         .cursor_col_resize()
-                        .hover(|s| s.bg(rgb(theme.surface_hover)))
                         .on_mouse_down(
                             gpui_kit::MouseButton::Left,
                             cx.listener(|this, _, _window, cx| {
@@ -2050,15 +2129,15 @@ impl Render for Lumen {
                 );
 
             if let Some(row_index) = active_row_index {
-                let target_top =
-                    52.0 * UI_SCALE + row_index as f32 * (visual::TAB_ROW_HEIGHT + 8.0 * UI_SCALE);
+                let rect = visual::sidebar_row_rect(sidebar_width_f32, row_index);
                 let highlight = div()
                     .id("active-tab-highlight")
                     .absolute()
-                    .left_0()
-                    .w_full()
-                    .h(px(visual::TAB_ROW_HEIGHT))
+                    .left(px(rect.left))
+                    .w(px(rect.width))
+                    .h(px(rect.height))
                     .rounded_lg()
+                    .overflow_hidden()
                     .bg(rgb(theme.surface))
                     .child(
                         div()
@@ -2070,14 +2149,17 @@ impl Render for Lumen {
                             .rounded_full()
                             .bg(rgb(selected_color)),
                     );
-                let highlight = if ui::motion::reduced_motion() {
-                    highlight.top(px(target_top)).into_any_element()
+                let highlight = if ui::motion::reduced_motion()
+                    || space_switch_transition.is_some()
+                    || self.theme_transition.is_some()
+                {
+                    highlight.top(px(rect.top)).into_any_element()
                 } else {
                     highlight
                         .with_spring(
-                            "active-tab-highlight-position",
+                            format!("active-tab-highlight-position-{active_space_id}"),
                             SpringAnimation::new(SpringConfig::new(400.0, 32.0, 1.0))
-                                .to(px(target_top)),
+                                .to(px(rect.top)),
                             |highlight, top| highlight.top(top),
                         )
                         .into_any_element()
@@ -2436,16 +2518,15 @@ impl Render for Lumen {
                 } else {
                     *closing_index
                 };
-                let top =
-                    52.0 * UI_SCALE + row_index as f32 * (visual::TAB_ROW_HEIGHT + 8.0 * UI_SCALE);
+                let row_rect = visual::sidebar_row_rect(sidebar_width_f32, row_index);
                 sidebar_content = sidebar_content.child(
                     div()
                         .id(format!("closing-tab-{}-{serial}", closing_tab.id))
                         .absolute()
-                        .left_0()
-                        .top(px(top))
-                        .w_full()
-                        .h(px(visual::TAB_ROW_HEIGHT))
+                        .left(px(row_rect.left))
+                        .top(px(row_rect.top))
+                        .w(px(row_rect.width))
+                        .h(px(row_rect.height))
                         .overflow_hidden()
                         .rounded_lg()
                         .bg(rgb(theme.surface))
@@ -2499,12 +2580,46 @@ impl Render for Lumen {
             sidebar_content = sidebar_content.child(div().flex_1().min_h(px(8.0 * UI_SCALE)));
 
             // Bottom bar with Settings, Space Switcher (icons like Arc), and Downloads
-            let mut spaces_dock = div().id("spaces-dock").flex().items_center().gap_1();
+            let active_space_index = self
+                .spaces
+                .iter()
+                .position(|space| space.id == active_space_id)
+                .unwrap_or(0);
+            let mut spaces_dock = div()
+                .id("spaces-dock")
+                .relative()
+                .flex()
+                .items_center()
+                .gap_1();
+            let indicator_left = active_space_index as f32 * (28.0 * UI_SCALE + 4.0);
+            let indicator = div()
+                .id("space-dock-active-indicator")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size(px(28.0 * UI_SCALE))
+                .rounded_lg()
+                .bg(rgb(theme.surface))
+                .border_1()
+                .border_color(rgb(theme.border_hover));
+            let indicator = if ui::motion::reduced_motion() {
+                indicator.left(px(indicator_left)).into_any_element()
+            } else {
+                indicator
+                    .with_spring(
+                        "space-dock-active-indicator-position",
+                        SpringAnimation::new(SpringConfig::new(400.0, 32.0, 1.0))
+                            .to(px(indicator_left)),
+                        |indicator, left| indicator.left(left),
+                    )
+                    .into_any_element()
+            };
+            spaces_dock = spaces_dock.child(indicator);
 
             for space in &self.spaces {
                 let id = space.id.clone();
                 let is_active = space.id == active_space_id;
-                let icon_btn = space_switcher::space_icon_button(
+                let icon_btn = space_switcher::space_dock_icon_button(
                     &space.icon,
                     is_active,
                     visual::space_theme(space.color),
@@ -2599,7 +2714,24 @@ impl Render for Lumen {
                 );
         }
 
-        let sidebar_content = if let Some((from, to, _, serial)) = self.sidebar_width_transition {
+        let sidebar_content = if let Some((_, state, _, serial)) = &space_switch_transition {
+            let start_alpha = state.incoming_opacity_start;
+            let start_offset = state.incoming_offset_start;
+            sidebar_content
+                .with_animation(
+                    format!("space-switch-sidebar-in-{serial}"),
+                    Animation::new(ui::motion::duration(ui::motion::MOTION_SPACE_SWITCH))
+                        .with_easing(ui::motion::ease_out_quint),
+                    move |sidebar, progress| {
+                        sidebar.left(px(start_offset * (1.0 - progress))).opacity(
+                            ui::motion::clamp_percentage(
+                                start_alpha + (1.0 - start_alpha) * progress,
+                            ),
+                        )
+                    },
+                )
+                .into_any_element()
+        } else if let Some((from, to, _, serial)) = self.sidebar_width_transition {
             sidebar_content
                 .with_animation(
                     format!("sidebar-width-transition-{serial}"),
@@ -2613,6 +2745,163 @@ impl Render for Lumen {
         } else {
             sidebar_content.into_any_element()
         };
+
+        let outgoing_space_overlay =
+            space_switch_transition
+                .as_ref()
+                .map(|(outgoing_space, state, _, serial)| {
+                    let old_theme = visual::space_theme(outgoing_space.color);
+                    let mut overlay = div()
+                        .id(format!(
+                            "space-switch-outgoing-{}-{serial}",
+                            outgoing_space.id
+                        ))
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .w(px(sidebar_width_f32))
+                        .h_full()
+                        .overflow_hidden()
+                        .flex()
+                        .flex_col()
+                        .px_3()
+                        .py_3()
+                        .gap_2()
+                        .bg(rgb(old_theme.base))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .px_2()
+                                .py_2()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(old_theme.text))
+                                .child(outgoing_space.name.clone()),
+                        );
+                    let mut outgoing_rows = Vec::new();
+                    let split_tabs = outgoing_space.split.as_ref().and_then(|pair| {
+                        let first = outgoing_space
+                            .tabs
+                            .iter()
+                            .find(|tab| tab.id == pair.first)?;
+                        let second = outgoing_space
+                            .tabs
+                            .iter()
+                            .find(|tab| tab.id == pair.second)?;
+                        Some((pair, first, second))
+                    });
+                    if let Some((pair, first, second)) = split_tabs {
+                        let active_is_member = outgoing_space.active.as_deref()
+                            == Some(pair.first.as_str())
+                            || outgoing_space.active.as_deref() == Some(pair.second.as_str());
+                        outgoing_rows.push((
+                            tab_list::group_label(&first.title, &second.title),
+                            None,
+                            active_is_member && !self.split_group_expanded,
+                        ));
+                        if self.split_group_expanded {
+                            for member in [first, second] {
+                                outgoing_rows.push((
+                                    member.title.clone(),
+                                    self.engine.get_favicon_image(&member.id),
+                                    outgoing_space.active.as_deref() == Some(member.id.as_str()),
+                                ));
+                            }
+                        }
+                    }
+                    for tab in &outgoing_space.tabs {
+                        if outgoing_space
+                            .split
+                            .as_ref()
+                            .is_some_and(|pair| tab.id == pair.first || tab.id == pair.second)
+                        {
+                            continue;
+                        }
+                        outgoing_rows.push((
+                            tab.title.clone(),
+                            self.engine.get_favicon_image(&tab.id),
+                            outgoing_space.active.as_deref() == Some(tab.id.as_str()),
+                        ));
+                    }
+                    let new_tab_index = outgoing_rows.len();
+                    let active_row_index = outgoing_rows.iter().position(|(_, _, active)| *active);
+                    for (row_index, (title, favicon, selected)) in
+                        outgoing_rows.into_iter().enumerate()
+                    {
+                        let rect = visual::sidebar_row_rect(sidebar_width_f32, row_index);
+                        let row = div()
+                            .absolute()
+                            .left(px(rect.left))
+                            .top(px(rect.top))
+                            .w(px(rect.width))
+                            .h(px(rect.height))
+                            .rounded_lg()
+                            .when(selected, |row| row.bg(rgb(old_theme.surface)))
+                            .flex()
+                            .items_center()
+                            .gap(px(visual::SIDEBAR_ROW_GAP))
+                            .px(px(visual::SIDEBAR_ROW_PADDING_X))
+                            .text_sm()
+                            .text_color(rgb(if selected {
+                                old_theme.text
+                            } else {
+                                old_theme.muted
+                            }))
+                            .overflow_hidden()
+                            .child(tab_list::favicon(favicon))
+                            .child(title);
+                        overlay = overlay.child(row);
+                    }
+                    if let Some(active_row_index) = active_row_index {
+                        let rect = visual::sidebar_row_rect(sidebar_width_f32, active_row_index);
+                        overlay = overlay.child(
+                            div()
+                                .absolute()
+                                .left(px(rect.left))
+                                .top(px(rect.top))
+                                .w(px(2.0 * UI_SCALE))
+                                .h(px(rect.height))
+                                .rounded_full()
+                                .bg(rgb(old_theme.accent)),
+                        );
+                    }
+                    let new_tab = visual::sidebar_row_rect(sidebar_width_f32, new_tab_index);
+                    overlay = overlay.child(
+                        div()
+                            .absolute()
+                            .left(px(new_tab.left))
+                            .top(px(new_tab.top))
+                            .w(px(new_tab.width))
+                            .h(px(new_tab.height))
+                            .flex()
+                            .items_center()
+                            .gap(px(visual::SIDEBAR_ROW_GAP))
+                            .px(px(visual::SIDEBAR_ROW_PADDING_X))
+                            .text_sm()
+                            .text_color(rgb(old_theme.muted))
+                            .child(Icon::new(IconName::Plus).size(px(14.0 * UI_SCALE)))
+                            .child("New tab"),
+                    );
+                    let initial_alpha = state.outgoing_opacity_start;
+                    let initial_offset = state.outgoing_offset_start;
+                    let outgoing_offset = state.outgoing_direction * 24.0;
+                    overlay
+                        .with_animation(
+                            format!("space-switch-sidebar-out-{serial}"),
+                            Animation::new(ui::motion::duration(ui::motion::MOTION_SPACE_SWITCH))
+                                .with_easing(ui::motion::ease_out_quint),
+                            move |overlay, progress| {
+                                overlay
+                                    .left(px(initial_offset * (1.0 - progress)
+                                        + outgoing_offset * progress))
+                                    .opacity(ui::motion::clamp_percentage(
+                                        initial_alpha * (1.0 - progress),
+                                    ))
+                            },
+                        )
+                        .into_any_element()
+                });
 
         let mut root = div()
             .relative()
@@ -2703,6 +2992,7 @@ impl Render for Lumen {
                 }),
             )
             .child(sidebar_content)
+            .children(outgoing_space_overlay)
             .child(
                 div()
                     .relative()
@@ -3984,10 +4274,10 @@ impl Render for Lumen {
         }
 
         let root = if let Some((from_theme, _, transition_id)) = self.theme_transition {
-            let to_theme = theme;
+            let to_theme = target_theme;
             root.with_animation(
                 format!("space-theme-transition-{transition_id}"),
-                Animation::new(ui::motion::duration(ui::motion::MOTION_THEME))
+                Animation::new(ui::motion::duration(ui::motion::MOTION_SPACE_SWITCH))
                     .with_easing(ui::motion::ease_out_quint),
                 move |root, progress| {
                     let theme = visual::interpolate_theme(from_theme, to_theme, progress);
@@ -4114,6 +4404,8 @@ mod tests {
             sidebar_transition_serial: 0,
             theme_transition: None,
             theme_transition_id: 0,
+            space_switch_transition: None,
+            space_switch_transition_id: 0,
             #[cfg(all(target_os = "linux", not(test)))]
             resize_drag: split_view::ResizeDrag::default(),
             started_at: Instant::now(),
