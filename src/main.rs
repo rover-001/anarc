@@ -13,8 +13,8 @@ mod ui;
 use std::time::Instant;
 
 use gpui_kit::{
-    AnyView, Bounds, Context, FontWeight, KeyDownEvent, KeyUpEvent, Render, StyleRefinement,
-    Window, WindowBounds, WindowOptions,
+    AnyView, Bounds, Context, Focusable, FontWeight, KeyDownEvent, KeyUpEvent, Render,
+    StyleRefinement, Window, WindowBounds, WindowOptions,
     assets::IconName,
     component::Icon,
     component::input::{Input, InputEvent, InputState},
@@ -124,6 +124,9 @@ pub(crate) struct Lumen {
     started_at: Instant,
     first_frame_logged: bool,
     address: gpui_kit::Entity<InputState>,
+    address_active_tab: Option<(String, String)>,
+    address_editing: bool,
+    reset_address_for_tab_change: bool,
     find_input: gpui_kit::Entity<InputState>,
     command_input: gpui_kit::Entity<InputState>,
     pub(crate) browser_focus_handle: gpui_kit::FocusHandle,
@@ -137,7 +140,7 @@ pub(crate) struct Lumen {
     recent_searches: Vec<String>,
     zoom_levels: std::collections::HashMap<String, f64>,
     #[cfg(all(target_os = "linux", not(test)))]
-    active_zoom_host: Option<String>,
+    active_zoom_target: Option<(String, String)>,
     show_suggestions: bool,
     pub(crate) engine: engine::Engine,
     web_viewport: gpui_kit::Entity<WebViewport>,
@@ -337,6 +340,7 @@ impl Lumen {
                     cx.notify();
                 }
                 InputEvent::Change => {
+                    this.address_editing = true;
                     let text = this.address.read(cx).value().to_string();
                     this.update_suggestions(&text);
                     this.selected_suggestion = None;
@@ -371,6 +375,9 @@ impl Lumen {
             started_at: Instant::now(),
             first_frame_logged: false,
             address,
+            address_active_tab: None,
+            address_editing: false,
+            reset_address_for_tab_change: false,
             find_input,
             command_input,
             browser_focus_handle,
@@ -389,7 +396,7 @@ impl Lumen {
             recent_searches: history::load_recent_searches(),
             zoom_levels: load_zooms(),
             #[cfg(all(target_os = "linux", not(test)))]
-            active_zoom_host: None,
+            active_zoom_target: None,
             show_suggestions: false,
             engine,
             space_modal: None,
@@ -542,6 +549,8 @@ impl Lumen {
 
     fn add_tab(&mut self) {
         self.show_suggestions = false;
+        self.address_editing = false;
+        self.reset_address_for_tab_change = true;
         let space = self
             .spaces
             .iter_mut()
@@ -842,6 +851,7 @@ impl Lumen {
     fn navigate(&mut self, cx: &Context<Self>) {
         self.show_suggestions = false;
         self.selected_suggestion = None;
+        self.address_editing = false;
         let input = self.address.read(cx).value().to_string();
         let space = self.active_space_mut();
         let Some((id, url, http_first)) = submit_address(space, &input) else {
@@ -859,6 +869,7 @@ impl Lumen {
     fn navigate_to(&mut self, target: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.show_suggestions = false;
         self.selected_suggestion = None;
+        self.address_editing = false;
         self.address.update(cx, |input, cx| {
             input.set_value(target, window, cx);
         });
@@ -1026,23 +1037,42 @@ impl Lumen {
     }
 
     fn focused_tab_id(&self) -> &str {
-        self.active_space()
-            .split
-            .as_ref()
-            .map(|pair| split_view::tab_for_pane(&pair.first, &pair.second, self.focused_pane))
-            .unwrap_or_else(|| self.active_tab_id())
+        let space = self.active_space();
+        let active = space.active.as_deref().unwrap_or_default();
+        let Some(pair) = space.split.as_ref().filter(|pair| {
+            (active == pair.first || active == pair.second)
+                && pair.first != pair.second
+                && space.tabs.iter().any(|tab| tab.id == pair.first)
+                && space.tabs.iter().any(|tab| tab.id == pair.second)
+        }) else {
+            return active;
+        };
+        split_view::tab_for_pane(&pair.first, &pair.second, self.focused_pane)
     }
 
     pub(crate) fn set_focused_pane(&mut self, pane_index: usize) {
         self.focused_pane = pane_index.min(1);
-        if let Some(pair) = self.current_split_pair() {
+        if let Some(pair) = self.stored_split_pair() {
             self.active_space_mut().active = Some(
                 split_view::tab_for_pane(&pair.first, &pair.second, self.focused_pane).to_owned(),
             );
         }
     }
 
+    fn activate_split_group(&mut self) {
+        if let Some(pair) = self.stored_split_pair() {
+            self.focused_pane = 0;
+            self.active_space_mut().active = Some(pair.first);
+        }
+    }
+
     fn current_split_pair(&self) -> Option<SplitPair> {
+        let pair = self.stored_split_pair()?;
+        let active = self.active_tab_id();
+        (active == pair.first || active == pair.second).then_some(pair)
+    }
+
+    fn stored_split_pair(&self) -> Option<SplitPair> {
         let space = self.active_space();
         let pair = space.split.as_ref()?;
         let has_first = space.tabs.iter().any(|tab| tab.id == pair.first);
@@ -1476,6 +1506,39 @@ impl Render for Lumen {
             }
         }
 
+        let active_address_tab = (self.active_space.clone(), self.active_tab_id().to_owned());
+        if self.address_active_tab.as_ref() != Some(&active_address_tab) {
+            let active_url = self
+                .active_space()
+                .tabs
+                .iter()
+                .find(|tab| tab.id == active_address_tab.1)
+                .map(|tab| {
+                    if tab.url == "about:blank" {
+                        String::new()
+                    } else {
+                        tab.url.clone()
+                    }
+                })
+                .unwrap_or_default();
+            let address_focused =
+                _window.focused(cx) == Some(self.address.read(cx).focus_handle(cx));
+            let force_reset = self.reset_address_for_tab_change;
+            if force_reset || !(self.address_editing && address_focused) {
+                self.address.update(cx, |input, cx| {
+                    input.set_value(&active_url, _window, cx);
+                    if force_reset {
+                        input.focus(_window, cx);
+                    }
+                });
+                self.address_editing = false;
+                self.show_suggestions = false;
+                self.selected_suggestion = None;
+            }
+            self.address_active_tab = Some(active_address_tab);
+            self.reset_address_for_tab_change = false;
+        }
+
         let active_space_id = self.active_space.clone();
         let active_space = self.active_space().clone();
         let active_tab_id = active_space.active.clone();
@@ -1520,6 +1583,7 @@ impl Render for Lumen {
         let active_tab_id_string = active_tab_id.clone().unwrap_or_default();
         let active_tab_url = active_tab.map(|tab| tab.url.clone()).unwrap_or_default();
         let split_pair = self.current_split_pair();
+        let stored_split_pair = self.stored_split_pair();
 
         #[cfg(all(target_os = "linux", not(test)))]
         let scale = _window.scale_factor();
@@ -1567,6 +1631,10 @@ impl Render for Lumen {
                     active_width.max(1),
                     content_h,
                     0xff000000 | theme.surface,
+                    self.zoom_levels
+                        .get(&url_host(&active_tab_url))
+                        .copied()
+                        .unwrap_or_else(visual::default_zoom_level),
                 ) {
                     eprintln!("Lumen CEF browser creation failed: {error}");
                 }
@@ -1584,6 +1652,10 @@ impl Render for Lumen {
                             left_width_dip.max(1),
                             content_h,
                             0xff000000 | theme.surface,
+                            self.zoom_levels
+                                .get(&url_host(&tab.url))
+                                .copied()
+                                .unwrap_or_else(visual::default_zoom_level),
                         ) {
                             eprintln!("Lumen split browser creation failed: {error}");
                         }
@@ -1601,6 +1673,10 @@ impl Render for Lumen {
                             right_width_dip.max(1),
                             content_h,
                             0xff000000 | theme.surface,
+                            self.zoom_levels
+                                .get(&url_host(&tab.url))
+                                .copied()
+                                .unwrap_or_else(visual::default_zoom_level),
                         ) {
                             eprintln!("Lumen split browser creation failed: {error}");
                         }
@@ -1608,12 +1684,13 @@ impl Render for Lumen {
                 }
             }
             let host = url_host(&active_tab_url);
-            if !host.is_empty() && self.active_zoom_host.as_deref() != Some(host.as_str()) {
+            let zoom_target = (active_tab_id_string.clone(), host.clone());
+            if !host.is_empty() && self.active_zoom_target.as_ref() != Some(&zoom_target) {
                 let level = visual::zoom_after_delta(self.zoom_levels.get(&host).copied(), 0.0);
                 self.engine.set_zoom_level(&active_tab_id_string, level);
-                self.active_zoom_host = Some(host);
+                self.active_zoom_target = Some(zoom_target);
             } else if host.is_empty() {
-                self.active_zoom_host = None;
+                self.active_zoom_target = None;
             }
             let visible_ids = split_pair.as_ref().map_or_else(
                 || vec![active_tab_id_string.as_str()],
@@ -1701,7 +1778,7 @@ impl Render for Lumen {
                     ),
                 );
 
-            if let Some(pair) = &split_pair {
+            if let Some(pair) = &stored_split_pair {
                 let first = tabs.iter().find(|(id, _, _)| id == &pair.first);
                 let second = tabs.iter().find(|(id, _, _)| id == &pair.second);
                 if let (Some(first), Some(second)) = (first, second) {
@@ -1713,7 +1790,6 @@ impl Render for Lumen {
                         .is_some_and(|id| id == &pair.first || id == &pair.second);
                     crate::engine::log_favicon_row_rendered(&first.0, first.2.is_some());
                     crate::engine::log_favicon_row_rendered(&second.0, second.2.is_some());
-                    let pair_for_focus = pair.clone();
                     let group_id = pair.first.clone();
                     let group_row = div()
                         .id("split-tab-group")
@@ -1778,8 +1854,7 @@ impl Render for Lumen {
                                 ),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.focused_pane = 0;
-                            this.active_space_mut().active = Some(pair_for_focus.first.clone());
+                            this.activate_split_group();
                             cx.notify();
                         }))
                         .on_mouse_down(
@@ -1911,7 +1986,7 @@ impl Render for Lumen {
             }
 
             for (id, title, favicon) in &tabs {
-                if split_pair
+                if stored_split_pair
                     .as_ref()
                     .is_some_and(|pair| id == &pair.first || id == &pair.second)
                 {
@@ -2259,72 +2334,6 @@ impl Render for Lumen {
                                     ),
                             ),
                     )
-                    .when(
-                        self.show_suggestions && !self.suggestions.is_empty(),
-                        |this| {
-                            let mut list = div()
-                                .id("autocomplete-suggestions")
-                                .occlude()
-                                .absolute()
-                                .top(px(TOPBAR_HEIGHT + 4.0 * UI_SCALE))
-                                .left(px(16.0 * UI_SCALE))
-                                .w(px(560.0 * UI_SCALE))
-                                .bg(rgb(theme.surface))
-                                .border_1()
-                                .border_color(rgb(theme.border))
-                                .rounded_xl()
-                                .p_1p5()
-                                .flex()
-                                .flex_col()
-                                .gap_1();
-
-                            for (idx, item) in self.suggestions.iter().enumerate() {
-                                let target = item.target.clone();
-                                let title = item.title.clone();
-                                let icon_type = item.icon_type.clone();
-                                list = list.child(
-                                    div()
-                                        .id(format!("suggestion-item-{idx}"))
-                                        .px_3()
-                                        .py_2()
-                                        .rounded_lg()
-                                        .flex()
-                                        .items_center()
-                                        .gap_3()
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(rgb(theme.surface_hover)))
-                                        .when(self.selected_suggestion == Some(idx), |row| {
-                                            row.bg(rgb(theme.surface_hover))
-                                        })
-                                        .child(
-                                            div()
-                                                .text_color(rgb(0x8b8f9a))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .size(px(16.0 * UI_SCALE))
-                                                .child(match icon_type.as_str() {
-                                                    "globe" => Icon::new(IconName::Globe),
-                                                    "zap" => Icon::new(IconName::Zap),
-                                                    _ => Icon::new(IconName::Search),
-                                                }),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(rgb(theme.text))
-                                                .child(title),
-                                        )
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.navigate_to(&target, window, cx);
-                                            cx.notify();
-                                        })),
-                                );
-                            }
-
-                            this.child(list)
-                        },
-                    )
                     .child({
                         let viewport_sidebar = self.effective_sidebar_width();
                         let total_width = f32::from(_window.bounds().size.width)
@@ -2422,6 +2431,68 @@ impl Render for Lumen {
                             })
                     }),
             );
+
+        root = root.when(
+            self.show_suggestions && !self.suggestions.is_empty(),
+            |this| {
+                let mut list = div()
+                    .id("autocomplete-suggestions")
+                    .occlude()
+                    .absolute()
+                    .top(px(TOPBAR_HEIGHT + 4.0 * UI_SCALE))
+                    .left(px(self.effective_sidebar_width() + 16.0 * UI_SCALE))
+                    .w(px(560.0 * UI_SCALE))
+                    .bg(rgb(theme.surface))
+                    .border_1()
+                    .border_color(rgb(theme.border))
+                    .rounded_xl()
+                    .p_1p5()
+                    .flex()
+                    .flex_col()
+                    .gap_1();
+
+                for (idx, item) in self.suggestions.iter().enumerate() {
+                    let target = item.target.clone();
+                    let title = item.title.clone();
+                    let icon_type = item.icon_type.clone();
+                    list = list.child(
+                        div()
+                            .id(format!("suggestion-item-{idx}"))
+                            .px_3()
+                            .py_2()
+                            .rounded_lg()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(theme.surface_hover)))
+                            .when(self.selected_suggestion == Some(idx), |row| {
+                                row.bg(rgb(theme.surface_hover))
+                            })
+                            .child(
+                                div()
+                                    .text_color(rgb(0x8b8f9a))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(px(16.0 * UI_SCALE))
+                                    .child(match icon_type.as_str() {
+                                        "globe" => Icon::new(IconName::Globe),
+                                        "zap" => Icon::new(IconName::Zap),
+                                        _ => Icon::new(IconName::Search),
+                                    }),
+                            )
+                            .child(div().text_sm().text_color(rgb(theme.text)).child(title))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.navigate_to(&target, window, cx);
+                                cx.notify();
+                            })),
+                    );
+                }
+
+                this.child(list)
+            },
+        );
 
         root = root.when(self.show_find, |root| {
             root.child(
@@ -2566,7 +2637,7 @@ impl Render for Lumen {
                 if !event.is_held
                     && modifiers.alt
                     && browser_modifier
-                    && this.active_space().split.is_some()
+                    && this.current_split_pair().is_some()
                     && matches!(key.as_str(), "left" | "arrowleft" | "right" | "arrowright")
                 {
                     let pane_index = if matches!(key.as_str(), "left" | "arrowleft") {
@@ -3384,6 +3455,7 @@ mod tests {
         let address_subscription =
             cx.subscribe(&address, |app: &mut Lumen, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
+                    app.address_editing = true;
                     let text = app.address.read(cx).value().to_string();
                     app.update_suggestions(&text);
                     app.selected_suggestion = None;
@@ -3410,6 +3482,9 @@ mod tests {
             started_at: Instant::now(),
             first_frame_logged: true,
             address,
+            address_active_tab: None,
+            address_editing: false,
+            reset_address_for_tab_change: false,
             find_input,
             command_input,
             browser_focus_handle: cx.focus_handle(),
@@ -3436,7 +3511,7 @@ mod tests {
             recent_searches: Vec::new(),
             zoom_levels: std::collections::HashMap::new(),
             #[cfg(all(target_os = "linux", not(test)))]
-            active_zoom_host: None,
+            active_zoom_target: None,
             show_suggestions: false,
             engine: engine::Engine::new(),
             space_modal: None,
@@ -3674,6 +3749,141 @@ mod tests {
         view.read_with(cx, |app, _| assert_eq!(app.active_tab_id(), "tab-2"));
         dispatch_test_key(cx, handle, "ctrl-shift-tab");
         view.read_with(cx, |app, _| assert_eq!(app.active_tab_id(), "tab-1"));
+    }
+
+    #[gpui::test]
+    fn new_tab_clears_and_focuses_the_address_bar(cx: &mut gpui::TestAppContext) {
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| test_app(window, cx))
+            })
+            .expect("open test window")
+        });
+        for key in ["g", "i", "t"] {
+            dispatch_test_key(cx, handle, key);
+        }
+        dispatch_test_key(cx, handle, "ctrl-t");
+        view.read_with(cx, |app, cx| {
+            assert_eq!(app.active_tab_id(), "tab-2");
+            assert_eq!(app.address.read(cx).value().to_string(), "");
+            assert!(!app.show_suggestions);
+        });
+        cx.update_window(handle, |_, window, cx| {
+            view.read_with(cx, |app, cx| {
+                assert_eq!(
+                    window.focused(cx),
+                    Some(app.address.read(cx).focus_handle(cx))
+                );
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn tab_switch_syncs_address_to_the_active_tab(cx: &mut gpui::TestAppContext) {
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| {
+                    let mut app = test_app(window, cx);
+                    app.add_tab();
+                    app.add_tab();
+                    app.active_space_mut().tabs[0].url = "https://one.example".into();
+                    app.active_space_mut().tabs[1].url = "https://two.example".into();
+                    app.active_space_mut().active = Some("tab-1".into());
+                    app
+                })
+            })
+            .expect("open test window")
+        });
+        dispatch_test_key(cx, handle, "ctrl-2");
+        view.read_with(cx, |app, cx| {
+            assert_eq!(app.active_tab_id(), "tab-2");
+            assert_eq!(
+                app.address.read(cx).value().to_string(),
+                "https://two.example"
+            );
+        });
+        dispatch_test_key(cx, handle, "ctrl-1");
+        view.read_with(cx, |app, cx| {
+            assert_eq!(
+                app.address.read(cx).value().to_string(),
+                "https://one.example"
+            );
+        });
+        view.update(cx, |app, cx| {
+            let mut other = Space::new("other", "Other", "code", 0x123456);
+            other
+                .tabs
+                .push(Tab::new("tab-1", "Other page", "https://other.example"));
+            other.active = Some("tab-1".into());
+            app.spaces.push(other);
+            app.activate_space("other");
+            cx.notify();
+        });
+        view.read_with(cx, |app, cx| {
+            assert_eq!(
+                app.address.read(cx).value().to_string(),
+                "https://other.example"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn new_tab_temporarily_leaves_a_split_and_address_targets_it(cx: &mut gpui::TestAppContext) {
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| {
+                    let mut app = test_app(window, cx);
+                    app.add_tab();
+                    app.active_space_mut().tabs[0].url = "https://a.example".into();
+                    app.active_space_mut().tabs[1].url = "https://b.example".into();
+                    assert!(app.split_tabs("tab-1", "tab-2"));
+                    app
+                })
+            })
+            .expect("open test window")
+        });
+
+        dispatch_test_key(cx, handle, "ctrl-t");
+        view.read_with(cx, |app, _| {
+            assert_eq!(app.active_tab_id(), "tab-3");
+            assert!(app.current_split_pair().is_none());
+            assert_eq!(
+                app.stored_split_pair()
+                    .map(|pair| (pair.first, pair.second)),
+                Some(("tab-1".into(), "tab-2".into()))
+            );
+        });
+        dispatch_test_key(cx, handle, "x");
+        dispatch_test_key(cx, handle, "enter");
+        view.read_with(cx, |app, _| {
+            assert_eq!(app.active_tab_id(), "tab-3");
+            assert_eq!(app.active_space().tabs[2].url, "https://x.com");
+            assert!(app.current_split_pair().is_none());
+            assert!(app.stored_split_pair().is_some());
+        });
+
+        view.update(cx, |app, cx| {
+            app.activate_split_group();
+            cx.notify();
+        });
+        view.read_with(cx, |app, _| {
+            assert_eq!(app.active_tab_id(), "tab-1");
+            assert!(app.current_split_pair().is_some());
+            assert!(app.stored_split_pair().is_some());
+        });
+        view.update(cx, |app, cx| {
+            app.active_space_mut().active = Some("tab-3".into());
+            app.set_focused_pane(1);
+            cx.notify();
+        });
+        view.read_with(cx, |app, _| {
+            assert_eq!(app.active_tab_id(), "tab-2");
+            assert!(app.current_split_pair().is_some());
+        });
     }
 
     #[gpui::test]
