@@ -1482,6 +1482,7 @@ impl Render for Lumen {
                                     retired_images,
                                     0.0,
                                     0,
+                                    visible_ids.len() > 1,
                                 );
                                 cx.notify();
                             });
@@ -2459,6 +2460,7 @@ impl Render for Lumen {
                                 Vec::new(),
                                 0.0,
                                 0,
+                                split_pair.is_some(),
                             );
                             cx.notify();
                         });
@@ -2476,6 +2478,7 @@ impl Render for Lumen {
                                     Vec::new(),
                                     left_width + DIVIDER_WIDTH,
                                     1,
+                                    true,
                                 );
                                 cx.notify();
                             });
