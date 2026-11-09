@@ -3979,7 +3979,9 @@ dependencies = [
 name = "lumen"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "cef",
+ "futures-lite",
  "gpui-kit",
  "gpui-pre",
  "image",

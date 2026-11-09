@@ -10,6 +10,7 @@ pub struct WebViewport {
     tab_id: String,
     sidebar_width: f32,
     image: Option<Arc<gpui_kit::RenderImage>>,
+    retired_images: Vec<Arc<gpui_kit::RenderImage>>,
     cursor: i32,
 }
 
@@ -21,6 +22,7 @@ impl WebViewport {
             tab_id: String::new(),
             sidebar_width: 320.0,
             image: None,
+            retired_images: Vec::new(),
             cursor: 0,
         }
     }
@@ -31,11 +33,13 @@ impl WebViewport {
         effective_sidebar_width: f32,
         image: Option<Arc<gpui_kit::RenderImage>>,
         cursor: i32,
+        retired_images: Vec<Arc<gpui_kit::RenderImage>>,
     ) {
         self.tab_id = tab_id;
         self.sidebar_width = effective_sidebar_width;
         self.image = image;
         self.cursor = cursor;
+        self.retired_images.extend(retired_images);
     }
 }
 
@@ -51,11 +55,7 @@ fn browser_point(
 
 impl Render for WebViewport {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let retired_images = self
-            .parent
-            .update(cx, |this, _| this.engine.take_retired_images())
-            .unwrap_or_default();
-        for image in retired_images {
+        for image in self.retired_images.drain(..) {
             let _ = _window.drop_image(image);
         }
 
