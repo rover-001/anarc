@@ -2084,7 +2084,9 @@ impl Render for Lumen {
                     let chevron = if ui::motion::reduced_motion() {
                         chevron
                             .rotate(gpui_kit::percentage(
-                                target_rotation / (2.0 * std::f32::consts::PI),
+                                ui::motion::clamp_percentage(
+                                    target_rotation / (2.0 * std::f32::consts::PI),
+                                ),
                             ))
                             .into_any_element()
                     } else {
@@ -2095,7 +2097,9 @@ impl Render for Lumen {
                                     .to(target_rotation),
                                 |icon, angle| {
                                     icon.rotate(gpui_kit::percentage(
-                                        angle / (2.0 * std::f32::consts::PI),
+                                        ui::motion::clamp_percentage(
+                                            angle / (2.0 * std::f32::consts::PI),
+                                        ),
                                     ))
                                 },
                             )
@@ -2279,7 +2283,7 @@ impl Render for Lumen {
                                             )
                                         }),
                                     move |row, progress| {
-                                        let progress = progress.clamp(0.0, 1.0);
+                                        let progress = ui::motion::clamp_percentage(progress);
                                         row.h(px(visual::TAB_ROW_HEIGHT * progress))
                                             .opacity(progress)
                                     },
@@ -2397,7 +2401,7 @@ impl Render for Lumen {
                             Animation::new(ui::motion::duration(ui::motion::MOTION_BASE))
                                 .with_easing(ui::motion::spring_out),
                             move |row, progress| {
-                                let progress = progress.clamp(0.0, 1.0);
+                                let progress = ui::motion::clamp_percentage(progress);
                                 row.h(px(visual::TAB_ROW_HEIGHT * progress))
                                     .opacity(progress)
                             },
@@ -2451,7 +2455,7 @@ impl Render for Lumen {
                             Animation::new(ui::motion::duration(ui::motion::MOTION_FAST))
                                 .with_easing(ui::motion::ease_out_quint),
                             move |row, progress| {
-                                let remaining = 1.0 - progress.clamp(0.0, 1.0);
+                                let remaining = ui::motion::clamp_percentage(1.0 - progress);
                                 row.h(px(visual::TAB_ROW_HEIGHT * remaining))
                                     .opacity(remaining)
                             },
@@ -2819,7 +2823,7 @@ impl Render for Lumen {
                                                 ))
                                                 .with_easing(ui::motion::ease_out_quint),
                                                 |pane, progress| {
-                                                    pane.opacity(progress.clamp(0.0, 1.0))
+                                                    pane.opacity(ui::motion::clamp_percentage(progress))
                                                 },
                                             )
                                             .child(
@@ -2850,9 +2854,9 @@ impl Render for Lumen {
                                                 ))
                                                 .with_easing(ui::motion::ease_out_quint),
                                                 |divider, progress| {
-                                                    divider.opacity(
-                                                        (0.35 + 0.65 * progress).clamp(0.0, 1.0),
-                                                    )
+                                                    divider.opacity(ui::motion::clamp_percentage(
+                                                        0.35 + 0.65 * progress,
+                                                    ))
                                                 },
                                             ),
                                     )
@@ -2870,7 +2874,7 @@ impl Render for Lumen {
                                                 ))
                                                 .with_easing(ui::motion::ease_out_quint),
                                                 |pane, progress| {
-                                                    pane.opacity(progress.clamp(0.0, 1.0))
+                                                    pane.opacity(ui::motion::clamp_percentage(progress))
                                                 },
                                             )
                                             .child(
@@ -2995,7 +2999,7 @@ impl Render for Lumen {
                     Animation::new(ui::motion::duration(ui::motion::MOTION_FAST))
                         .with_easing(ui::motion::ease_out_quint),
                     |panel, progress| {
-                        let remaining = 1.0 - progress.clamp(0.0, 1.0);
+                        let remaining = ui::motion::clamp_percentage(1.0 - progress);
                         panel
                             .w(px(560.0 * UI_SCALE * (0.96 + 0.04 * remaining)))
                             .opacity(remaining)
@@ -3013,7 +3017,7 @@ impl Render for Lumen {
                     |panel, progress| {
                         panel
                             .w(px(560.0 * UI_SCALE * (0.96 + 0.04 * progress)))
-                            .opacity(progress.clamp(0.0, 1.0))
+                            .opacity(ui::motion::clamp_percentage(progress))
                     },
                 )
                 .into_any_element()
@@ -3119,7 +3123,7 @@ impl Render for Lumen {
                     |panel, progress| {
                         panel
                             .w(px(640.0 * UI_SCALE * (0.96 + 0.04 * progress)))
-                            .opacity(progress.clamp(0.0, 1.0))
+                            .opacity(ui::motion::clamp_percentage(progress))
                     },
                 );
             root = root.child(
@@ -3417,7 +3421,7 @@ impl Render for Lumen {
                             .with_easing(ui::motion::ease_out_quint),
                         |menu, progress| {
                             menu.w(px(224.0 * UI_SCALE * (0.96 + 0.04 * progress)))
-                                .opacity(progress.clamp(0.0, 1.0))
+                                .opacity(ui::motion::clamp_percentage(progress))
                         },
                     ),
                 );
@@ -3692,7 +3696,7 @@ impl Render for Lumen {
                 move |panel, progress| {
                     panel
                         .w(px(menu_width * (0.96 + 0.04 * progress)))
-                        .opacity(progress.clamp(0.0, 1.0))
+                        .opacity(ui::motion::clamp_percentage(progress))
                 },
             );
             root = root.child(menu_layer.child(panel));
@@ -3931,7 +3935,7 @@ impl Render for Lumen {
                     |popover, progress| {
                         popover
                             .w(px(224.0 * UI_SCALE * (0.96 + 0.04 * progress)))
-                            .opacity(progress.clamp(0.0, 1.0))
+                            .opacity(ui::motion::clamp_percentage(progress))
                     },
                 ),
             );

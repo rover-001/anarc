@@ -15,7 +15,7 @@ cargo run --release
 Set these variables to isolate a test run from the normal Lumen profile:
 
 - `LUMEN_CONFIG_DIR`: directory for `spaces.json` (default: `~/.config/lumen`)
-- `LUMEN_DATA_DIR`: directory for recent searches and CEF storage (default: `~/.local/share/lumen`). CEF's root cache is `$LUMEN_DATA_DIR/cef`, with per-space profiles under `cef/profiles/<space_id>` so each profile is inside CEF's root cache directory.
+- `LUMEN_DATA_DIR`: directory for recent searches and CEF storage (default: `~/.local/share/lumen`). CEF's root cache is `$LUMEN_DATA_DIR/cef`, with per-space profiles as direct children at `cef/space-<sanitized_space_id>`.
 - `LUMEN_CACHE_DIR`: directory for non-profile Lumen caches (default: `${XDG_CACHE_HOME:-~/.cache}/lumen/cef`). It does not control the CEF root or per-space profiles.
 - `LUMEN_STATS=1`: print OSR paints/s, root UI renders/s, average frame-copy time, and process RSS to stderr once per second
 

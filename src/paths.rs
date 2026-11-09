@@ -10,7 +10,7 @@ pub fn data_dir() -> PathBuf {
     override_or_home("LUMEN_DATA_DIR", ".local/share/lumen")
 }
 
-/// CEF requires request-context cache paths to live beneath its root cache path.
+/// CEF requires request-context cache paths to be direct children of its root cache path.
 pub fn cef_root_dir() -> PathBuf {
     cef_root_from_data_dir(data_dir())
 }
@@ -24,7 +24,16 @@ fn cef_root_from_data_dir(data_dir: PathBuf) -> PathBuf {
 }
 
 fn profile_from_cef_root(cef_root: PathBuf, space_id: &str) -> PathBuf {
-    cef_root.join("profiles").join(space_id)
+    let sanitized_id = space_id
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect::<String>();
+    cef_root.join(format!("space-{sanitized_id}"))
 }
 
 /// General Lumen cache location, reserved for non-profile caches.
@@ -132,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn cef_root_and_space_profiles_are_nested_under_data_directory() {
+    fn cef_space_profiles_are_direct_children_of_the_cef_root() {
         let data_dir =
             resolve_override_or_home(Some("/tmp/lumen-data".into()), None, ".local/share/lumen");
         let cef_root = cef_root_from_data_dir(data_dir);
@@ -141,7 +150,15 @@ mod tests {
         assert_eq!(cef_root, PathBuf::from("/tmp/lumen-data/cef"));
         assert_eq!(
             profile,
-            PathBuf::from("/tmp/lumen-data/cef/profiles/personal")
+            PathBuf::from("/tmp/lumen-data/cef/space-personal")
+        );
+    }
+
+    #[test]
+    fn cef_space_profile_ids_are_sanitized_as_single_path_components() {
+        assert_eq!(
+            profile_from_cef_root(PathBuf::from("/tmp/lumen-data/cef"), "../personal"),
+            PathBuf::from("/tmp/lumen-data/cef/space-%2E%2E%2Fpersonal")
         );
     }
 }
