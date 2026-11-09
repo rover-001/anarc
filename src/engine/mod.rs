@@ -918,7 +918,10 @@ fn resize_should_send(
 ) -> bool {
     previous.is_none_or(|(last_sent, width, height)| {
         (*width != requested.0 || *height != requested.1)
-            && (force || now.duration_since(*last_sent) >= Duration::from_millis(16))
+            // Resize at least twice as often as the 60 fps paint cadence so a
+            // moving split divider cannot leave the panes on stale dimensions
+            // for more than one OSR frame.
+            && (force || now.duration_since(*last_sent) >= Duration::from_millis(8))
     })
 }
 
@@ -1840,31 +1843,31 @@ mod tests {
     }
 
     #[test]
-    fn resize_coalescing_limits_frames_and_flushes_final_size() {
+    fn resize_coalescing_tracks_drag_within_one_frame_and_flushes_final_size() {
         let start = Instant::now();
         let sent = (start, 800, 600);
         assert!(!resize_should_send(
             Some(&sent),
             (810, 600),
-            start + Duration::from_millis(8),
-            false,
-        ));
-        assert!(resize_should_send(
-            Some(&sent),
-            (810, 600),
-            start + Duration::from_millis(16),
+            start + Duration::from_millis(4),
             false,
         ));
         assert!(resize_should_send(
             Some(&sent),
             (810, 600),
             start + Duration::from_millis(8),
+            false,
+        ));
+        assert!(resize_should_send(
+            Some(&sent),
+            (810, 600),
+            start + Duration::from_millis(4),
             true,
         ));
         assert!(!resize_should_send(
             Some(&sent),
             (800, 600),
-            start + Duration::from_millis(16),
+            start + Duration::from_millis(8),
             true,
         ));
     }
