@@ -20,6 +20,7 @@ use gpui_kit::{
     px, rgb, size,
 };
 use model::{Space, Tab, TabState};
+use ui::command_palette::{self, PaletteAction, PaletteItem, PaletteTab, PaletteTarget};
 use ui::web_view::WebViewport;
 use ui::{sidebar, space_switcher, tab_list};
 
@@ -97,9 +98,13 @@ pub(crate) struct Lumen {
     first_frame_logged: bool,
     address: gpui_kit::Entity<InputState>,
     find_input: gpui_kit::Entity<InputState>,
+    command_input: gpui_kit::Entity<InputState>,
     pub(crate) browser_focus_handle: gpui_kit::FocusHandle,
     _address_subscription: gpui_kit::Subscription,
+    _command_subscription: gpui_kit::Subscription,
     show_find: bool,
+    show_command_palette: bool,
+    selected_command: usize,
     suggestions: Vec<SuggestionItem>,
     selected_suggestion: Option<usize>,
     recent_searches: Vec<String>,
@@ -275,6 +280,8 @@ impl Lumen {
         });
         let browser_focus_handle = cx.focus_handle();
         let find_input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in page"));
+        let command_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder("Search tabs, history, and actions"));
         let root_entity = cx.weak_entity();
         let web_viewport = cx.new(|_| WebViewport::new(root_entity, browser_focus_handle.clone()));
         let address_subscription =
@@ -291,6 +298,13 @@ impl Lumen {
                 }
                 _ => {}
             });
+        let command_subscription =
+            cx.subscribe(&command_input, |this: &mut Lumen, _, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.selected_command = 0;
+                    cx.notify();
+                }
+            });
 
         Self {
             spaces,
@@ -304,10 +318,14 @@ impl Lumen {
             first_frame_logged: false,
             address,
             find_input,
+            command_input,
             browser_focus_handle,
             web_viewport,
             _address_subscription: address_subscription,
+            _command_subscription: command_subscription,
             show_find: false,
+            show_command_palette: false,
+            selected_command: 0,
             suggestions: Vec::new(),
             selected_suggestion: None,
             recent_searches: history::load_recent_searches(),
@@ -585,6 +603,7 @@ impl Lumen {
     fn is_app_shortcut(key: &str, control: bool, shift: bool) -> bool {
         control
             && ((key == "l" && !shift)
+                || (key == "k" && !shift)
                 || key == "f"
                 || key == "t"
                 || key == "tab"
@@ -713,6 +732,22 @@ impl Lumen {
         let list = compute_suggestions(query);
         self.show_suggestions = !list.is_empty();
         self.suggestions = list;
+        if !query.trim().is_empty() {
+            self.suggestions
+                .extend(
+                    history::search(query, 4)
+                        .into_iter()
+                        .map(|entry| SuggestionItem {
+                            icon_type: "globe".to_string(),
+                            title: if entry.title.is_empty() {
+                                entry.url.clone()
+                            } else {
+                                entry.title
+                            },
+                            target: entry.url,
+                        }),
+                );
+        }
         self.selected_suggestion = None;
         if query.trim().is_empty() {
             self.suggestions
@@ -742,6 +777,92 @@ impl Lumen {
     fn move_suggestion_selection(&mut self, down: bool) {
         self.selected_suggestion =
             move_suggestion_selection(self.selected_suggestion, self.suggestions.len(), down);
+    }
+
+    fn command_items(&self, query: &str) -> Vec<PaletteItem> {
+        let tabs: Vec<_> = self
+            .spaces
+            .iter()
+            .flat_map(|space| {
+                space.tabs.iter().map(move |tab| PaletteTab {
+                    space_id: &space.id,
+                    space_name: &space.name,
+                    tab_id: &tab.id,
+                    title: &tab.title,
+                    url: &tab.url,
+                })
+            })
+            .collect();
+        let history = history::search(query, 20);
+        command_palette::rank_items(query, &tabs, &history)
+    }
+
+    fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_suggestions = false;
+        self.show_find = false;
+        self.show_command_palette = true;
+        self.selected_command = 0;
+        self.browser_focused = false;
+        self.engine.set_focus(self.active_tab_id(), false);
+        self.command_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+    }
+
+    fn close_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_command_palette = false;
+        self.focus_browser(window, cx);
+    }
+
+    fn execute_palette_item(
+        &mut self,
+        item: PaletteItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_command_palette = false;
+        match item.target {
+            PaletteTarget::Tab { space_id, tab_id } => {
+                if let Some(space) = self.spaces.iter_mut().find(|space| space.id == space_id)
+                    && space.tabs.iter().any(|tab| tab.id == tab_id)
+                {
+                    space.active = Some(tab_id);
+                    self.active_space = space_id;
+                    self.save_state();
+                }
+            }
+            PaletteTarget::History(url) => self.navigate_to(&url, window, cx),
+            PaletteTarget::Action(action) => match action {
+                PaletteAction::NewTab => self.add_tab(),
+                PaletteAction::CloseTab => self.close_active_tab(),
+                PaletteAction::ReopenClosedTab => self.reopen_closed_tab(),
+                PaletteAction::Reload => self.reload_active(false),
+                PaletteAction::FindInPage => {
+                    self.show_find = true;
+                    self.find_input
+                        .update(cx, |input, cx| input.focus(window, cx));
+                    self.engine.set_focus(self.active_tab_id(), false);
+                }
+                PaletteAction::ZoomIn => self.change_zoom(1.0),
+                PaletteAction::ZoomOut => self.change_zoom(-1.0),
+                PaletteAction::ZoomReset => self.change_zoom(0.0),
+                PaletteAction::NewSpace => self.open_create_space_modal(window, cx),
+            },
+        }
+        cx.notify();
+    }
+
+    fn move_command_selection(&mut self, down: bool, count: usize) {
+        if count == 0 {
+            self.selected_command = 0;
+            return;
+        }
+        self.selected_command = if down {
+            (self.selected_command + 1) % count
+        } else {
+            (self.selected_command + count - 1) % count
+        };
     }
 
     pub(crate) fn focus_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1561,11 +1682,119 @@ impl Render for Lumen {
             )
         });
 
+        if self.show_command_palette {
+            let query = self.command_input.read(cx).value().to_string();
+            let items = self.command_items(&query);
+            let mut list = div().flex().flex_col().gap_1().p_1p5();
+            for (index, item) in items.iter().enumerate() {
+                let item = item.clone();
+                list = list.child(
+                    div()
+                        .id(format!("command-palette-item-{index}"))
+                        .px_3()
+                        .py_2()
+                        .rounded_lg()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .cursor_pointer()
+                        .when(self.selected_command == index, |row| row.bg(rgb(0x262830)))
+                        .hover(|style| style.bg(rgb(0x262830)))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(rgb(0xe6e7eb))
+                                        .child(item.title.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(0x858994))
+                                        .child(item.detail.clone()),
+                                ),
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.execute_palette_item(item.clone(), window, cx);
+                        })),
+                );
+            }
+            let panel = div()
+                .id("command-palette")
+                .w(px(640.0))
+                .max_h(px(520.0))
+                .overflow_hidden()
+                .rounded_xl()
+                .bg(rgb(0x191a1f))
+                .border_1()
+                .border_color(rgb(0x282b33))
+                .shadow_lg()
+                .child(
+                    div()
+                        .px_4()
+                        .py_3()
+                        .border_b_1()
+                        .border_color(rgb(0x282b33))
+                        .child(
+                            Input::new(&self.command_input)
+                                .id("command-palette-input")
+                                .w_full()
+                                .appearance(false),
+                        ),
+                )
+                .child(list);
+            root = root.child(
+                div()
+                    .absolute()
+                    .top(px(88.0))
+                    .left(px(0.0))
+                    .right(px(0.0))
+                    .flex()
+                    .justify_center()
+                    .occlude()
+                    .child(panel),
+            );
+        }
+
         root = root
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.to_lowercase();
                 let modifiers = &event.keystroke.modifiers;
                 let browser_modifier = modifiers.control || modifiers.platform;
+                if browser_modifier && key == "k" && !modifiers.shift && !event.is_held {
+                    this.open_command_palette(window, cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
+                if this.show_command_palette {
+                    if event.is_held {
+                        return;
+                    }
+                    let query = this.command_input.read(cx).value().to_string();
+                    let items = this.command_items(&query);
+                    match key.as_str() {
+                        "escape" | "esc" => this.close_command_palette(window, cx),
+                        "up" | "arrowup" => this.move_command_selection(false, items.len()),
+                        "down" | "arrowdown" => this.move_command_selection(true, items.len()),
+                        "enter" | "return" => {
+                            if let Some(item) = items.get(this.selected_command).cloned() {
+                                this.execute_palette_item(item, window, cx);
+                            }
+                        }
+                        _ => return,
+                    }
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
                 if this.show_find && matches!(key.as_str(), "enter" | "return") {
                     this.find_in_page(!modifiers.shift, true, cx);
                     window.prevent_default();
@@ -2028,6 +2257,15 @@ mod tests {
                 }
             });
         let find_input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in page"));
+        let command_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder("Search tabs, history, and actions"));
+        let command_subscription =
+            cx.subscribe(&command_input, |this: &mut Lumen, _, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.selected_command = 0;
+                    cx.notify();
+                }
+            });
         let (spaces, active_space) = create_default_space();
         Lumen {
             spaces,
@@ -2041,6 +2279,7 @@ mod tests {
             first_frame_logged: true,
             address,
             find_input,
+            command_input,
             browser_focus_handle: cx.focus_handle(),
             web_viewport: {
                 let root_entity = cx.weak_entity();
@@ -2048,7 +2287,10 @@ mod tests {
                 cx.new(|_| WebViewport::new(root_entity, focus_handle))
             },
             _address_subscription: address_subscription,
+            _command_subscription: command_subscription,
             show_find: false,
+            show_command_palette: false,
+            selected_command: 0,
             suggestions: Vec::new(),
             selected_suggestion: None,
             recent_searches: Vec::new(),
@@ -2109,6 +2351,49 @@ mod tests {
         view.read_with(cx, |app, _| assert!(app.show_find));
         dispatch_test_key(cx, handle, "escape");
         view.read_with(cx, |app, _| assert!(!app.show_find));
+    }
+
+    #[gpui::test]
+    fn command_palette_opens_with_ctrl_k_and_closes_with_escape(cx: &mut gpui::TestAppContext) {
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| test_app(window, cx))
+            })
+            .expect("open test window")
+        });
+        dispatch_test_key(cx, handle, "ctrl-k");
+        view.read_with(cx, |app, _| assert!(app.show_command_palette));
+        dispatch_test_key(cx, handle, "down");
+        view.read_with(cx, |app, _| assert_eq!(app.selected_command, 1));
+        dispatch_test_key(cx, handle, "up");
+        view.read_with(cx, |app, _| assert_eq!(app.selected_command, 0));
+        dispatch_test_key(cx, handle, "escape");
+        view.read_with(cx, |app, _| assert!(!app.show_command_palette));
+    }
+
+    #[gpui::test]
+    fn command_palette_enter_runs_the_matching_action(cx: &mut gpui::TestAppContext) {
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| test_app(window, cx))
+            })
+            .expect("open test window")
+        });
+        dispatch_test_key(cx, handle, "ctrl-k");
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |app, cx| {
+                app.command_input
+                    .update(cx, |input, cx| input.set_value("New tab", window, cx));
+            });
+        })
+        .unwrap();
+        dispatch_test_key(cx, handle, "enter");
+        view.read_with(cx, |app, _| {
+            assert_eq!(app.active_tab_id(), "tab-2");
+            assert!(!app.show_command_palette);
+        });
     }
 
     #[gpui::test]
