@@ -13,8 +13,8 @@ mod ui;
 use std::time::Instant;
 
 use gpui_kit::{
-    AnyView, Bounds, Context, FontWeight, KeyDownEvent, KeyUpEvent, Render, StyleRefinement,
-    Window, WindowBounds, WindowOptions,
+    Animation, AnimationExt as _, AnyView, Bounds, Context, FontWeight, KeyDownEvent, KeyUpEvent,
+    Render, StyleRefinement, Window, WindowBounds, WindowOptions,
     assets::IconName,
     component::Icon,
     component::input::{Input, InputEvent, InputState},
@@ -121,6 +121,8 @@ pub(crate) struct Lumen {
     sidebar_collapsed: bool,
     sidebar_width: f32,
     sidebar_resizing: bool,
+    theme_transition: Option<(visual::SpaceTheme, Instant, u64)>,
+    theme_transition_id: u64,
     #[cfg(all(target_os = "linux", not(test)))]
     resize_drag: split_view::ResizeDrag,
     started_at: Instant,
@@ -378,6 +380,8 @@ impl Lumen {
             sidebar_collapsed,
             sidebar_width,
             sidebar_resizing: false,
+            theme_transition: None,
+            theme_transition_id: 0,
             #[cfg(all(target_os = "linux", not(test)))]
             resize_drag: split_view::ResizeDrag::default(),
             started_at: Instant::now(),
@@ -423,6 +427,26 @@ impl Lumen {
     }
 
     fn activate_space(&mut self, id: &str) {
+        if self.active_space == id {
+            return;
+        }
+        if self.spaces.iter().any(|space| space.id == id) {
+            let current_theme = visual::space_theme(self.active_space().color);
+            let displayed_theme =
+                self.theme_transition
+                    .map_or(current_theme, |(from, started, _)| {
+                        let progress = started.elapsed().as_secs_f32()
+                            / ui::motion::MOTION_THEME.as_secs_f32().max(f32::EPSILON);
+                        visual::interpolate_theme(
+                            from,
+                            current_theme,
+                            ui::motion::ease_out_quint(progress),
+                        )
+                    });
+            self.theme_transition_id = self.theme_transition_id.wrapping_add(1);
+            self.theme_transition =
+                Some((displayed_theme, Instant::now(), self.theme_transition_id));
+        }
         self.show_suggestions = false;
         self.active_space = id.to_owned();
         self.save_state();
@@ -1892,6 +1916,7 @@ impl Render for Lumen {
                         let mut member_rows = Vec::new();
                         for (pane_index, member) in [first, second].into_iter().enumerate() {
                             let member_id = member.0.clone();
+                            let member_animation_id = member_id.clone();
                             let close_id = member_id.clone();
                             let pane = pane_index;
                             let selected_member = active_tab_id.as_ref() == Some(&member_id);
@@ -1984,6 +2009,16 @@ impl Render for Lumen {
                                             cx.notify();
                                         },
                                     ),
+                                )
+                                .with_animation(
+                                    format!("split-member-entry-{member_animation_id}"),
+                                    Animation::new(ui::motion::duration(ui::motion::MOTION_BASE))
+                                        .with_easing(ui::motion::spring_out),
+                                    move |row, progress| {
+                                        let progress = progress.clamp(0.0, 1.0);
+                                        row.h(px(visual::TAB_ROW_HEIGHT * progress))
+                                            .opacity(progress)
+                                    },
                                 );
                             member_rows.push(member_row);
                         }
@@ -2095,6 +2130,16 @@ impl Render for Lumen {
                                     cx.notify();
                                 },
                             ),
+                        )
+                        .with_animation(
+                            format!("tab-row-entry-{id}"),
+                            Animation::new(ui::motion::duration(ui::motion::MOTION_BASE))
+                                .with_easing(ui::motion::spring_out),
+                            move |row, progress| {
+                                let progress = progress.clamp(0.0, 1.0);
+                                row.h(px(visual::TAB_ROW_HEIGHT * progress))
+                                    .opacity(progress)
+                            },
                         ),
                 );
             }
@@ -2494,10 +2539,26 @@ impl Render for Lumen {
                                     .size_full()
                                     .flex()
                                     .child(
-                                        div().h_full().w(px(left_width)).child(
-                                            AnyView::from(self.web_viewport.clone())
-                                                .cached(StyleRefinement::default().size_full()),
-                                        ),
+                                        div()
+                                            .h_full()
+                                            .w(px(left_width))
+                                            .with_animation(
+                                                format!(
+                                                    "split-left-enter-{}",
+                                                    split_pair.as_ref().unwrap().first
+                                                ),
+                                                Animation::new(ui::motion::duration(
+                                                    ui::motion::MOTION_SLOW,
+                                                ))
+                                                .with_easing(ui::motion::ease_out_quint),
+                                                |pane, progress| {
+                                                    pane.opacity(progress.clamp(0.0, 1.0))
+                                                },
+                                            )
+                                            .child(
+                                                AnyView::from(self.web_viewport.clone())
+                                                    .cached(StyleRefinement::default().size_full()),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -2514,13 +2575,41 @@ impl Render for Lumen {
                                                     this.begin_browser_resize_drag(_window, true);
                                                     cx.notify();
                                                 }),
+                                            )
+                                            .with_animation(
+                                                "split-divider-enter",
+                                                Animation::new(ui::motion::duration(
+                                                    ui::motion::MOTION_SLOW,
+                                                ))
+                                                .with_easing(ui::motion::ease_out_quint),
+                                                |divider, progress| {
+                                                    divider.opacity(
+                                                        (0.35 + 0.65 * progress).clamp(0.0, 1.0),
+                                                    )
+                                                },
                                             ),
                                     )
                                     .child(
-                                        div().h_full().w(px(right_width)).child(
-                                            AnyView::from(self.second_web_viewport.clone())
-                                                .cached(StyleRefinement::default().size_full()),
-                                        ),
+                                        div()
+                                            .h_full()
+                                            .w(px(right_width))
+                                            .with_animation(
+                                                format!(
+                                                    "split-right-enter-{}",
+                                                    split_pair.as_ref().unwrap().second
+                                                ),
+                                                Animation::new(ui::motion::duration(
+                                                    ui::motion::MOTION_SLOW,
+                                                ))
+                                                .with_easing(ui::motion::ease_out_quint),
+                                                |pane, progress| {
+                                                    pane.opacity(progress.clamp(0.0, 1.0))
+                                                },
+                                            )
+                                            .child(
+                                                AnyView::from(self.second_web_viewport.clone())
+                                                    .cached(StyleRefinement::default().size_full()),
+                                            ),
                                     )
                             } else if active_tab_url == "lumen://welcome"
                                 || active_tab_url == "about:blank"
@@ -2626,7 +2715,17 @@ impl Render for Lumen {
                                 .appearance(false),
                         ),
                 )
-                .child(list);
+                .child(list)
+                .with_animation(
+                    "command-palette-entrance",
+                    Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
+                        .with_easing(ui::motion::ease_out_quint),
+                    |panel, progress| {
+                        panel
+                            .w(px(640.0 * UI_SCALE * (0.96 + 0.04 * progress)))
+                            .opacity(progress.clamp(0.0, 1.0))
+                    },
+                );
             root = root.child(
                 div()
                     .absolute()
@@ -2915,12 +3014,23 @@ impl Render for Lumen {
                     );
                 }
 
-                root = root.child(ctx_menu);
+                root = root.child(
+                    ctx_menu.with_animation(
+                        format!("space-menu-entrance-{}", target_space.id),
+                        Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
+                            .with_easing(ui::motion::ease_out_quint),
+                        |menu, progress| {
+                            menu.w(px(224.0 * UI_SCALE * (0.96 + 0.04 * progress)))
+                                .opacity(progress.clamp(0.0, 1.0))
+                        },
+                    ),
+                );
             }
         }
 
         if let Some(menu) = &self.tab_context_menu {
             let target_id = menu.tab_id.clone();
+            let menu_width = menu.width;
             let target_tab = self
                 .active_space()
                 .tabs
@@ -3179,6 +3289,16 @@ impl Render for Lumen {
                         })),
                 );
             }
+            let panel = panel.with_animation(
+                format!("tab-menu-entrance-{}", menu.tab_id),
+                Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
+                    .with_easing(ui::motion::ease_out_quint),
+                move |panel, progress| {
+                    panel
+                        .w(px(menu_width * (0.96 + 0.04 * progress)))
+                        .opacity(progress.clamp(0.0, 1.0))
+                },
+            );
             root = root.child(menu_layer.child(panel));
         }
 
@@ -3407,8 +3527,35 @@ impl Render for Lumen {
                         ),
                 );
 
-            root = root.child(popover);
+            root = root.child(
+                popover.with_animation(
+                    "space-popover-entrance",
+                    Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
+                        .with_easing(ui::motion::ease_out_quint),
+                    |popover, progress| {
+                        popover
+                            .w(px(224.0 * UI_SCALE * (0.96 + 0.04 * progress)))
+                            .opacity(progress.clamp(0.0, 1.0))
+                    },
+                ),
+            );
         }
+
+        let root = if let Some((from_theme, _, transition_id)) = self.theme_transition {
+            let to_theme = theme;
+            root.with_animation(
+                format!("space-theme-transition-{transition_id}"),
+                Animation::new(ui::motion::duration(ui::motion::MOTION_THEME))
+                    .with_easing(ui::motion::ease_out_quint),
+                move |root, progress| {
+                    let theme = visual::interpolate_theme(from_theme, to_theme, progress);
+                    root.bg(rgb(theme.base)).text_color(rgb(theme.text))
+                },
+            )
+            .into_any_element()
+        } else {
+            root.into_any_element()
+        };
 
         root
     }
@@ -3520,6 +3667,8 @@ mod tests {
             sidebar_collapsed: false,
             sidebar_width: 240.0 * UI_SCALE,
             sidebar_resizing: false,
+            theme_transition: None,
+            theme_transition_id: 0,
             #[cfg(all(target_os = "linux", not(test)))]
             resize_drag: split_view::ResizeDrag::default(),
             started_at: Instant::now(),

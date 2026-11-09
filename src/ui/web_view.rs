@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gpui_kit::{Context, Render, Window, div, prelude::*, px, rgb};
+use gpui_kit::{Animation, AnimationExt as _, Context, Render, Window, div, prelude::*, px, rgb};
 
 use crate::ui::{
     split_view::frame_logical_size,
@@ -16,6 +16,10 @@ pub struct WebViewport {
     pane_offset: f32,
     pane_index: usize,
     image: Option<Arc<gpui_kit::RenderImage>>,
+    previous_image: Option<Arc<gpui_kit::RenderImage>>,
+    transition_id: u64,
+    transition_tab: Option<String>,
+    transition_cleanup_scheduled: bool,
     retired_images: Vec<Arc<gpui_kit::RenderImage>>,
     cursor: i32,
     theme: SpaceTheme,
@@ -31,6 +35,10 @@ impl WebViewport {
             pane_offset: 0.0,
             pane_index: 0,
             image: None,
+            previous_image: None,
+            transition_id: 0,
+            transition_tab: None,
+            transition_cleanup_scheduled: false,
             retired_images: Vec::new(),
             cursor: 0,
             theme: space_theme(0x9aa6ff),
@@ -47,6 +55,12 @@ impl WebViewport {
         pane_offset: f32,
         pane_index: usize,
     ) {
+        if self.tab_id != tab_id {
+            self.previous_image = self.image.clone();
+            self.transition_id = self.transition_id.wrapping_add(1);
+            self.transition_tab = Some(tab_id.clone());
+            self.transition_cleanup_scheduled = false;
+        }
         self.tab_id = tab_id;
         self.sidebar_width = effective_sidebar_width;
         self.image = image;
@@ -63,6 +77,12 @@ impl WebViewport {
         cursor: i32,
         retired_images: Vec<Arc<gpui_kit::RenderImage>>,
     ) {
+        if self.tab_id != tab_id {
+            self.previous_image = self.image.clone();
+            self.transition_id = self.transition_id.wrapping_add(1);
+            self.transition_tab = Some(tab_id.clone());
+            self.transition_cleanup_scheduled = false;
+        }
         self.tab_id = tab_id;
         self.image = image;
         self.cursor = cursor;
@@ -390,6 +410,62 @@ impl Render for WebViewport {
                     .ok();
             }));
 
+        let transition_id = self.transition_id;
+        let transitioning = self.transition_tab.as_deref() == Some(self.tab_id.as_str())
+            && !crate::ui::motion::reduced_motion();
+        if transitioning && !self.transition_cleanup_scheduled {
+            self.transition_cleanup_scheduled = true;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(crate::ui::motion::MOTION_CONTENT)
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.transition_id == transition_id {
+                        this.previous_image = None;
+                        this.transition_tab = None;
+                        this.transition_cleanup_scheduled = false;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        if transitioning {
+            if let Some(image) = self.previous_image.clone() {
+                let size = image.size(0);
+                let (width, height) = frame_logical_size(
+                    u32::from(size.width),
+                    u32::from(size.height),
+                    window.scale_factor(),
+                );
+                viewport = viewport.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .w(px(width))
+                        .h(px(height))
+                        .rounded(px(crate::CARD_RADIUS))
+                        .overflow_hidden()
+                        .with_animation(
+                            format!("web-view-outgoing-{transition_id}"),
+                            Animation::new(crate::ui::motion::duration(
+                                crate::ui::motion::MOTION_CONTENT,
+                            ))
+                            .with_easing(crate::ui::motion::ease_out_quint),
+                            |element, progress| element.opacity((1.0 - progress).clamp(0.0, 1.0)),
+                        )
+                        .child(
+                            gpui_kit::img(image)
+                                .size_full()
+                                .rounded(px(crate::CARD_RADIUS)),
+                        ),
+                );
+            }
+        } else if self.transition_tab.as_deref() == Some(self.tab_id.as_str()) {
+            self.previous_image = None;
+        }
+
         if let Some(image) = self.image.clone() {
             let size = image.size(0);
             let (width, height) = frame_logical_size(
@@ -397,21 +473,34 @@ impl Render for WebViewport {
                 u32::from(size.height),
                 window.scale_factor(),
             );
-            viewport = viewport.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .w(px(width))
-                    .h(px(height))
-                    .rounded(px(crate::CARD_RADIUS))
-                    .overflow_hidden()
-                    .child(
-                        gpui_kit::img(image)
-                            .size_full()
-                            .rounded(px(crate::CARD_RADIUS)),
-                    ),
-            );
+            let current = div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .w(px(width))
+                .h(px(height))
+                .rounded(px(crate::CARD_RADIUS))
+                .overflow_hidden()
+                .child(
+                    gpui_kit::img(image)
+                        .size_full()
+                        .rounded(px(crate::CARD_RADIUS)),
+                );
+            let current = if transitioning {
+                current
+                    .with_animation(
+                        format!("web-view-incoming-{transition_id}"),
+                        Animation::new(crate::ui::motion::duration(
+                            crate::ui::motion::MOTION_CONTENT,
+                        ))
+                        .with_easing(crate::ui::motion::ease_out_quint),
+                        |element, progress| element.opacity(progress.clamp(0.0, 1.0)),
+                    )
+                    .into_any_element()
+            } else {
+                current.into_any_element()
+            };
+            viewport = viewport.child(current);
         }
         viewport
     }
