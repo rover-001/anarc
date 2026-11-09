@@ -5,11 +5,33 @@
 
 use std::collections::HashMap;
 use std::ffi::c_ulong;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use cef::args::Args;
 use cef::*;
 use gpui_kit::{KeyDownEvent, KeyUpEvent, RenderImage};
+
+use crate::lifecycle::TabLifecycle;
+use crate::model::TabState;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DownloadRecord {
+    pub id: u32,
+    pub url: String,
+    pub path: PathBuf,
+    pub received_bytes: i64,
+    pub total_bytes: i64,
+    pub complete: bool,
+    pub canceled: bool,
+}
+
+#[derive(Default)]
+struct EngineEvents {
+    popups: Vec<(String, String)>,
+    downloads: Vec<DownloadRecord>,
+}
 
 fn origin_favicon_url(page_url: &str) -> Option<String> {
     let (scheme, remainder) = page_url.split_once("://")?;
@@ -95,6 +117,11 @@ pub struct BrowserSharedState {
     pub favicon: Option<Arc<RenderImage>>,
     /// Superseded frames that must be evicted from GPUI's sprite atlas on the UI thread.
     pub retired: Vec<Arc<RenderImage>>,
+    pub screen_width: i32,
+    pub screen_height: i32,
+    pub screen_scale: f32,
+    pub screen_origin_x: i32,
+    pub screen_origin_y: i32,
 }
 
 cef::wrap_download_image_callback! {
@@ -144,6 +171,42 @@ cef::wrap_render_handler! {
     }
 
     impl RenderHandler {
+        fn screen_info(&self, _browser: Option<&mut Browser>, info: Option<&mut ScreenInfo>) -> i32 {
+            let Some(info) = info else { return 0; };
+            let state = self.shared.lock().unwrap();
+            info.device_scale_factor = state.screen_scale;
+            info.depth = 24;
+            info.depth_per_component = 8;
+            info.is_monochrome = 0;
+            info.rect = Rect {
+                x: state.screen_origin_x,
+                y: state.screen_origin_y,
+                width: state.screen_width.max(state.width),
+                height: state.screen_height.max(state.height),
+            };
+            info.available_rect = info.rect.clone();
+            1
+        }
+
+        fn screen_point(
+            &self,
+            _browser: Option<&mut Browser>,
+            view_x: i32,
+            view_y: i32,
+            screen_x: Option<&mut i32>,
+            screen_y: Option<&mut i32>,
+        ) -> i32 {
+            let state = self.shared.lock().unwrap();
+            let scale = state.screen_scale.max(1.0);
+            if let Some(x) = screen_x {
+                *x = state.screen_origin_x + (view_x as f32 / scale) as i32;
+            }
+            if let Some(y) = screen_y {
+                *y = state.screen_origin_y + (view_y as f32 / scale) as i32;
+            }
+            1
+        }
+
         fn view_rect(&self, _browser: Option<&mut Browser>, rect: Option<&mut Rect>) {
             if let Some(rect) = rect {
                 let state = self.shared.lock().unwrap();
@@ -268,10 +331,182 @@ cef::wrap_display_handler! {
     }
 }
 
+cef::wrap_life_span_handler! {
+    struct LumenLifeSpanHandler {
+        events: Arc<Mutex<EngineEvents>>,
+        space_id: String,
+    }
+
+    impl LifeSpanHandler {
+        fn on_before_popup(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _popup_id: i32,
+            target_url: Option<&CefString>,
+            _target_frame_name: Option<&CefString>,
+            _target_disposition: WindowOpenDisposition,
+            _user_gesture: i32,
+            _popup_features: Option<&PopupFeatures>,
+            _window_info: Option<&mut WindowInfo>,
+            _client: Option<&mut Option<Client>>,
+            _settings: Option<&mut BrowserSettings>,
+            _extra_info: Option<&mut Option<DictionaryValue>>,
+            _no_javascript_access: Option<&mut i32>,
+        ) -> i32 {
+            let url = target_url.map(ToString::to_string).unwrap_or_default();
+            if let Ok(mut events) = self.events.lock() {
+                events.popups.push((
+                    self.space_id.clone(),
+                    if url.is_empty() { "about:blank".to_owned() } else { url },
+                ));
+            }
+            1
+        }
+    }
+}
+
+cef::wrap_download_handler! {
+    struct LumenDownloadHandler {
+        events: Arc<Mutex<EngineEvents>>,
+    }
+
+    impl DownloadHandler {
+        fn on_before_download(
+            &self,
+            _browser: Option<&mut Browser>,
+            item: Option<&mut DownloadItem>,
+            suggested_name: Option<&CefString>,
+            callback: Option<&mut BeforeDownloadCallback>,
+        ) -> i32 {
+            let (Some(item), Some(callback)) = (item, callback) else { return 0; };
+            let suggested_file_name = item.suggested_file_name();
+            let name = suggested_name
+                .map(ToString::to_string)
+                .unwrap_or_else(|| CefStringUtf16::from(&suggested_file_name).to_string());
+            let mut events = self.events.lock().ok();
+            let reserved = events
+                .as_ref()
+                .map(|events| events.downloads.as_slice())
+                .unwrap_or_default();
+            let path = unique_download_path(&name, reserved);
+            let record = DownloadRecord {
+                id: item.id(),
+                url: CefStringUtf16::from(&item.url()).to_string(),
+                path,
+                received_bytes: 0,
+                total_bytes: item.total_bytes(),
+                complete: false,
+                canceled: false,
+            };
+            if let Some(events) = events.as_mut() {
+                events.downloads.push(record.clone());
+            }
+            drop(events);
+            let cef_path = CefString::from(path.to_string_lossy().as_ref());
+            callback.cont(Some(&cef_path), 0);
+            eprintln!("Lumen download started: {} -> {}", record.url, record.path.display());
+            0
+        }
+
+        fn on_download_updated(
+            &self,
+            _browser: Option<&mut Browser>,
+            item: Option<&mut DownloadItem>,
+            _callback: Option<&mut DownloadItemCallback>,
+        ) {
+            let Some(item) = item else { return; };
+            let received = item.received_bytes();
+            let total = item.total_bytes();
+            let complete = item.is_complete() != 0;
+            let canceled = item.is_canceled() != 0 || item.is_interrupted() != 0;
+            if let Ok(mut events) = self.events.lock() {
+                if let Some(record) = events.downloads.iter_mut().find(|record| record.id == item.id()) {
+                    record.received_bytes = received;
+                    record.total_bytes = total;
+                    record.complete = complete;
+                    record.canceled = canceled;
+                    if complete || canceled {
+                        eprintln!("Lumen download {}: {} ({}/{})", if complete { "complete" } else { "failed" }, record.path.display(), received, total);
+                    } else {
+                        eprintln!("Lumen download progress: {} ({}/{})", record.path.display(), received, total);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn unique_download_path(name: &str, reserved: &[DownloadRecord]) -> PathBuf {
+    let downloads = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Downloads");
+    if let Err(error) = std::fs::create_dir_all(&downloads) {
+        eprintln!(
+            "Lumen cannot create download directory {}: {error}",
+            downloads.display()
+        );
+    }
+    let filename = Path::new(name)
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| std::ffi::OsStr::new("download"));
+    let candidate = downloads.join(filename);
+    if !candidate.exists() && !reserved.iter().any(|record| record.path == candidate) {
+        return candidate;
+    }
+    let stem = Path::new(filename)
+        .file_stem()
+        .unwrap_or(filename)
+        .to_string_lossy();
+    let extension = Path::new(filename)
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()))
+        .unwrap_or_default();
+    (1..)
+        .map(|index| downloads.join(format!("{stem} ({index}){extension}")))
+        .find(|path| !path.exists() && !reserved.iter().any(|record| record.path == *path))
+        .unwrap_or(candidate)
+}
+
+cef::wrap_permission_handler! {
+    struct LumenPermissionHandler;
+
+    impl PermissionHandler {
+        fn on_request_media_access_permission(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _origin: Option<&CefString>,
+            _permissions: u32,
+            callback: Option<&mut MediaAccessCallback>,
+        ) -> i32 {
+            if let Some(callback) = callback { callback.cont(0); }
+            1
+        }
+
+        fn on_show_permission_prompt(
+            &self,
+            _browser: Option<&mut Browser>,
+            _prompt_id: u64,
+            _origin: Option<&CefString>,
+            _permissions: u32,
+            callback: Option<&mut PermissionPromptCallback>,
+        ) -> i32 {
+            if let Some(callback) = callback { callback.cont(PermissionRequestResult::DENY); }
+            1
+        }
+    }
+}
+
 cef::wrap_client! {
     struct LumenClient {
         render_handler: RenderHandler,
         display_handler: DisplayHandler,
+        life_span_handler: LifeSpanHandler,
+        download_handler: DownloadHandler,
+        permission_handler: PermissionHandler,
     }
 
     impl Client {
@@ -282,6 +517,10 @@ cef::wrap_client! {
         fn display_handler(&self) -> Option<DisplayHandler> {
             Some(self.display_handler.clone())
         }
+
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(self.life_span_handler.clone()) }
+        fn download_handler(&self) -> Option<DownloadHandler> { Some(self.download_handler.clone()) }
+        fn permission_handler(&self) -> Option<PermissionHandler> { Some(self.permission_handler.clone()) }
     }
 }
 
@@ -297,6 +536,9 @@ pub struct Engine {
     args: Args,
     app: Option<cef::App>,
     visible: Option<String>,
+    lifecycle: TabLifecycle,
+    events: Arc<Mutex<EngineEvents>>,
+    retired_images: Vec<Arc<RenderImage>>,
 }
 
 impl Engine {
@@ -308,6 +550,9 @@ impl Engine {
             args: Args::new(),
             app: None,
             visible: None,
+            lifecycle: TabLifecycle::default(),
+            events: Arc::new(Mutex::new(EngineEvents::default())),
+            retired_images: Vec::new(),
         }
     }
 
@@ -398,10 +643,25 @@ impl Engine {
                 is_loading: true,
                 favicon: None,
                 retired: Vec::new(),
+                screen_width: width.max(1),
+                screen_height: height.max(1),
+                screen_scale: 1.0,
+                screen_origin_x: 0,
+                screen_origin_y: 0,
             }));
             let render_handler = LumenRenderHandler::new(shared.clone());
             let display_handler = LumenDisplayHandler::new(shared.clone());
-            let mut client = LumenClient::new(render_handler, display_handler);
+            let life_span_handler =
+                LumenLifeSpanHandler::new(self.events.clone(), space_id.to_owned());
+            let download_handler = LumenDownloadHandler::new(self.events.clone());
+            let permission_handler = LumenPermissionHandler::new();
+            let mut client = LumenClient::new(
+                render_handler,
+                display_handler,
+                life_span_handler,
+                download_handler,
+                permission_handler,
+            );
 
             let window_info = WindowInfo::default().set_as_windowless(0);
             let start_url = CefString::from(url);
@@ -443,6 +703,7 @@ impl Engine {
                     state: shared,
                 },
             );
+            self.lifecycle.opened(id, Instant::now());
         } else {
             self.resize_browser(id, width, height);
         }
@@ -455,12 +716,103 @@ impl Engine {
         if self.visible.as_deref() == Some(tab_id) || !self.browsers.contains_key(tab_id) {
             return;
         }
+        let now = Instant::now();
+        if let Some(previous) = self.visible.as_deref() {
+            self.lifecycle.deactivated(previous, now);
+        }
         for (id, entry) in &self.browsers {
             if let Some(host) = entry.browser.host() {
                 host.was_hidden((id != tab_id) as i32);
             }
         }
         self.visible = Some(tab_id.to_owned());
+        self.lifecycle.activated(tab_id, now);
+    }
+
+    pub fn hide_all(&mut self) {
+        let Some(previous) = self.visible.take() else {
+            return;
+        };
+        let now = Instant::now();
+        self.lifecycle.deactivated(&previous, now);
+        for entry in self.browsers.values() {
+            if let Some(host) = entry.browser.host() {
+                host.was_hidden(1);
+            }
+        }
+    }
+
+    pub fn close_browser(&mut self, tab_id: &str) {
+        self.close_browser_entry(tab_id);
+        self.lifecycle.closed(tab_id);
+        if self.visible.as_deref() == Some(tab_id) {
+            self.visible = None;
+        }
+    }
+
+    fn close_browser_entry(&mut self, tab_id: &str) {
+        if let Some(entry) = self.browsers.remove(tab_id) {
+            if let Some(host) = entry.browser.host() {
+                host.close_browser(1);
+            }
+            if let Ok(mut state) = entry.state.lock() {
+                self.retired_images.extend(state.retired.drain(..));
+                if let Some(image) = state.image.take() {
+                    self.retired_images.push(image);
+                }
+                if let Some(image) = state.favicon.take() {
+                    self.retired_images.push(image);
+                }
+            }
+        }
+    }
+
+    pub fn discard_inactive(&mut self) -> Vec<String> {
+        let expired = self
+            .lifecycle
+            .discard_expired(Instant::now(), self.visible.as_deref());
+        for tab_id in &expired {
+            self.close_browser_entry(tab_id);
+        }
+        expired
+    }
+
+    pub fn tab_state(&self, tab_id: &str) -> Option<TabState> {
+        self.lifecycle.state(tab_id)
+    }
+
+    pub fn set_screen_metrics(
+        &self,
+        tab_id: &str,
+        screen_width: i32,
+        screen_height: i32,
+        scale: f32,
+        origin_x: i32,
+        origin_y: i32,
+    ) {
+        if let Some(entry) = self.browsers.get(tab_id)
+            && let Ok(mut state) = entry.state.lock()
+        {
+            state.screen_width = screen_width.max(1);
+            state.screen_height = screen_height.max(1);
+            state.screen_scale = scale.max(1.0);
+            state.screen_origin_x = origin_x;
+            state.screen_origin_y = origin_y;
+        }
+    }
+
+    pub fn take_popups(&self) -> Vec<(String, String)> {
+        self.events
+            .lock()
+            .map(|mut events| std::mem::take(&mut events.popups))
+            .unwrap_or_default()
+    }
+
+    pub fn downloads(&self) -> Vec<DownloadRecord> {
+        self.events
+            .lock()
+            .map(|events| events.downloads.clone())
+            .unwrap_or_default()
     }
 
     pub fn get_image(&self, tab_id: &str) -> Option<Arc<RenderImage>> {
@@ -475,17 +827,21 @@ impl Engine {
 
     /// Drains frames replaced since the last call so the caller can evict them from
     /// GPUI's sprite atlas (each OSR frame is a distinct RenderImage/texture).
-    pub fn take_retired_images(&self) -> Vec<Arc<RenderImage>> {
-        self.browsers
-            .values()
-            .flat_map(|entry| {
-                entry
-                    .state
-                    .lock()
-                    .map(|mut state| std::mem::take(&mut state.retired))
-                    .unwrap_or_default()
-            })
-            .collect()
+    pub fn take_retired_images(&mut self) -> Vec<Arc<RenderImage>> {
+        let mut retired = std::mem::take(&mut self.retired_images);
+        retired.extend(
+            self.browsers
+                .values()
+                .flat_map(|entry| {
+                    entry
+                        .state
+                        .lock()
+                        .map(|mut state| std::mem::take(&mut state.retired))
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>(),
+        );
+        retired
     }
 
     pub fn get_favicon_image(&self, tab_id: &str) -> Option<Arc<RenderImage>> {
