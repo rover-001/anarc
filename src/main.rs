@@ -121,6 +121,8 @@ pub(crate) struct Lumen {
     sidebar_collapsed: bool,
     sidebar_width: f32,
     sidebar_resizing: bool,
+    #[cfg(all(target_os = "linux", not(test)))]
+    resize_drag: split_view::ResizeDrag,
     started_at: Instant,
     first_frame_logged: bool,
     address: gpui_kit::Entity<InputState>,
@@ -252,6 +254,14 @@ fn sidebar_width_for(collapsed: bool, width: f32) -> f32 {
     }
 }
 
+#[cfg(all(target_os = "linux", not(test)))]
+fn resize_debug(message: std::fmt::Arguments<'_>) {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ENABLED.get_or_init(|| std::env::var("LUMEN_DEBUG_RESIZE").as_deref() == Ok("1")) {
+        eprintln!("[resize-debug] {message}");
+    }
+}
+
 fn move_suggestion_selection(current: Option<usize>, count: usize, down: bool) -> Option<usize> {
     if count == 0 {
         return None;
@@ -368,6 +378,8 @@ impl Lumen {
             sidebar_collapsed,
             sidebar_width,
             sidebar_resizing: false,
+            #[cfg(all(target_os = "linux", not(test)))]
+            resize_drag: split_view::ResizeDrag::default(),
             started_at: Instant::now(),
             first_frame_logged: false,
             address,
@@ -820,6 +832,71 @@ impl Lumen {
 
     fn effective_sidebar_width(&self) -> f32 {
         sidebar_width_for(self.sidebar_collapsed, self.sidebar_width)
+    }
+
+    #[cfg(all(target_os = "linux", not(test)))]
+    fn begin_browser_resize_drag(&mut self, window: &Window, split_divider: bool) {
+        let pair = self.current_split_pair();
+        let bounds = window.bounds();
+        let width = f32::from(bounds.size.width);
+        let height = (f32::from(bounds.size.height) - TOPBAR_HEIGHT - CONTENT_BEZEL_BOTTOM)
+            .max(100.0) as i32;
+        let sidebar_width = self.effective_sidebar_width();
+        let content_width = (width - sidebar_width - CONTENT_BEZEL_X * 2.0).max(100.0);
+        let mut sizes = Vec::new();
+        if let Some(pair) = pair {
+            let (first_width, second_width) = if split_divider {
+                let max_width = split_view::max_divider_pane_width(content_width) as i32;
+                (max_width, max_width)
+            } else {
+                let max_content_width =
+                    (width - SIDEBAR_MIN_WIDTH - CONTENT_BEZEL_X * 2.0).max(100.0);
+                let (first, second) = split_view::pane_widths(max_content_width, self.split_ratio);
+                (first as i32, second as i32)
+            };
+            sizes.push(split_view::BrowserSize {
+                tab_id: pair.first,
+                width: first_width.max(1),
+                height,
+            });
+            sizes.push(split_view::BrowserSize {
+                tab_id: pair.second,
+                width: second_width.max(1),
+                height,
+            });
+        } else if let Some(tab_id) = self.active_space().active.clone() {
+            let max_content_width =
+                (width - SIDEBAR_MIN_WIDTH - CONTENT_BEZEL_X * 2.0).max(100.0) as i32;
+            sizes.push(split_view::BrowserSize {
+                tab_id,
+                width: max_content_width,
+                height,
+            });
+        }
+
+        for size in self.resize_drag.start(sizes) {
+            resize_debug(format_args!(
+                "drag_start kind={} tab={} size={}x{}",
+                if split_divider { "split" } else { "sidebar" },
+                size.tab_id,
+                size.width,
+                size.height
+            ));
+            self.engine
+                .flush_resize_browser(&size.tab_id, size.width, size.height);
+        }
+    }
+
+    #[cfg(all(target_os = "linux", not(test)))]
+    fn finish_browser_resize_drag(&mut self, sizes: Vec<split_view::BrowserSize>, kind: &str) {
+        for size in self.resize_drag.finish(sizes) {
+            resize_debug(format_args!(
+                "drag_end kind={kind} tab={} size={}x{}",
+                size.tab_id, size.width, size.height
+            ));
+            self.engine
+                .flush_resize_browser(&size.tab_id, size.width, size.height);
+        }
     }
 
     fn active_tab_id(&self) -> &str {
@@ -1556,6 +1633,10 @@ impl Render for Lumen {
                     content_w
                 }
             });
+            let active_width = self
+                .resize_drag
+                .frozen_size(&active_tab_id_string)
+                .map_or(active_width, |(width, _)| width);
             if active_tab_url != "lumen://welcome"
                 && active_tab_url != "about:blank"
                 && !active_tab_url.is_empty()
@@ -1581,7 +1662,9 @@ impl Render for Lumen {
                             &active_space_id,
                             &pair.first,
                             &tab.url,
-                            left_width_dip.max(1),
+                            self.resize_drag
+                                .frozen_size(&pair.first)
+                                .map_or(left_width_dip.max(1), |(width, _)| width),
                             content_h,
                             0xff000000 | theme.surface,
                         ) {
@@ -1598,7 +1681,9 @@ impl Render for Lumen {
                             &active_space_id,
                             &pair.second,
                             &tab.url,
-                            right_width_dip.max(1),
+                            self.resize_drag
+                                .frozen_size(&pair.second)
+                                .map_or(right_width_dip.max(1), |(width, _)| width),
                             content_h,
                             0xff000000 | theme.surface,
                         ) {
@@ -1685,8 +1770,10 @@ impl Render for Lumen {
                         .hover(|s| s.bg(rgb(theme.surface_hover)))
                         .on_mouse_down(
                             gpui_kit::MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
+                            cx.listener(|this, _, _window, cx| {
                                 this.sidebar_resizing = true;
+                                #[cfg(all(target_os = "linux", not(test)))]
+                                this.begin_browser_resize_drag(_window, false);
                                 cx.notify();
                             }),
                         ),
@@ -2165,31 +2252,55 @@ impl Render for Lumen {
             )
             .on_mouse_up(
                 gpui_kit::MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
+                cx.listener(|this, _, _window, cx| {
+                    #[cfg(all(target_os = "linux", not(test)))]
                     let finish_split_resize = this.split_resizing;
-                    if finish_split_resize {
-                        if let Some(pair) = this.current_split_pair() {
-                            let bounds = window.bounds();
-                            let sidebar = this.effective_sidebar_width();
-                            let total_width =
-                                f32::from(bounds.size.width) - sidebar - 2.0 * CONTENT_BEZEL_X;
-                            let (left_width, right_width) =
-                                split_view::pane_widths(total_width, this.split_ratio);
-                            let height = (f32::from(bounds.size.height)
-                                - TOPBAR_HEIGHT
-                                - CONTENT_BEZEL_BOTTOM)
-                                as i32;
-                            this.engine.flush_resize_browser(
-                                &pair.first,
-                                left_width as i32,
-                                height,
-                            );
-                            this.engine.flush_resize_browser(
-                                &pair.second,
-                                right_width as i32,
-                                height,
-                            );
-                        }
+                    #[cfg(all(target_os = "linux", not(test)))]
+                    if this.sidebar_resizing || finish_split_resize {
+                        let bounds = _window.bounds();
+                        let sidebar = this.effective_sidebar_width();
+                        let content_width =
+                            (f32::from(bounds.size.width) - sidebar - 2.0 * CONTENT_BEZEL_X)
+                                .max(100.0);
+                        let height =
+                            (f32::from(bounds.size.height) - TOPBAR_HEIGHT - CONTENT_BEZEL_BOTTOM)
+                                .max(100.0) as i32;
+                        let exact_sizes = if let Some(pair) = this.current_split_pair() {
+                            let (left, right) =
+                                split_view::pane_widths(content_width, this.split_ratio);
+                            vec![
+                                split_view::BrowserSize {
+                                    tab_id: pair.first,
+                                    width: left.max(1.0) as i32,
+                                    height,
+                                },
+                                split_view::BrowserSize {
+                                    tab_id: pair.second,
+                                    width: right.max(1.0) as i32,
+                                    height,
+                                },
+                            ]
+                        } else {
+                            this.active_space()
+                                .active
+                                .clone()
+                                .map(|tab_id| {
+                                    vec![split_view::BrowserSize {
+                                        tab_id,
+                                        width: content_width as i32,
+                                        height,
+                                    }]
+                                })
+                                .unwrap_or_default()
+                        };
+                        this.finish_browser_resize_drag(
+                            exact_sizes,
+                            if finish_split_resize {
+                                "split"
+                            } else {
+                                "sidebar"
+                            },
+                        );
                     }
                     if this.sidebar_resizing || this.split_resizing {
                         this.sidebar_resizing = false;
@@ -2397,8 +2508,10 @@ impl Render for Lumen {
                                             .cursor_col_resize()
                                             .on_mouse_down(
                                                 gpui_kit::MouseButton::Left,
-                                                cx.listener(|this, _, _, cx| {
+                                                cx.listener(|this, _, _window, cx| {
                                                     this.split_resizing = true;
+                                                    #[cfg(all(target_os = "linux", not(test)))]
+                                                    this.begin_browser_resize_drag(_window, true);
                                                     cx.notify();
                                                 }),
                                             ),
@@ -3407,6 +3520,8 @@ mod tests {
             sidebar_collapsed: false,
             sidebar_width: 240.0 * UI_SCALE,
             sidebar_resizing: false,
+            #[cfg(all(target_os = "linux", not(test)))]
+            resize_drag: split_view::ResizeDrag::default(),
             started_at: Instant::now(),
             first_frame_logged: true,
             address,

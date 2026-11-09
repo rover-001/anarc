@@ -4,6 +4,41 @@ pub const DIVIDER_WIDTH: f32 = 4.0 * UI_SCALE;
 pub const DIVIDER_HIT_WIDTH: f32 = 8.0 * UI_SCALE;
 pub const MIN_PANE_WIDTH: f32 = 240.0 * UI_SCALE;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrowserSize {
+    pub tab_id: String,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Default)]
+pub struct ResizeDrag {
+    frozen: Option<Vec<BrowserSize>>,
+}
+
+impl ResizeDrag {
+    pub fn start(&mut self, max_sizes: Vec<BrowserSize>) -> Vec<BrowserSize> {
+        self.frozen = Some(max_sizes.clone());
+        max_sizes
+    }
+
+    pub fn frozen_size(&self, tab_id: &str) -> Option<(i32, i32)> {
+        self.frozen
+            .as_ref()?
+            .iter()
+            .find_map(|size| (size.tab_id == tab_id).then_some((size.width, size.height)))
+    }
+
+    pub fn finish(&mut self, exact_sizes: Vec<BrowserSize>) -> Vec<BrowserSize> {
+        self.frozen = None;
+        exact_sizes
+    }
+}
+
+pub fn max_divider_pane_width(content_width: f32) -> f32 {
+    (content_width - DIVIDER_WIDTH - MIN_PANE_WIDTH).max(1.0)
+}
+
 pub fn tab_for_pane<'a>(first: &'a str, second: &'a str, pane_index: usize) -> &'a str {
     if pane_index == 1 { second } else { first }
 }
@@ -66,5 +101,29 @@ mod tests {
     fn frame_size_is_one_to_one_in_device_pixels() {
         assert_eq!(frame_logical_size(1600, 900, 2.0), (800.0, 450.0));
         assert_eq!(frame_logical_size(1200, 800, 1.5), (800.0, 800.0 / 1.5));
+    }
+
+    #[test]
+    fn divider_drag_freezes_at_max_width_and_moves_do_not_resize() {
+        let max_width = max_divider_pane_width(1004.0) as i32;
+        assert_eq!(max_width, 760);
+        let mut drag = ResizeDrag::default();
+        let start = vec![BrowserSize {
+            tab_id: "tab-a".into(),
+            width: max_width,
+            height: 700,
+        }];
+        assert_eq!(drag.start(start.clone()), start);
+        assert_eq!(drag.frozen_size("tab-a"), Some((760, 700)));
+        // Any number of pointer moves leave the frozen browser request unchanged.
+        assert_eq!(drag.frozen_size("tab-a"), Some((760, 700)));
+        assert_eq!(drag.frozen_size("tab-a"), Some((760, 700)));
+        let end = vec![BrowserSize {
+            tab_id: "tab-a".into(),
+            width: 360,
+            height: 700,
+        }];
+        assert_eq!(drag.finish(end.clone()), end);
+        assert_eq!(drag.frozen_size("tab-a"), None);
     }
 }
