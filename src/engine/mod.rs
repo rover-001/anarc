@@ -149,7 +149,13 @@ impl Engine {
                 width: bounds[2].max(1),
                 height: bounds[3].max(1),
             };
-            let window_info = WindowInfo::default().set_as_child(parent as _, &rect);
+            let mut window_info = WindowInfo::default().set_as_child(parent as _, &rect);
+            // `DEFAULT` selects CEF's Chrome runtime, which creates Chrome's
+            // internal tab UI. Lumen supplies its own chrome, so embedding
+            // must use the lightweight Alloy runtime. CEF 156's Chrome path
+            // dereferences its internal TabInterface during child creation
+            // and SIGSEGVs for this custom-host setup.
+            window_info.runtime_style = RuntimeStyle::ALLOY;
             let mut client = LumenClient::new();
             let start_url = CefString::from(url);
             let browser = cef::browser_host_create_browser_sync(

@@ -15,6 +15,7 @@ use gpui_kit::{
     px, rgb, size,
 };
 use model::{Space, Tab, TabState};
+#[cfg(all(target_os = "linux", not(test)))]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use ui::{sidebar, space_switcher, tab_list};
 
@@ -93,30 +94,10 @@ impl Lumen {
 
     fn navigate(&mut self, cx: &Context<Self>) {
         let input = self.address.read(cx).value().to_string();
-        let url = normalize_address(&input);
-        let url = if url.is_empty() {
-            "https://duckduckgo.com".to_owned()
-        } else {
-            url
+        let space = self.active_space_mut();
+        let Some((id, url)) = submit_address(space, &input) else {
+            return;
         };
-        let space = self
-            .spaces
-            .iter_mut()
-            .find(|space| space.id == self.active_space)
-            .expect("active space must exist");
-        if space.active.is_none() {
-            self.add_tab();
-        }
-        let id = self.active_space().active.clone().expect("tab was created");
-        let tab = self
-            .active_space_mut()
-            .tabs
-            .iter_mut()
-            .find(|tab| tab.id == id)
-            .expect("active tab must exist");
-        tab.url = url.clone();
-        tab.title = url.clone();
-        tab.state = TabState::Live;
         self.engine.navigate(&id, &url);
     }
 
@@ -142,6 +123,27 @@ fn normalize_address(input: &str) -> String {
     }
 }
 
+fn submit_address(space: &mut Space, input: &str) -> Option<(String, String)> {
+    let url = normalize_address(input);
+    let url = if url.is_empty() {
+        "https://duckduckgo.com".to_owned()
+    } else {
+        url
+    };
+
+    if space.active.is_none() {
+        let id = format!("tab-{}", space.tabs.len() + 1);
+        space.tabs.push(Tab::new(&id, "New tab", "about:blank"));
+        space.active = Some(id);
+    }
+    let id = space.active.clone()?;
+    let tab = space.tabs.iter_mut().find(|tab| tab.id == id)?;
+    tab.url = url.clone();
+    tab.title = url.clone();
+    tab.state = TabState::Live;
+    Some((id, url))
+}
+
 impl Render for Lumen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.first_frame_logged {
@@ -152,6 +154,7 @@ impl Render for Lumen {
             );
         }
 
+        #[cfg(not(test))]
         if !self.cef_task_started {
             self.cef_task_started = true;
             cx.spawn(async move |this, cx| {
@@ -195,14 +198,17 @@ impl Render for Lumen {
             .find(|tab| Some(&tab.id) == active_tab_id.as_ref())
             .map(|tab| tab.title.clone())
             .unwrap_or_else(|| "New tab".into());
+        #[cfg(all(target_os = "linux", not(test)))]
         let active_tab = active_space
             .tabs
             .iter()
             .find(|tab| Some(&tab.id) == active_tab_id.as_ref());
+        #[cfg(all(target_os = "linux", not(test)))]
         let active_tab_id_string = active_tab_id.clone().unwrap_or_default();
+        #[cfg(all(target_os = "linux", not(test)))]
         let active_tab_url = active_tab.map(|tab| tab.url.clone()).unwrap_or_default();
 
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", not(test)))]
         if self.engine.is_initialized() && active_tab_url != "lumen://welcome" {
             if let Ok(handle) = _window.window_handle() {
                 let parent = match handle.as_raw() {
@@ -469,4 +475,34 @@ fn main() {
             )
             .expect("open Lumen window");
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn address_bar_routes_urls_and_searches_to_the_active_tab() {
+        let mut space = Space::new("test", "Test", 0x123456);
+        let tab = Tab::new("existing", "Welcome", "lumen://welcome");
+        space.active = Some(tab.id.clone());
+        space.tabs.push(tab);
+
+        let (id, url) = submit_address(&mut space, "youtube").unwrap();
+        assert_eq!(id, "existing");
+        assert_eq!(url, "https://duckduckgo.com/?q=youtube");
+        assert_eq!(space.tabs[0].url, url);
+        assert_eq!(space.tabs[0].title, url);
+        assert_eq!(space.tabs[0].state, TabState::Live);
+    }
+
+    #[test]
+    fn empty_address_opens_search_home_and_creates_a_tab_if_needed() {
+        let mut space = Space::new("test", "Test", 0x123456);
+        let (id, url) = submit_address(&mut space, "").unwrap();
+        assert_eq!(id, "tab-1");
+        assert_eq!(url, "https://duckduckgo.com");
+        assert_eq!(space.active.as_deref(), Some("tab-1"));
+        assert_eq!(space.tabs[0].url, url);
+    }
 }
