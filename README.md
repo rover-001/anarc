@@ -1,6 +1,6 @@
 # Lumen
 
-Lumen is an Arc-style minimal browser built with Rust, GPUI, and CEF. The current code contains the Phase 0 scaffold and Phase 1 GPUI shell; web content is not wired yet.
+Lumen is an Arc-style minimal browser built with Rust, GPUI Kit, and CEF. The Linux shell includes a native CEF child browser, a sidebar with spaces and tabs, and an address/search bar.
 
 ## Build and run
 
@@ -10,22 +10,24 @@ Use Rust stable and run:
 cargo run --release
 ```
 
-The Phase 1 shell does not need CEF binaries. The app logs time to its first GPUI render to stderr. The initial UI includes Personal and Work spaces, tab selection, a new-tab control, and a collapsible sidebar.
+The UI appears before CEF is initialized. After the first frame, Lumen starts CEF and pumps its external message loop from GPUI. The app logs time to its first GPUI render to stderr. Type a URL or search in the top address field and click **Go**; use **+ New tab** to add a tab. URLs without a scheme get `https://`; plain text is searched with DuckDuckGo.
 
 ## CEF setup (Phase 2+)
 
-CEF is pinned to `cef = 156.4.0+156.0.26` when the engine integration is introduced. The cef-rs `cef-dll-sys` build script can download and unpack the matching binary distribution automatically. To share a downloaded copy across builds, install the CEF binary distribution and export:
+The manifest pins `cef = 156.4.0+156.0.26`. The cef-rs `cef-dll-sys` build script downloads and unpacks the matching CEF binary distribution when `CEF_PATH` is not set (the initial download needs network access). To reuse a downloaded copy, point `CEF_PATH` at the extracted Linux distribution directory and add it to the runtime loader path:
 
 ```sh
 export CEF_PATH="$HOME/.local/share/cef"
-export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$CEF_PATH"
+export LD_LIBRARY_PATH="$CEF_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 ```
 
-For Wayland sessions, run the eventual CEF process with `--ozone-platform=x11` to use XWayland. Do not use `--single-process`.
+Then run `cargo run --release` from this directory. The CEF package version and binary distribution must match. On Wayland, use an XWayland session (`--ozone-platform=x11`); window embedding currently uses the Linux X11 native child-window path. Do not use `--single-process`.
+
+The address field currently uses the visible **Go** button to submit. CEF page title/favicon callbacks, popups, downloads, keyboard shortcuts, and independent per-space request contexts are not wired yet.
 
 ## Dependencies
 
-The manifest pins `gpui-kit` 0.9.0 and serde 1.0.228. GPUI Kit brings in a matching GPUI snapshot through its facade, so the app uses `gpui_kit::*` and does not pin a separate GPUI crate. `raw-window-handle`, `sysinfo`, CEF, directories, serde_json, and Brave adblock are added with their implementation phases.
+The manifest pins `gpui-kit` 0.9.0, CEF 156.4.0, raw-window-handle 0.6.2, x11 2.21.0, and serde 1.0.228. GPUI Kit brings in the matching GPUI snapshot through its facade. The small `x11` dependency is used to position, map, and unmap CEF's native child windows on Linux.
 
 ## Project layout
 

@@ -8,10 +8,14 @@ mod ui;
 use std::time::Instant;
 
 use gpui_kit::{
-    Bounds, Context, FontWeight, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px,
-    rgb, size,
+    Bounds, Context, FontWeight, Render, Window, WindowBounds, WindowOptions,
+    component::input::{Input, InputState},
+    div,
+    prelude::*,
+    px, rgb, size,
 };
 use model::{Space, Tab, TabState};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use ui::{sidebar, space_switcher, tab_list};
 
 struct Lumen {
@@ -20,10 +24,13 @@ struct Lumen {
     sidebar_collapsed: bool,
     started_at: Instant,
     first_frame_logged: bool,
+    address: gpui_kit::Entity<InputState>,
+    engine: engine::Engine,
+    cef_task_started: bool,
 }
 
 impl Lumen {
-    fn new() -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut personal = Space::new("personal", "Personal", 0x9aa6ff);
         let mut welcome = Tab::new("welcome", "Welcome to Lumen", "lumen://welcome");
         welcome.state = TabState::Live;
@@ -44,6 +51,11 @@ impl Lumen {
             sidebar_collapsed: false,
             started_at: Instant::now(),
             first_frame_logged: false,
+            address: cx.new(|cx| {
+                InputState::new(window, cx).placeholder("Search or enter a website address")
+            }),
+            engine: engine::Engine::new(),
+            cef_task_started: false,
         }
     }
 
@@ -69,6 +81,54 @@ impl Lumen {
         space.tabs.push(tab);
         space.active = Some(id);
     }
+
+    fn navigate(&mut self, cx: &Context<Self>) {
+        let input = self.address.read(cx).value().to_string();
+        let url = normalize_address(&input);
+        if url.is_empty() {
+            return;
+        }
+        let space = self
+            .spaces
+            .iter_mut()
+            .find(|space| space.id == self.active_space)
+            .expect("active space must exist");
+        if space.active.is_none() {
+            self.add_tab();
+        }
+        let id = self.active_space().active.clone().expect("tab was created");
+        let tab = self
+            .active_space_mut()
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.id == id)
+            .expect("active tab must exist");
+        tab.url = url.clone();
+        tab.title = url.clone();
+        tab.state = TabState::Live;
+        self.engine.navigate(&id, &url);
+    }
+
+    fn active_space_mut(&mut self) -> &mut Space {
+        self.spaces
+            .iter_mut()
+            .find(|space| space.id == self.active_space)
+            .expect("active space must exist")
+    }
+}
+
+fn normalize_address(input: &str) -> String {
+    let input = input.trim();
+    if input.is_empty() {
+        return String::new();
+    }
+    if input.contains("://") || input.starts_with("about:") {
+        input.to_owned()
+    } else if input == "localhost" || input.starts_with("localhost:") || input.contains('.') {
+        format!("https://{input}")
+    } else {
+        format!("https://duckduckgo.com/?q={}", input.replace(' ', "+"))
+    }
 }
 
 impl Render for Lumen {
@@ -79,6 +139,33 @@ impl Render for Lumen {
                 "Lumen time-to-first-frame: {:.1} ms",
                 self.started_at.elapsed().as_secs_f64() * 1000.0
             );
+        }
+
+        if !self.cef_task_started {
+            self.cef_task_started = true;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(180))
+                    .await;
+                loop {
+                    let updated = this.update(cx, |this, cx| {
+                        if let Err(error) = this.engine.initialize() {
+                            eprintln!("Lumen CEF startup failed: {error}");
+                            return false;
+                        }
+                        this.engine.pump();
+                        cx.notify();
+                        true
+                    });
+                    if !matches!(updated, Ok(true)) {
+                        break;
+                    }
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(16))
+                        .await;
+                }
+            })
+            .detach();
         }
 
         let active_space_id = self.active_space.clone();
@@ -97,6 +184,41 @@ impl Render for Lumen {
             .find(|tab| Some(&tab.id) == active_tab_id.as_ref())
             .map(|tab| tab.title.clone())
             .unwrap_or_else(|| "New tab".into());
+        let active_tab = active_space
+            .tabs
+            .iter()
+            .find(|tab| Some(&tab.id) == active_tab_id.as_ref());
+        let active_tab_id_string = active_tab_id.clone().unwrap_or_default();
+        let active_tab_url = active_tab.map(|tab| tab.url.clone()).unwrap_or_default();
+
+        #[cfg(target_os = "linux")]
+        if self.engine.is_initialized() && active_tab_url != "lumen://welcome" {
+            if let Ok(handle) = _window.window_handle() {
+                if let RawWindowHandle::Xlib(xlib) = handle.as_raw() {
+                    let scale = _window.scale_factor();
+                    let sidebar = if self.sidebar_collapsed { 64.0 } else { 240.0 };
+                    let bounds = _window.bounds();
+                    let width = f32::from(bounds.size.width);
+                    let height = f32::from(bounds.size.height);
+                    let tab_id = active_tab_id_string.clone();
+                    if !tab_id.is_empty() {
+                        let rect = [
+                            (sidebar * scale) as i32,
+                            (52.0 * scale) as i32,
+                            ((width - sidebar).max(1.0) * scale) as i32,
+                            ((height - 52.0).max(1.0) * scale) as i32,
+                        ];
+                        if let Err(error) =
+                            self.engine
+                                .ensure_browser(&tab_id, &active_tab_url, xlib.window, rect)
+                        {
+                            eprintln!("Lumen CEF browser creation failed: {error}");
+                        }
+                        self.engine.hide_except(&tab_id);
+                    }
+                }
+            }
+        }
 
         let sidebar_width = if self.sidebar_collapsed {
             px(64.0)
@@ -236,12 +358,34 @@ impl Render for Lumen {
                             .h(px(52.0))
                             .flex()
                             .items_center()
-                            .px_6()
+                            .px_4()
+                            .gap_3()
                             .border_b_1()
                             .border_color(rgb(0x23252b))
-                            .text_sm()
-                            .text_color(rgb(0x9498a3))
-                            .child(format!("{}  ·  {}", selected_name, active_tab_title)),
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0x777b85))
+                                    .child(format!("{} ·", selected_name)),
+                            )
+                            .child(Input::new(&self.address).id("address-bar").w_full())
+                            .child(
+                                div()
+                                    .id("navigate")
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_md()
+                                    .bg(rgb(0x25272d))
+                                    .text_sm()
+                                    .text_color(rgb(0xc6c8cf))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(0x30333a)))
+                                    .child("Go")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.navigate(cx);
+                                        cx.notify();
+                                    })),
+                            ),
                     )
                     .child(
                         div()
@@ -282,6 +426,9 @@ impl Render for Lumen {
 }
 
 fn main() {
+    if let Some(code) = engine::execute_subprocess() {
+        std::process::exit(code);
+    }
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(|cx| {
@@ -293,7 +440,7 @@ fn main() {
                     ..Default::default()
                 },
                 cx,
-                |_, cx| cx.new(|_| Lumen::new()),
+                |window, cx| cx.new(|cx| Lumen::new(window, cx)),
             )
             .expect("open Lumen window");
         });
