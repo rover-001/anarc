@@ -58,3 +58,7 @@ Resolved the main.rs merge import conflict retaining omni Focusable and motion A
 ## Session 2026-11-09T15:32:15.720233677+00:00
 
 Fixed animated percentage/opacity clamping with NaN handling and added a unit test; moved per-space CEF profile directories to sanitized direct children of root cache, updated README and paths tests. cargo check --offline and cargo check --tests --offline passed; runtime/tests not run per instruction.
+
+## Session 2026-11-09T15:58:15.177162292+00:00
+
+Implemented resize frame crossfade handoff, corrected sidebar highlight geometry, and added coordinated space-switch transitions. Offline cargo checks and diff check pass; runtime behavior and tests remain unverified.

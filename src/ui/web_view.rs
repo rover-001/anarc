@@ -8,6 +8,22 @@ use crate::ui::{
 };
 use crate::{CONTENT_BEZEL_X, Lumen};
 
+#[derive(Default)]
+struct ResizeFrameHandoff {
+    retaining_old_frame: bool,
+}
+
+impl ResizeFrameHandoff {
+    fn target_frame_arrived(&mut self, retained_edge_fill: bool) -> bool {
+        if retained_edge_fill {
+            self.retaining_old_frame = true;
+            false
+        } else {
+            std::mem::take(&mut self.retaining_old_frame)
+        }
+    }
+}
+
 pub struct WebViewport {
     parent: gpui_kit::WeakEntity<Lumen>,
     focus_handle: gpui_kit::FocusHandle,
@@ -17,11 +33,14 @@ pub struct WebViewport {
     pane_index: usize,
     split_layout: bool,
     drag_edge_color: Option<u32>,
+    resize_source_image: Option<Arc<gpui_kit::RenderImage>>,
+    resize_frame_handoff: ResizeFrameHandoff,
     image: Option<Arc<gpui_kit::RenderImage>>,
     previous_image: Option<Arc<gpui_kit::RenderImage>>,
     transition_id: u64,
     transition_tab: Option<String>,
     transition_cleanup_scheduled: bool,
+    transition_waiting_for_image: bool,
     retired_images: Vec<Arc<gpui_kit::RenderImage>>,
     cursor: i32,
     theme: SpaceTheme,
@@ -38,11 +57,14 @@ impl WebViewport {
             pane_index: 0,
             split_layout: false,
             drag_edge_color: None,
+            resize_source_image: None,
+            resize_frame_handoff: ResizeFrameHandoff::default(),
             image: None,
             previous_image: None,
             transition_id: 0,
             transition_tab: None,
             transition_cleanup_scheduled: false,
+            transition_waiting_for_image: false,
             retired_images: Vec::new(),
             cursor: 0,
             theme: space_theme(0x9aa6ff),
@@ -62,9 +84,37 @@ impl WebViewport {
         drag_edge_color: Option<u32>,
     ) {
         if self.tab_id != tab_id {
-            self.previous_image = self.image.clone();
+            self.resize_source_image = None;
+            self.resize_frame_handoff = ResizeFrameHandoff::default();
+            self.previous_image = self.image.clone().or_else(|| self.previous_image.clone());
             self.transition_id = self.transition_id.wrapping_add(1);
             self.transition_tab = Some(tab_id.clone());
+            self.transition_cleanup_scheduled = false;
+            self.transition_waiting_for_image = image.is_none() && self.previous_image.is_some();
+        } else if self
+            .resize_frame_handoff
+            .target_frame_arrived(drag_edge_color.is_some())
+        {
+            // The edge fill is released only when CEF supplies the exact target
+            // size. Keep the frozen-size image above it while the new frame fades in.
+            self.previous_image = self
+                .resize_source_image
+                .take()
+                .or_else(|| self.image.clone());
+            self.transition_id = self.transition_id.wrapping_add(1);
+            self.transition_tab = Some(tab_id.clone());
+            self.transition_cleanup_scheduled = false;
+        } else if drag_edge_color.is_some() {
+            // CEF remains at the frozen size throughout the drag and until the
+            // final-size frame arrives. Keep its newest frame for the handoff.
+            self.resize_source_image = image.clone();
+        }
+        if self.transition_tab.as_deref() == Some(tab_id.as_str())
+            && self.transition_waiting_for_image
+            && image.is_some()
+        {
+            self.transition_waiting_for_image = false;
+            self.transition_id = self.transition_id.wrapping_add(1);
             self.transition_cleanup_scheduled = false;
         }
         self.tab_id = tab_id;
@@ -420,6 +470,7 @@ impl Render for WebViewport {
 
         let transition_id = self.transition_id;
         let transitioning = self.transition_tab.as_deref() == Some(self.tab_id.as_str())
+            && !self.transition_waiting_for_image
             && !crate::ui::motion::reduced_motion();
         if transitioning && !self.transition_cleanup_scheduled {
             self.transition_cleanup_scheduled = true;
@@ -465,6 +516,32 @@ impl Render for WebViewport {
                                 element.opacity(crate::ui::motion::clamp_percentage(1.0 - progress))
                             },
                         )
+                        .child(
+                            gpui_kit::img(image)
+                                .size_full()
+                                .rounded(px(crate::CARD_RADIUS)),
+                        ),
+                );
+            }
+        } else if self.transition_waiting_for_image
+            && self.transition_tab.as_deref() == Some(self.tab_id.as_str())
+        {
+            if let Some(image) = self.previous_image.clone() {
+                let size = image.size(0);
+                let (width, height) = frame_logical_size(
+                    u32::from(size.width),
+                    u32::from(size.height),
+                    window.scale_factor(),
+                );
+                viewport = viewport.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .w(px(width))
+                        .h(px(height))
+                        .rounded(px(crate::CARD_RADIUS))
+                        .overflow_hidden()
                         .child(
                             gpui_kit::img(image)
                                 .size_full()
@@ -590,6 +667,17 @@ impl Render for WebViewport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resize_handoff_waits_for_edge_fill_release_then_starts_once() {
+        let mut handoff = ResizeFrameHandoff::default();
+        assert!(!handoff.target_frame_arrived(true));
+        assert!(!handoff.target_frame_arrived(true));
+        assert!(handoff.target_frame_arrived(false));
+        // Further CEF paints update the incoming frame without restarting the fade.
+        assert!(!handoff.target_frame_arrived(false));
+    }
+
     #[test]
     fn viewport_coordinates_remove_sidebar_and_topbar_before_scaling() {
         let position = gpui_kit::point(px(340.0), px(72.0));

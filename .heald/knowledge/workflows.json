@@ -193,5 +193,20 @@
     "symbols": [],
     "guidance": "Fixed animated percentage/opacity clamping with NaN handling and added a unit test; moved per-space CEF profile directories to sanitized direct children of root cache, updated README and paths tests. cargo check --offline and cargo check --tests --offline passed; runtime/tests not run per instruction.",
     "updated_at": "2026-11-09T15:32:15.723219402+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/motion.rs",
+      "src/ui/space_switcher.rs",
+      "src/ui/split_view.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Implemented resize frame crossfade handoff, corrected sidebar highlight geometry, and added coordinated space-switch transitions. Offline cargo checks and diff check pass; runtime behavior and tests remain unverified.",
+    "updated_at": "2026-11-09T15:58:15.183037437+00:00"
   }
 ]

@@ -9,6 +9,25 @@ pub const TAB_ROW_HEIGHT: f32 = 36.0 * UI_SCALE;
 pub const SIDEBAR_ROW_PADDING_X: f32 = 12.0;
 pub const SIDEBAR_ROW_ICON_SIZE: f32 = 16.0 * UI_SCALE;
 pub const SIDEBAR_ROW_GAP: f32 = 8.0;
+pub const SIDEBAR_ROW_VERTICAL_GAP: f32 = 8.0 * UI_SCALE;
+pub const SIDEBAR_LIST_TOP: f32 = 52.0 * UI_SCALE;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SidebarRowRect {
+    pub left: f32,
+    pub top: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+pub fn sidebar_row_rect(sidebar_width: f32, row_index: usize) -> SidebarRowRect {
+    SidebarRowRect {
+        left: SIDEBAR_ROW_PADDING_X,
+        top: SIDEBAR_LIST_TOP + row_index as f32 * (TAB_ROW_HEIGHT + SIDEBAR_ROW_VERTICAL_GAP),
+        width: (sidebar_width - 2.0 * SIDEBAR_ROW_PADDING_X).max(0.0),
+        height: TAB_ROW_HEIGHT,
+    }
+}
 
 pub const DEFAULT_PAGE_ZOOM_FACTOR: f64 = 0.9;
 
@@ -164,6 +183,20 @@ mod tests {
         assert_eq!(SIDEBAR_ROW_PADDING_X, 12.0);
         assert_eq!(SIDEBAR_ROW_ICON_SIZE, 16.0 * UI_SCALE);
         assert_eq!(SIDEBAR_ROW_GAP, 8.0);
+    }
+
+    #[test]
+    fn active_highlight_rect_matches_the_padded_row_rect() {
+        let sidebar_width = 237.0;
+        let row_index = 3;
+        let highlight = sidebar_row_rect(sidebar_width, row_index);
+        let row = SidebarRowRect {
+            left: SIDEBAR_ROW_PADDING_X,
+            top: SIDEBAR_LIST_TOP + row_index as f32 * (TAB_ROW_HEIGHT + SIDEBAR_ROW_VERTICAL_GAP),
+            width: sidebar_width - 2.0 * SIDEBAR_ROW_PADDING_X,
+            height: TAB_ROW_HEIGHT,
+        };
+        assert_eq!(highlight, row);
     }
 
     #[test]

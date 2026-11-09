@@ -3,8 +3,8 @@ use std::time::Duration;
 pub const MOTION_FAST: Duration = Duration::from_millis(120);
 pub const MOTION_BASE: Duration = Duration::from_millis(180);
 pub const MOTION_SLOW: Duration = Duration::from_millis(260);
-pub const MOTION_CONTENT: Duration = Duration::from_millis(150);
-pub const MOTION_THEME: Duration = Duration::from_millis(220);
+pub const MOTION_CONTENT: Duration = Duration::from_millis(160);
+pub const MOTION_SPACE_SWITCH: Duration = Duration::from_millis(240);
 pub const MOTION_POPOVER: Duration = Duration::from_millis(140);
 
 pub fn duration(requested: Duration) -> Duration {
