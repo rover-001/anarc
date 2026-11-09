@@ -70,6 +70,8 @@ struct SpaceContextMenu {
 
 pub const SIDEBAR_MIN_WIDTH: f32 = 160.0;
 pub const SIDEBAR_MAX_WIDTH: f32 = 320.0;
+pub const SIDEBAR_NARROW_THRESHOLD: f32 = 1100.0;
+pub const SIDEBAR_COLLAPSED_WIDTH: f32 = 64.0;
 pub const CONTENT_BEZEL_X: f32 = 4.0;
 pub const CONTENT_BEZEL_BOTTOM: f32 = 4.0;
 pub const CARD_RADIUS: f32 = 16.0;
@@ -87,14 +89,21 @@ struct Lumen {
     sidebar_collapsed: bool,
     sidebar_width: f32,
     sidebar_resizing: bool,
+    sidebar_was_narrow: bool,
+    sidebar_restore_collapsed: bool,
     started_at: Instant,
     first_frame_logged: bool,
     address: gpui_kit::Entity<InputState>,
+    find_input: gpui_kit::Entity<InputState>,
     browser_focus_handle: gpui_kit::FocusHandle,
     _address_subscription: gpui_kit::Subscription,
+    show_find: bool,
     suggestions: Vec<SuggestionItem>,
     selected_suggestion: Option<usize>,
     recent_searches: Vec<String>,
+    zoom_levels: std::collections::HashMap<String, f64>,
+    #[cfg(all(target_os = "linux", not(test)))]
+    active_zoom_host: Option<String>,
     show_suggestions: bool,
     engine: engine::Engine,
     space_modal: Option<SpaceModal>,
@@ -123,6 +132,80 @@ fn next_tab_id(space: &Space) -> String {
         .unwrap_or(0)
         + 1;
     format!("tab-{next}")
+}
+
+fn zoom_file() -> std::path::PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    home.join(".local/share/lumen/zoom.json")
+}
+
+fn load_zooms() -> std::collections::HashMap<String, f64> {
+    std::fs::read_to_string(zoom_file())
+        .ok()
+        .and_then(|contents| serde_json::from_str(&contents).ok())
+        .unwrap_or_default()
+}
+
+fn save_zooms(zooms: &std::collections::HashMap<String, f64>) {
+    let path = zoom_file();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(contents) = serde_json::to_vec_pretty(zooms) {
+        let _ = std::fs::write(path, contents);
+    }
+}
+
+fn url_host(url: &str) -> String {
+    let Some((scheme, remainder)) = url.split_once("://") else {
+        return String::new();
+    };
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+        return String::new();
+    }
+    let authority = remainder
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .rsplit('@')
+        .next()
+        .unwrap_or_default();
+    let host = if authority.starts_with('[') {
+        authority
+            .find(']')
+            .map(|end| &authority[..=end])
+            .unwrap_or(authority)
+    } else if let Some((host, port)) = authority.rsplit_once(':') {
+        if port.chars().all(|ch| ch.is_ascii_digit()) {
+            host
+        } else {
+            authority
+        }
+    } else {
+        authority
+    };
+    host.to_ascii_lowercase()
+}
+
+fn apply_sidebar_threshold(
+    width: f32,
+    collapsed: &mut bool,
+    was_narrow: &mut bool,
+    restore: &mut bool,
+) {
+    let is_narrow = width < SIDEBAR_NARROW_THRESHOLD;
+    if is_narrow == *was_narrow {
+        return;
+    }
+    if is_narrow {
+        *restore = *collapsed;
+        *collapsed = true;
+    } else {
+        *collapsed = *restore;
+    }
+    *was_narrow = is_narrow;
 }
 
 fn move_suggestion_selection(current: Option<usize>, count: usize, down: bool) -> Option<usize> {
@@ -182,6 +265,7 @@ impl Lumen {
             input.focus(window, cx);
         });
         let browser_focus_handle = cx.focus_handle();
+        let find_input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in page"));
         let address_subscription =
             cx.subscribe(&address, |this: &mut Lumen, _, event, cx| match event {
                 InputEvent::PressEnter { .. } => {
@@ -203,14 +287,21 @@ impl Lumen {
             sidebar_collapsed: false,
             sidebar_width: 240.0,
             sidebar_resizing: false,
+            sidebar_was_narrow: false,
+            sidebar_restore_collapsed: false,
             started_at: Instant::now(),
             first_frame_logged: false,
             address,
+            find_input,
             browser_focus_handle,
             _address_subscription: address_subscription,
+            show_find: false,
             suggestions: Vec::new(),
             selected_suggestion: None,
             recent_searches: history::load_recent_searches(),
+            zoom_levels: load_zooms(),
+            #[cfg(all(target_os = "linux", not(test)))]
+            active_zoom_host: None,
             show_suggestions: false,
             engine: engine::Engine::new(),
             space_modal: None,
@@ -465,10 +556,12 @@ impl Lumen {
     fn is_app_shortcut(key: &str, control: bool, shift: bool) -> bool {
         control
             && ((key == "l" && !shift)
+                || key == "f"
                 || key == "t"
                 || key == "tab"
                 || key == "r"
                 || (key == "w" && !shift)
+                || matches!(key, "=" | "+" | "-" | "0")
                 || (!shift && key.len() == 1 && matches!(key.as_bytes()[0], b'1'..=b'9')))
     }
 
@@ -486,6 +579,9 @@ impl Lumen {
             }
             ("r", false) => self.reload_active(false),
             ("r", true) => self.reload_active(true),
+            ("=", _) | ("+", _) => self.change_zoom(1.0),
+            ("-", false) => self.change_zoom(-1.0),
+            ("0", false) => self.change_zoom(0.0),
             _ => return false,
         }
         true
@@ -495,6 +591,54 @@ impl Lumen {
         if let Some(tab_id) = self.active_space().active.as_deref() {
             self.engine.reload(tab_id, ignore_cache);
         }
+    }
+
+    fn find_in_page(&self, forward: bool, next: bool, cx: &Context<Self>) {
+        let query = self.find_input.read(cx).value().to_string();
+        if !query.is_empty() {
+            self.engine
+                .find(self.active_tab_id(), &query, forward, next);
+        }
+    }
+
+    fn change_zoom(&mut self, delta: f64) {
+        let tab_id_and_host = self
+            .active_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == self.active_tab_id());
+        let Some((tab_id, host)) = tab_id_and_host.map(|tab| (tab.id.clone(), url_host(&tab.url)))
+        else {
+            return;
+        };
+        if host.is_empty() {
+            return;
+        }
+        let level = if delta == 0.0 {
+            0.0
+        } else {
+            (self.zoom_levels.get(&host).copied().unwrap_or(0.0) + delta).clamp(-5.0, 5.0)
+        };
+        self.zoom_levels.insert(host, level);
+        save_zooms(&self.zoom_levels);
+        self.engine.set_zoom_level(&tab_id, level);
+    }
+
+    fn effective_sidebar_width(&self) -> f32 {
+        if self.sidebar_collapsed {
+            SIDEBAR_COLLAPSED_WIDTH
+        } else {
+            self.sidebar_width
+        }
+    }
+
+    fn update_sidebar_threshold(&mut self, width: f32) {
+        apply_sidebar_threshold(
+            width,
+            &mut self.sidebar_collapsed,
+            &mut self.sidebar_was_narrow,
+            &mut self.sidebar_restore_collapsed,
+        );
     }
 
     fn active_tab_id(&self) -> &str {
@@ -771,6 +915,7 @@ fn submit_address(space: &mut Space, input: &str) -> Option<(String, String)> {
 
 impl Render for Lumen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.update_sidebar_threshold(f32::from(_window.bounds().size.width));
         if !self.first_frame_logged {
             self.first_frame_logged = true;
             eprintln!(
@@ -870,11 +1015,7 @@ impl Render for Lumen {
 
         #[cfg(all(target_os = "linux", not(test)))]
         let scale = _window.scale_factor();
-        let sidebar_width_f32 = if self.sidebar_collapsed {
-            64.0
-        } else {
-            self.sidebar_width
-        };
+        let sidebar_width_f32 = self.effective_sidebar_width();
         #[cfg(all(target_os = "linux", not(test)))]
         let bounds = _window.bounds();
         #[cfg(all(target_os = "linux", not(test)))]
@@ -902,6 +1043,14 @@ impl Render for Lumen {
                 content_h,
             ) {
                 eprintln!("Lumen CEF browser creation failed: {error}");
+            }
+            let host = url_host(&active_tab_url);
+            if !host.is_empty() && self.active_zoom_host.as_deref() != Some(host.as_str()) {
+                let level = self.zoom_levels.get(&host).copied().unwrap_or(0.0);
+                self.engine.set_zoom_level(&active_tab_id_string, level);
+                self.active_zoom_host = Some(host);
+            } else if host.is_empty() {
+                self.active_zoom_host = None;
             }
             self.engine.set_visible(&active_tab_id_string);
         }
@@ -1252,6 +1401,8 @@ impl Render for Lumen {
                                     if let Some(render_image) = maybe_image {
                                         let tab_id_down = active_tab_id_string.clone();
                                         let tab_id_up = active_tab_id_string.clone();
+                                        let tab_id_right_down = active_tab_id_string.clone();
+                                        let tab_id_right_up = active_tab_id_string.clone();
                                         let tab_id_move = active_tab_id_string.clone();
                                         let tab_id_scroll = active_tab_id_string.clone();
 
@@ -1271,11 +1422,7 @@ impl Render for Lumen {
                                                           cx| {
                                                         this.focus_browser(window, cx);
                                                         let scale = window.scale_factor();
-                                                        let sidebar_num = if this.sidebar_collapsed {
-                                                            64.0
-                                                        } else {
-                                                            this.sidebar_width
-                                                        };
+                                                        let sidebar_num = this.effective_sidebar_width();
                                                         let origin_x = sidebar_num + CONTENT_BEZEL_X;
                                                         let x = ((f32::from(event.position.x)
                                                             - origin_x)
@@ -1305,11 +1452,7 @@ impl Render for Lumen {
                                                           window,
                                                           _cx| {
                                                         let scale = window.scale_factor();
-                                                        let sidebar_num = if this.sidebar_collapsed {
-                                                            64.0
-                                                        } else {
-                                                            this.sidebar_width
-                                                        };
+                                                        let sidebar_num = this.effective_sidebar_width();
                                                         let origin_x = sidebar_num + CONTENT_BEZEL_X;
                                                         let x = ((f32::from(event.position.x)
                                                             - origin_x)
@@ -1331,17 +1474,39 @@ impl Render for Lumen {
                                                     },
                                                 ),
                                             )
+                                            .on_mouse_down(
+                                                gpui_kit::MouseButton::Right,
+                                                cx.listener(move |this, event: &gpui_kit::MouseDownEvent, window, _cx| {
+                                                    let scale = window.scale_factor();
+                                                    let x = ((f32::from(event.position.x) - this.effective_sidebar_width() - CONTENT_BEZEL_X).max(0.0) * scale) as i32;
+                                                    let y = ((f32::from(event.position.y) - 52.0).max(0.0) * scale) as i32;
+                                                    this.engine.send_mouse_click(&tab_id_right_down, x, y, cef::MouseButtonType::RIGHT, false, event.click_count as i32);
+                                                }),
+                                            )
+                                            .on_mouse_up(
+                                                gpui_kit::MouseButton::Right,
+                                                cx.listener(move |this, event: &gpui_kit::MouseUpEvent, window, _cx| {
+                                                    let scale = window.scale_factor();
+                                                    let x = ((f32::from(event.position.x) - this.effective_sidebar_width() - CONTENT_BEZEL_X).max(0.0) * scale) as i32;
+                                                    let y = ((f32::from(event.position.y) - 52.0).max(0.0) * scale) as i32;
+                                                    this.engine.send_mouse_click(&tab_id_right_up, x, y, cef::MouseButtonType::RIGHT, true, event.click_count as i32);
+                                                }),
+                                            )
+                                            .on_mouse_down(
+                                                gpui_kit::MouseButton::Navigate(gpui_kit::NavigationDirection::Back),
+                                                cx.listener(|this, _, _, _| this.engine.go_back(this.active_tab_id())),
+                                            )
+                                            .on_mouse_down(
+                                                gpui_kit::MouseButton::Navigate(gpui_kit::NavigationDirection::Forward),
+                                                cx.listener(|this, _, _, _| this.engine.go_forward(this.active_tab_id())),
+                                            )
                                             .on_mouse_move(cx.listener(
                                                 move |this,
                                                       event: &gpui_kit::MouseMoveEvent,
                                                       window,
                                                       _cx| {
                                                     let scale = window.scale_factor();
-                                                    let sidebar_num = if this.sidebar_collapsed {
-                                                        64.0
-                                                    } else {
-                                                        this.sidebar_width
-                                                    };
+                                                    let sidebar_num = this.effective_sidebar_width();
                                                     let origin_x = sidebar_num + CONTENT_BEZEL_X;
                                                     let x = ((f32::from(event.position.x) - origin_x)
                                                         .max(0.0)
@@ -1356,11 +1521,7 @@ impl Render for Lumen {
                                             .on_scroll(cx.listener(
                                                 move |this, event: &gpui_kit::ScrollEvent, window, _cx| {
                                                     let scale = window.scale_factor();
-                                                    let sidebar_num = if this.sidebar_collapsed {
-                                                        64.0
-                                                    } else {
-                                                        this.sidebar_width
-                                                    };
+                                                    let sidebar_num = this.effective_sidebar_width();
                                                     let origin_x = sidebar_num + CONTENT_BEZEL_X;
                                                     let x = ((f32::from(event.position.x) - origin_x)
                                                         .max(0.0)
@@ -1399,17 +1560,86 @@ impl Render for Lumen {
                     ),
             );
 
+        root = root.when(self.show_find, |root| {
+            root.child(
+                div()
+                    .id("find-in-page")
+                    .absolute()
+                    .top(px(8.0))
+                    .right(px(16.0))
+                    .w(px(300.0))
+                    .h(px(36.0))
+                    .px_3()
+                    .rounded_lg()
+                    .bg(rgb(0x191a1f))
+                    .border_1()
+                    .border_color(rgb(0x282b33))
+                    .child(
+                        Input::new(&self.find_input)
+                            .id("find-input")
+                            .w_full()
+                            .appearance(false),
+                    ),
+            )
+        });
+
         root = root
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.to_lowercase();
+                let modifiers = &event.keystroke.modifiers;
+                let browser_modifier = modifiers.control || modifiers.platform;
+                if this.show_find && matches!(key.as_str(), "enter" | "return") {
+                    this.find_in_page(!modifiers.shift, true, cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return;
+                }
+                if matches!(key.as_str(), "escape" | "esc") {
+                    if this.show_find {
+                        this.engine.stop_finding(this.active_tab_id());
+                        this.show_find = false;
+                        this.focus_browser(window, cx);
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        cx.notify();
+                        return;
+                    }
+                    if this.engine.is_loading(this.active_tab_id()) {
+                        this.engine.stop_load(this.active_tab_id());
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
+                if browser_modifier && key == "f" && !modifiers.shift {
+                    this.show_find = true;
+                    this.browser_focused = false;
+                    this.engine.set_focus(this.active_tab_id(), false);
+                    this.find_input
+                        .update(cx, |input, cx| input.focus(window, cx));
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
+                if modifiers.alt && matches!(key.as_str(), "left" | "arrowleft") {
+                    this.engine.go_back(this.active_tab_id());
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return;
+                }
+                if modifiers.alt && matches!(key.as_str(), "right" | "arrowright") {
+                    this.engine.go_forward(this.active_tab_id());
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return;
+                }
                 let suggestions_open = this.show_suggestions && !this.suggestions.is_empty();
                 let is_suggestion_arrow = suggestions_open
                     && matches!(key.as_str(), "up" | "down" | "arrowup" | "arrowdown");
                 if event.is_held && !is_suggestion_arrow {
                     return;
                 }
-                let modifiers = &event.keystroke.modifiers;
-                let browser_modifier = modifiers.control || modifiers.platform;
                 if is_suggestion_arrow {
                     this.move_suggestion_selection(matches!(key.as_str(), "down" | "arrowdown"));
                     window.prevent_default();
@@ -1460,6 +1690,8 @@ impl Render for Lumen {
                 let key = event.keystroke.key.to_lowercase();
                 if this.browser_focused
                     && !Self::is_app_shortcut(&key, browser_modifier, modifiers.shift)
+                    && !(modifiers.alt
+                        && matches!(key.as_str(), "left" | "arrowleft" | "right" | "arrowright"))
                 {
                     this.engine.send_key_up(this.active_tab_id(), event);
                     window.prevent_default();
@@ -1822,6 +2054,7 @@ mod tests {
                     cx.notify();
                 }
             });
+        let find_input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in page"));
         let (spaces, active_space) = create_default_space();
         Lumen {
             spaces,
@@ -1829,14 +2062,21 @@ mod tests {
             sidebar_collapsed: false,
             sidebar_width: 240.0,
             sidebar_resizing: false,
+            sidebar_was_narrow: false,
+            sidebar_restore_collapsed: false,
             started_at: Instant::now(),
             first_frame_logged: true,
             address,
+            find_input,
             browser_focus_handle: cx.focus_handle(),
             _address_subscription: address_subscription,
+            show_find: false,
             suggestions: Vec::new(),
             selected_suggestion: None,
             recent_searches: Vec::new(),
+            zoom_levels: std::collections::HashMap::new(),
+            #[cfg(all(target_os = "linux", not(test)))]
+            active_zoom_host: None,
             show_suggestions: false,
             engine: engine::Engine::new(),
             space_modal: None,
@@ -1876,6 +2116,21 @@ mod tests {
         view.read_with(cx, |app, _| assert_eq!(app.active_tab_id(), "tab-1"));
         dispatch_test_key(cx, handle, "ctrl-shift-t");
         view.read_with(cx, |app, _| assert_eq!(app.active_tab_id(), "tab-2"));
+    }
+
+    #[gpui::test]
+    fn find_shortcut_opens_and_escape_closes_find(cx: &mut gpui::TestAppContext) {
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| test_app(window, cx))
+            })
+            .expect("open test window")
+        });
+        dispatch_test_key(cx, handle, "ctrl-f");
+        view.read_with(cx, |app, _| assert!(app.show_find));
+        dispatch_test_key(cx, handle, "escape");
+        view.read_with(cx, |app, _| assert!(!app.show_find));
     }
 
     #[gpui::test]
@@ -2176,6 +2431,38 @@ mod tests {
 
         let mid = 240.0_f32;
         assert_eq!(mid.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH), 240.0);
+    }
+
+    #[test]
+    fn narrow_window_collapses_sidebar_and_threshold_crossing_restores_manual_state() {
+        let mut collapsed = false;
+        let mut was_narrow = false;
+        let mut restore = false;
+        apply_sidebar_threshold(1099.0, &mut collapsed, &mut was_narrow, &mut restore);
+        assert!(collapsed);
+        apply_sidebar_threshold(1050.0, &mut collapsed, &mut was_narrow, &mut restore);
+        assert!(collapsed);
+        collapsed = false; // The user expands the rail while the window remains narrow.
+        apply_sidebar_threshold(1050.0, &mut collapsed, &mut was_narrow, &mut restore);
+        assert!(!collapsed);
+        apply_sidebar_threshold(1100.0, &mut collapsed, &mut was_narrow, &mut restore);
+        assert!(!collapsed);
+        collapsed = true;
+        apply_sidebar_threshold(1099.0, &mut collapsed, &mut was_narrow, &mut restore);
+        apply_sidebar_threshold(1100.0, &mut collapsed, &mut was_narrow, &mut restore);
+        assert!(collapsed);
+    }
+
+    #[test]
+    fn zoom_is_keyed_by_site_host() {
+        assert_eq!(url_host("https://Example.com/path?q=1"), "example.com");
+        assert_eq!(url_host("http://example.com:8080/path"), "example.com");
+        assert_eq!(
+            url_host("https://user:pass@example.com/path"),
+            "example.com"
+        );
+        assert_eq!(url_host("about:blank"), "");
+        assert_eq!(url_host("lumen://welcome"), "");
     }
 
     #[test]
