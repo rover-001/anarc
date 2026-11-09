@@ -30,3 +30,7 @@ Implemented grouped split tabs, favicon rendering, per-tab hover close, and tab 
 ## Session 2026-11-09T14:01:38.311588559+00:00
 
 Completed favicon pipeline instrumentation and explicit root/sidebar wake, split group chevron hover and expanded state, symmetric fixed icon slots for group/member/single rows, and favicon origin URL unit coverage. Offline cargo checks passed; live browser check not run per brief. Wrote briefs/tabfix-report.md.
+
+## Session 2026-11-09T14:06:04.066522303+00:00
+
+Aligned sidebar tab, split, and new-tab rows with shared padding, icon, gap, and vertical-centering metrics. Offline checks passed; no live visual run.

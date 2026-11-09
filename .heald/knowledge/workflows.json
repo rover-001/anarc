@@ -92,5 +92,18 @@
     "symbols": [],
     "guidance": "Completed favicon pipeline instrumentation and explicit root/sidebar wake, split group chevron hover and expanded state, symmetric fixed icon slots for group/member/single rows, and favicon origin URL unit coverage. Offline cargo checks passed; live browser check not run per brief. Wrote briefs/tabfix-report.md.",
     "updated_at": "2026-11-09T14:01:38.318336222+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/sidebar.rs",
+      "src/ui/tab_list.rs",
+      "src/ui/visual.rs"
+    ],
+    "symbols": [],
+    "guidance": "Aligned sidebar tab, split, and new-tab rows with shared padding, icon, gap, and vertical-centering metrics. Offline checks passed; no live visual run.",
+    "updated_at": "2026-11-09T14:06:04.070122383+00:00"
   }
 ]
