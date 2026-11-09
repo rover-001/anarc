@@ -1,0 +1,19 @@
+[
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/history.rs",
+      "src/main.rs",
+      "src/model/space.rs",
+      "src/model/tab.rs",
+      "src/persist.rs",
+      "src/ui/sidebar.rs",
+      "src/ui/space_switcher.rs",
+      "src/ui/tab_list.rs"
+    ],
+    "symbols": [],
+    "guidance": "Implemented UX brief: narrow sidebar behavior, navigation/loading APIs, find in page, per-host zoom, and explicit CEF context menu suppression. Offline tests 19/19 and cargo build pass. Commit blocked because shared .git is read-only; live run failed because X server :0 is unavailable.",
+    "updated_at": "2026-11-09T12:01:36.984663242+00:00"
+  }
+]
