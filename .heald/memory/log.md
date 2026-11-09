@@ -34,3 +34,7 @@ Completed favicon pipeline instrumentation and explicit root/sidebar wake, split
 ## Session 2026-11-09T14:06:04.066522303+00:00
 
 Aligned sidebar tab, split, and new-tab rows with shared padding, icon, gap, and vertical-centering metrics. Offline checks passed; no live visual run.
+
+## Session 2026-11-09T14:10:40.539612811+00:00
+
+Resolved merge conflicts in src/main.rs and src/ui/sidebar.rs, preserving aligned sidebar row metrics and applying SpaceTheme colors. Offline cargo checks, rustfmt, diff check, and conflict marker scan passed. Wrote merge4 report; no commit.

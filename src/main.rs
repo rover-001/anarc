@@ -1464,7 +1464,21 @@ impl Render for Lumen {
         let active_space = self.active_space().clone();
         let active_tab_id = active_space.active.clone();
         let selected_name = active_space.name.clone();
-        let selected_color = active_space.color;
+        let selected_color = self
+            .space_modal
+            .as_ref()
+            .map_or(active_space.color, |modal| {
+                let previews_active = match &modal.mode {
+                    SpaceModalMode::Create => true,
+                    SpaceModalMode::Edit { space_id } => space_id == &active_space_id,
+                };
+                if previews_active {
+                    modal.selected_color
+                } else {
+                    active_space.color
+                }
+            });
+        let theme = visual::space_theme(selected_color);
         let tabs: Vec<(
             String,
             String,
@@ -1537,6 +1551,7 @@ impl Render for Lumen {
                     &active_tab_url,
                     active_width.max(1),
                     content_h,
+                    0xff000000 | theme.surface,
                 ) {
                     eprintln!("Lumen CEF browser creation failed: {error}");
                 }
@@ -1553,6 +1568,7 @@ impl Render for Lumen {
                             &tab.url,
                             left_width_px.max(1),
                             content_h,
+                            0xff000000 | theme.surface,
                         ) {
                             eprintln!("Lumen split browser creation failed: {error}");
                         }
@@ -1569,6 +1585,7 @@ impl Render for Lumen {
                             &tab.url,
                             right_width_px.max(1),
                             content_h,
+                            0xff000000 | theme.surface,
                         ) {
                             eprintln!("Lumen split browser creation failed: {error}");
                         }
@@ -1637,7 +1654,7 @@ impl Render for Lumen {
             .px_3()
             .py_3()
             .gap_2()
-            .bg(rgb(visual::tint_rgb(0x191a1f, selected_color, 0.04)));
+            .bg(rgb(theme.base));
 
         if !self.sidebar_collapsed {
             sidebar_content = sidebar_content
@@ -1650,7 +1667,7 @@ impl Render for Lumen {
                         .right(px(-2.0 * UI_SCALE))
                         .w(px(6.0 * UI_SCALE))
                         .cursor_col_resize()
-                        .hover(|s| s.bg(rgb(0x3e424d)))
+                        .hover(|s| s.bg(rgb(theme.surface_hover)))
                         .on_mouse_down(
                             gpui_kit::MouseButton::Left,
                             cx.listener(|this, _, _, cx| {
@@ -1664,7 +1681,7 @@ impl Render for Lumen {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(0xf1f2f5))
+                            .text_color(rgb(theme.text))
                             .child(selected_name),
                     ),
                 );
@@ -1704,18 +1721,17 @@ impl Render for Lumen {
                                 .gap(px(visual::SIDEBAR_ROW_GAP))
                                 .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                 .rounded_lg()
-                                .when(active_group, |row| {
-                                    row.bg(rgb(visual::tint_rgb(0x191a1f, selected_color, 0.18)))
-                                })
+                                .when(active_group, |row| row.bg(rgb(theme.surface)))
                                 .when(!active_group, |row| {
-                                    row.bg(rgb(0x30343c)).hover(|style| style.bg(rgb(0x2a2d34)))
+                                    row.bg(rgb(theme.surface_hover))
+                                        .hover(|style| style.bg(rgb(theme.surface_hover)))
                                 })
                                 .child(tab_list::split_favicon(first.2.clone(), second.2.clone()))
                                 .child(
                                     div()
                                         .flex_1()
                                         .text_sm()
-                                        .text_color(rgb(0xf0f1f4))
+                                        .text_color(rgb(theme.text))
                                         .overflow_hidden()
                                         .whitespace_nowrap()
                                         .text_ellipsis()
@@ -1728,7 +1744,7 @@ impl Render for Lumen {
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .text_color(rgb(0xa6a9b1))
+                                        .text_color(rgb(theme.muted))
                                         .opacity(if expanded { 1.0 } else { 0.0 })
                                         .group_hover(group_key.clone(), |style| style.opacity(1.0))
                                         .child(
@@ -1785,9 +1801,9 @@ impl Render for Lumen {
                                 .group(format!("tab-row-{member_id}"))
                                 .border_l_2()
                                 .border_color(rgb(if selected_member {
-                                    selected_color
+                                    theme.accent
                                 } else {
-                                    0x191a1f
+                                    theme.base
                                 }))
                                 .child(
                                     div()
@@ -1798,22 +1814,16 @@ impl Render for Lumen {
                                         .gap(px(visual::SIDEBAR_ROW_GAP))
                                         .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                         .rounded_lg()
-                                        .when(selected_member, |row| {
-                                            row.bg(rgb(visual::tint_rgb(
-                                                0x191a1f,
-                                                selected_color,
-                                                0.18,
-                                            )))
-                                        })
+                                        .when(selected_member, |row| row.bg(rgb(theme.surface)))
                                         .when(!selected_member, |row| {
-                                            row.hover(|style| style.bg(rgb(0x2a2d34)))
+                                            row.hover(|style| style.bg(rgb(theme.surface_hover)))
                                         })
                                         .child(tab_list::favicon(member.2.clone()))
                                         .child(
                                             div()
                                                 .flex_1()
                                                 .text_sm()
-                                                .text_color(rgb(0xa6a9b1))
+                                                .text_color(rgb(theme.muted))
                                                 .overflow_hidden()
                                                 .whitespace_nowrap()
                                                 .text_ellipsis()
@@ -1830,7 +1840,7 @@ impl Render for Lumen {
                                                 .group_hover(format!("tab-row-{member_id}"), |s| {
                                                     s.opacity(1.0)
                                                 })
-                                                .text_color(rgb(0xa6a9b1))
+                                                .text_color(rgb(theme.muted))
                                                 .child(
                                                     Icon::new(IconName::X)
                                                         .size(px(14.0 * UI_SCALE)),
@@ -1897,7 +1907,7 @@ impl Render for Lumen {
                         .h(px(visual::TAB_ROW_HEIGHT))
                         .cursor_pointer()
                         .border_l_2()
-                        .border_color(rgb(if selected { selected_color } else { 0x191a1f }))
+                        .border_color(rgb(if selected { theme.accent } else { theme.base }))
                         .group(row_group.clone())
                         .child(
                             div()
@@ -1908,18 +1918,21 @@ impl Render for Lumen {
                                 .gap(px(visual::SIDEBAR_ROW_GAP))
                                 .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                 .rounded_lg()
-                                .when(selected, |row| {
-                                    row.bg(rgb(visual::tint_rgb(0x191a1f, selected_color, 0.18)))
-                                })
+                                .when(selected, |row| row.bg(rgb(theme.surface)))
                                 .when(!selected, |row| {
-                                    row.bg(rgb(0x202227)).hover(|style| style.bg(rgb(0x2a2d34)))
+                                    row.bg(rgb(theme.surface))
+                                        .hover(|style| style.bg(rgb(theme.surface_hover)))
                                 })
                                 .child(tab_list::favicon(favicon.clone()))
                                 .child(
                                     div()
                                         .flex_1()
                                         .text_sm()
-                                        .text_color(rgb(if selected { 0xf0f1f4 } else { 0xa6a9b1 }))
+                                        .text_color(rgb(if selected {
+                                            theme.text
+                                        } else {
+                                            theme.muted
+                                        }))
                                         .overflow_hidden()
                                         .whitespace_nowrap()
                                         .text_ellipsis()
@@ -1934,7 +1947,7 @@ impl Render for Lumen {
                                         .justify_center()
                                         .opacity(0.0)
                                         .group_hover(row_group.clone(), |s| s.opacity(1.0))
-                                        .text_color(rgb(0xa6a9b1))
+                                        .text_color(rgb(theme.muted))
                                         .child(Icon::new(IconName::X).size(px(14.0 * UI_SCALE)))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.close_tab_by_id(&close_id);
@@ -1982,8 +1995,8 @@ impl Render for Lumen {
                     .h(px(visual::TAB_ROW_HEIGHT))
                     .cursor_pointer()
                     .border_l_2()
-                    .border_color(rgb(0x191a1f))
-                    .child(sidebar::new_tab_button())
+                    .border_color(rgb(theme.base))
+                    .child(sidebar::new_tab_button(theme))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.add_tab();
                         this.address.update(cx, |input, cx| {
@@ -2003,8 +2016,11 @@ impl Render for Lumen {
             for space in &self.spaces {
                 let id = space.id.clone();
                 let is_active = space.id == active_space_id;
-                let icon_btn =
-                    space_switcher::space_icon_button(&space.icon, is_active, space.color);
+                let icon_btn = space_switcher::space_icon_button(
+                    &space.icon,
+                    is_active,
+                    visual::space_theme(space.color),
+                );
                 let id_right = id.clone();
                 spaces_dock = spaces_dock.child(
                     div()
@@ -2032,7 +2048,7 @@ impl Render for Lumen {
                 div()
                     .id("add-space-btn")
                     .cursor_pointer()
-                    .child(space_switcher::add_space_button())
+                    .child(space_switcher::add_space_button(theme))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_create_space_modal(window, cx);
                         cx.notify();
@@ -2044,20 +2060,20 @@ impl Render for Lumen {
                 .w_full()
                 .pt_2()
                 .border_t_1()
-                .border_color(rgb(0x23252b))
+                .border_color(rgb(theme.border))
                 .flex()
                 .items_center()
                 .justify_between()
                 .child(
                     div()
                         .id("settings-btn")
-                        .child(space_switcher::settings_button()),
+                        .child(space_switcher::settings_button(theme)),
                 )
                 .child(spaces_dock)
                 .child(
                     div()
                         .id("downloads-btn")
-                        .child(space_switcher::downloads_button()),
+                        .child(space_switcher::downloads_button(theme)),
                 );
 
             sidebar_content = sidebar_content.child(bottom_bar);
@@ -2070,8 +2086,8 @@ impl Render for Lumen {
                         .px_3()
                         .py_2()
                         .rounded_md()
-                        .text_color(rgb(0x858994))
-                        .hover(|style| style.bg(rgb(0x282b31)))
+                        .text_color(rgb(theme.muted))
+                        .hover(|style| style.bg(rgb(theme.surface_hover)))
                         .cursor_pointer()
                         .child("›")
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -2089,7 +2105,7 @@ impl Render for Lumen {
                         .child(space_switcher::space_icon_button(
                             &active_space_icon,
                             true,
-                            self.active_space().color,
+                            theme,
                         )),
                 );
         }
@@ -2098,8 +2114,8 @@ impl Render for Lumen {
             .relative()
             .flex()
             .size_full()
-            .bg(rgb(0x111216))
-            .text_color(rgb(0xe6e7eb))
+            .bg(rgb(theme.base))
+            .text_color(rgb(theme.text))
             .on_mouse_move(
                 cx.listener(|this, event: &gpui_kit::MouseMoveEvent, window, cx| {
                     if this.split_resizing {
@@ -2153,14 +2169,14 @@ impl Render for Lumen {
                                     .h(px(ADDRESS_BAR_HEIGHT))
                                     .px_3()
                                     .rounded_lg()
-                                    .bg(rgb(0x191a1f))
+                                    .bg(rgb(theme.surface))
                                     .border_1()
                                     .border_color(rgb(if self.browser_focused {
-                                        0x282b33
+                                        theme.border
                                     } else {
                                         selected_color
                                     }))
-                                    .hover(|s| s.border_color(rgb(0x3e424d)))
+                                    .hover(move |s| s.border_color(rgb(theme.border_hover)))
                                     .flex()
                                     .items_center()
                                     .gap_2()
@@ -2202,9 +2218,9 @@ impl Render for Lumen {
                                 .top(px(TOPBAR_HEIGHT + 4.0 * UI_SCALE))
                                 .left(px(16.0 * UI_SCALE))
                                 .w(px(560.0 * UI_SCALE))
-                                .bg(rgb(0x191a1f))
+                                .bg(rgb(theme.surface))
                                 .border_1()
-                                .border_color(rgb(0x2f323a))
+                                .border_color(rgb(theme.border))
                                 .rounded_xl()
                                 .p_1p5()
                                 .flex()
@@ -2225,9 +2241,9 @@ impl Render for Lumen {
                                         .items_center()
                                         .gap_3()
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(rgb(0x262830)))
+                                        .hover(|s| s.bg(rgb(theme.surface_hover)))
                                         .when(self.selected_suggestion == Some(idx), |row| {
-                                            row.bg(rgb(0x262830))
+                                            row.bg(rgb(theme.surface_hover))
                                         })
                                         .child(
                                             div()
@@ -2243,7 +2259,10 @@ impl Render for Lumen {
                                                 }),
                                         )
                                         .child(
-                                            div().text_sm().text_color(rgb(0xe6e7eb)).child(title),
+                                            div()
+                                                .text_sm()
+                                                .text_color(rgb(theme.text))
+                                                .child(title),
                                         )
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.navigate_to(&target, window, cx);
@@ -2269,6 +2288,7 @@ impl Render for Lumen {
                         let left_image = self.engine.get_image(&left_tab_id);
                         let left_cursor = self.engine.get_cursor(&left_tab_id);
                         self.web_viewport.update(cx, |viewport, cx| {
+                            viewport.set_theme(theme);
                             viewport.set_frame(
                                 left_tab_id.clone(),
                                 viewport_sidebar,
@@ -2285,6 +2305,7 @@ impl Render for Lumen {
                             let right_image = self.engine.get_image(&right_tab_id);
                             let right_cursor = self.engine.get_cursor(&right_tab_id);
                             self.second_web_viewport.update(cx, |viewport, cx| {
+                                viewport.set_theme(theme);
                                 viewport.set_frame(
                                     right_tab_id.clone(),
                                     viewport_sidebar,
@@ -2303,7 +2324,7 @@ impl Render for Lumen {
                             .mx(px(CONTENT_BEZEL_X))
                             .mb(px(CONTENT_BEZEL_BOTTOM))
                             .rounded(px(CARD_RADIUS))
-                            .bg(rgb(0x15161a))
+                            .bg(rgb(theme.surface))
                             .overflow_hidden()
                             .child(if split_pair.is_some() {
                                 div()
@@ -2321,8 +2342,8 @@ impl Render for Lumen {
                                             .id("split-divider")
                                             .w(px(DIVIDER_WIDTH))
                                             .h_full()
-                                            .bg(rgb(0x15161a))
-                                            .hover(|style| style.bg(rgb(0x3e424d)))
+                                            .bg(rgb(theme.surface))
+                                            .hover(|style| style.bg(rgb(theme.surface_hover)))
                                             .cursor_col_resize()
                                             .on_mouse_down(
                                                 gpui_kit::MouseButton::Left,
@@ -2363,9 +2384,9 @@ impl Render for Lumen {
                     .h(px(36.0 * UI_SCALE))
                     .px_3()
                     .rounded_lg()
-                    .bg(rgb(0x191a1f))
+                    .bg(rgb(theme.surface))
                     .border_1()
-                    .border_color(rgb(0x282b33))
+                    .border_color(rgb(theme.border))
                     .child(
                         Input::new(&self.find_input)
                             .id("find-input")
@@ -2392,8 +2413,10 @@ impl Render for Lumen {
                         .justify_between()
                         .gap_3()
                         .cursor_pointer()
-                        .when(self.selected_command == index, |row| row.bg(rgb(0x262830)))
-                        .hover(|style| style.bg(rgb(0x262830)))
+                        .when(self.selected_command == index, |row| {
+                            row.bg(rgb(theme.surface_hover))
+                        })
+                        .hover(|style| style.bg(rgb(theme.surface_hover)))
                         .child(
                             div()
                                 .flex()
@@ -2402,13 +2425,13 @@ impl Render for Lumen {
                                 .child(
                                     div()
                                         .text_sm()
-                                        .text_color(rgb(0xe6e7eb))
+                                        .text_color(rgb(theme.text))
                                         .child(item.title.clone()),
                                 )
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(rgb(0x858994))
+                                        .text_color(rgb(theme.muted))
                                         .child(item.detail.clone()),
                                 ),
                         )
@@ -2423,16 +2446,16 @@ impl Render for Lumen {
                 .max_h(px(520.0 * UI_SCALE))
                 .overflow_hidden()
                 .rounded_xl()
-                .bg(rgb(0x191a1f))
+                .bg(rgb(theme.surface))
                 .border_1()
-                .border_color(rgb(0x282b33))
+                .border_color(rgb(theme.border))
                 .shadow_lg()
                 .child(
                     div()
                         .px_4()
                         .py_3()
                         .border_b_1()
-                        .border_color(rgb(0x282b33))
+                        .border_color(rgb(theme.border))
                         .child(
                             Input::new(&self.command_input)
                                 .id("command-palette-input")
@@ -2664,9 +2687,9 @@ impl Render for Lumen {
                     .bottom(px(48.0 * UI_SCALE))
                     .left(px(8.0 * UI_SCALE))
                     .w(px(224.0 * UI_SCALE))
-                    .bg(rgb(0x1e2026))
+                    .bg(rgb(theme.surface))
                     .border_1()
-                    .border_color(rgb(0x32353e))
+                    .border_color(rgb(theme.border))
                     .rounded_xl()
                     .p_2()
                     .flex()
@@ -2678,7 +2701,7 @@ impl Render for Lumen {
                             .py_1()
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(0x7e828d))
+                            .text_color(rgb(theme.muted))
                             .flex()
                             .items_center()
                             .gap_2()
@@ -2692,8 +2715,8 @@ impl Render for Lumen {
                             .py_2()
                             .rounded_md()
                             .text_sm()
-                            .text_color(rgb(0xe6e7eb))
-                            .hover(|style| style.bg(rgb(0x282b33)))
+                            .text_color(rgb(theme.text))
+                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -2766,9 +2789,9 @@ impl Render for Lumen {
                 .w(px(menu.width))
                 .max_h(px(menu.height))
                 .overflow_y_scroll()
-                .bg(rgb(0x1e2026))
+                .bg(rgb(theme.surface))
                 .border_1()
-                .border_color(rgb(0x32353e))
+                .border_color(rgb(theme.border))
                 .rounded_xl()
                 .p_2()
                 .flex()
@@ -2786,7 +2809,7 @@ impl Render for Lumen {
                         .py_1()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(0x7e828d))
+                        .text_color(rgb(theme.muted))
                         .child("Split with…"),
                 );
                 for (id, title, favicon) in &tabs {
@@ -2801,8 +2824,8 @@ impl Render for Lumen {
                             .py_2()
                             .rounded_md()
                             .text_sm()
-                            .text_color(rgb(0xe6e7eb))
-                            .hover(|style| style.bg(rgb(0x282b33)))
+                            .text_color(rgb(theme.text))
+                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -2830,8 +2853,8 @@ impl Render for Lumen {
                         .py_2()
                         .rounded_md()
                         .text_sm()
-                        .text_color(rgb(0xe6e7eb))
-                        .hover(|style| style.bg(rgb(0x282b33)))
+                        .text_color(rgb(theme.text))
+                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -2853,8 +2876,8 @@ impl Render for Lumen {
                             .py_2()
                             .rounded_md()
                             .text_sm()
-                            .text_color(rgb(0xe6e7eb))
-                            .hover(|style| style.bg(rgb(0x282b33)))
+                            .text_color(rgb(theme.text))
+                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -2876,8 +2899,8 @@ impl Render for Lumen {
                         .py_2()
                         .rounded_md()
                         .text_sm()
-                        .text_color(rgb(0xe6e7eb))
-                        .hover(|style| style.bg(rgb(0x282b33)))
+                        .text_color(rgb(theme.text))
+                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -2898,8 +2921,8 @@ impl Render for Lumen {
                         .py_2()
                         .rounded_md()
                         .text_sm()
-                        .text_color(rgb(0xe6e7eb))
-                        .hover(|style| style.bg(rgb(0x282b33)))
+                        .text_color(rgb(theme.text))
+                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -2919,8 +2942,8 @@ impl Render for Lumen {
                         .py_2()
                         .rounded_md()
                         .text_sm()
-                        .text_color(rgb(0xe6e7eb))
-                        .hover(|style| style.bg(rgb(0x282b33)))
+                        .text_color(rgb(theme.text))
+                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -2943,8 +2966,8 @@ impl Render for Lumen {
                         .py_2()
                         .rounded_md()
                         .text_sm()
-                        .text_color(rgb(0xe6e7eb))
-                        .hover(|style| style.bg(rgb(0x282b33)))
+                        .text_color(rgb(theme.text))
+                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -2972,8 +2995,8 @@ impl Render for Lumen {
                         .py_2()
                         .rounded_md()
                         .text_sm()
-                        .text_color(rgb(0xe6e7eb))
-                        .hover(|style| style.bg(rgb(0x282b33)))
+                        .text_color(rgb(theme.text))
+                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -3002,6 +3025,7 @@ impl Render for Lumen {
             let action_label = if is_edit { "Save" } else { "Create" };
             let current_selected_icon = modal.selected_icon.clone();
             let current_selected_color = modal.selected_color;
+            let modal_theme = visual::space_theme(current_selected_color);
 
             let popover = div()
                 .id("space-popover-card")
@@ -3010,9 +3034,9 @@ impl Render for Lumen {
                 .bottom(px(52.0 * UI_SCALE))
                 .left(px(8.0 * UI_SCALE))
                 .w(px(224.0 * UI_SCALE))
-                .bg(rgb(0x191a1f))
+                .bg(rgb(modal_theme.surface))
                 .border_1()
-                .border_color(rgb(0x2f323a))
+                .border_color(rgb(modal_theme.border))
                 .rounded_xl()
                 .p_3()
                 .flex()
@@ -3022,7 +3046,7 @@ impl Render for Lumen {
                     div()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(0xf1f2f5))
+                        .text_color(rgb(modal_theme.text))
                         .child(title),
                 )
                 .child(
@@ -3034,7 +3058,7 @@ impl Render for Lumen {
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(0x9fa3ae))
+                                .text_color(rgb(modal_theme.muted))
                                 .child("Name"),
                         )
                         .child(
@@ -3045,8 +3069,8 @@ impl Render for Lumen {
                                 .py_1()
                                 .rounded_md()
                                 .border_1()
-                                .border_color(rgb(0x2f323a))
-                                .bg(rgb(0x15161a))
+                                .border_color(rgb(modal_theme.border))
+                                .bg(rgb(modal_theme.surface))
                                 .cursor_text()
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     if let Some(modal) = &this.space_modal {
@@ -3073,7 +3097,7 @@ impl Render for Lumen {
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(0x9fa3ae))
+                                .text_color(rgb(modal_theme.muted))
                                 .child("Icon"),
                         )
                         .child({
@@ -3083,9 +3107,9 @@ impl Render for Lumen {
                                 .overflow_y_scroll()
                                 .p_1()
                                 .rounded_md()
-                                .bg(rgb(0x15161a))
+                                .bg(rgb(modal_theme.surface))
                                 .border_1()
-                                .border_color(rgb(0x282b33))
+                                .border_color(rgb(modal_theme.border))
                                 .flex()
                                 .flex_wrap()
                                 .gap_1();
@@ -3100,19 +3124,26 @@ impl Render for Lumen {
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .bg(rgb(if is_selected { 0x333742 } else { 0x1e2026 }))
+                                        .bg(rgb(if is_selected {
+                                            modal_theme.surface_hover
+                                        } else {
+                                            modal_theme.surface
+                                        }))
                                         .border_1()
                                         .border_color(rgb(if is_selected {
-                                            0x9aa6ff
+                                            modal_theme.accent
                                         } else {
-                                            0x282b33
+                                            modal_theme.border
                                         }))
                                         .text_color(rgb(if is_selected {
                                             0xffffff
                                         } else {
                                             0x8b8f9a
                                         }))
-                                        .hover(|s| s.bg(rgb(0x3a3e4a)).text_color(rgb(0xffffff)))
+                                        .hover(|s| {
+                                            s.bg(rgb(modal_theme.surface_hover))
+                                                .text_color(rgb(modal_theme.text))
+                                        })
                                         .cursor_pointer()
                                         .child(space_switcher::render_space_icon(icon))
                                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -3135,7 +3166,7 @@ impl Render for Lumen {
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(0x9fa3ae))
+                                .text_color(rgb(modal_theme.muted))
                                 .child("Color"),
                         )
                         .child({
@@ -3152,7 +3183,7 @@ impl Render for Lumen {
                                         .border_color(rgb(if is_selected {
                                             0xffffff
                                         } else {
-                                            0x191a1f
+                                            modal_theme.surface
                                         }))
                                         .cursor_pointer()
                                         .hover(|s| s.border_color(rgb(0xffffff)))
@@ -3182,7 +3213,10 @@ impl Render for Lumen {
                                 .rounded_md()
                                 .text_xs()
                                 .text_color(rgb(0xa1a4af))
-                                .hover(|s| s.bg(rgb(0x282b33)).text_color(rgb(0xffffff)))
+                                .hover(move |s| {
+                                    s.bg(rgb(modal_theme.surface_hover))
+                                        .text_color(rgb(modal_theme.text))
+                                })
                                 .cursor_pointer()
                                 .child("Cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -3196,10 +3230,10 @@ impl Render for Lumen {
                                 .px_3()
                                 .py_1()
                                 .rounded_md()
-                                .bg(rgb(0x9aa6ff))
+                                .bg(rgb(modal_theme.accent))
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(0x111216))
+                                .text_color(rgb(modal_theme.base))
                                 .hover(|s| s.bg(rgb(0xb4bcff)))
                                 .cursor_pointer()
                                 .child(action_label)

@@ -105,5 +105,20 @@
     "symbols": [],
     "guidance": "Aligned sidebar tab, split, and new-tab rows with shared padding, icon, gap, and vertical-centering metrics. Offline checks passed; no live visual run.",
     "updated_at": "2026-11-09T14:06:04.070122383+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/sidebar.rs",
+      "src/ui/space_switcher.rs",
+      "src/ui/tab_list.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Resolved merge conflicts in src/main.rs and src/ui/sidebar.rs, preserving aligned sidebar row metrics and applying SpaceTheme colors. Offline cargo checks, rustfmt, diff check, and conflict marker scan passed. Wrote merge4 report; no commit.",
+    "updated_at": "2026-11-09T14:10:40.545326727+00:00"
   }
 ]
