@@ -1,9 +1,10 @@
 //! Optional once-per-second browser and UI performance counters.
 
 use std::{
+    collections::HashMap,
     fs,
     sync::{
-        OnceLock,
+        Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     thread,
@@ -16,6 +17,7 @@ static OSR_PAINTS: AtomicU64 = AtomicU64::new(0);
 static UI_RENDERS: AtomicU64 = AtomicU64::new(0);
 static FRAME_COPY_NANOS: AtomicU64 = AtomicU64::new(0);
 static FRAME_COPIES: AtomicU64 = AtomicU64::new(0);
+static BLOCKED_BY_TAB: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
 
 fn enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("LUMEN_STATS").is_some_and(|value| value == "1"))
@@ -31,13 +33,18 @@ fn start_reporter() {
                 let renders = UI_RENDERS.swap(0, Ordering::Relaxed);
                 let copy_nanos = FRAME_COPY_NANOS.swap(0, Ordering::Relaxed);
                 let copies = FRAME_COPIES.swap(0, Ordering::Relaxed);
+                let blocked = BLOCKED_BY_TAB
+                    .get_or_init(|| Mutex::new(HashMap::new()))
+                    .lock()
+                    .map(|counts| counts.iter().map(|(tab, count)| format!("{tab}:{count}")).collect::<Vec<_>>().join(","))
+                    .unwrap_or_default();
                 let avg_copy_ms = if copies == 0 {
                     0.0
                 } else {
                     copy_nanos as f64 / copies as f64 / 1_000_000.0
                 };
                 eprintln!(
-                    "Lumen stats: OSR paints/s={paints} root UI renders/s={renders} avg frame-copy={avg_copy_ms:.3} ms RSS={}",
+                    "Lumen stats: OSR paints/s={paints} root UI renders/s={renders} avg frame-copy={avg_copy_ms:.3} ms blocked-by-tab=[{blocked}] RSS={}",
                     process_rss()
                 );
             })
@@ -45,6 +52,17 @@ fn start_reporter() {
             eprintln!("Lumen stats reporter failed to start: {error}");
         }
     });
+}
+
+pub fn record_blocked_request(tab_id: &str) {
+    if !enabled() {
+        return;
+    }
+    let mut counts = BLOCKED_BY_TAB
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    *counts.entry(tab_id.to_owned()).or_default() += 1;
 }
 
 pub fn frame_copy_started() -> Option<Instant> {
