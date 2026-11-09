@@ -4,6 +4,7 @@ pub const UI_SCALE: f32 = 0.85;
 /// Shared chrome and viewport geometry, in GPUI logical pixels.
 pub const TOPBAR_HEIGHT: f32 = 52.0 * UI_SCALE;
 pub const ADDRESS_BAR_HEIGHT: f32 = 36.0 * UI_SCALE;
+pub const NAV_BUTTON_SIZE: f32 = 28.0 * UI_SCALE;
 pub const TAB_ROW_HEIGHT: f32 = 36.0 * UI_SCALE;
 /// Shared horizontal geometry for tab, split, and new-tab rows.
 pub const SIDEBAR_ROW_PADDING_X: f32 = 12.0;
@@ -29,7 +30,7 @@ pub fn sidebar_row_rect(sidebar_width: f32, row_index: usize) -> SidebarRowRect 
     }
 }
 
-pub const DEFAULT_PAGE_ZOOM_FACTOR: f64 = 0.9;
+pub const DEFAULT_PAGE_ZOOM_FACTOR: f64 = 0.8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpaceTheme {
@@ -113,8 +114,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_zoom_is_ninety_percent() {
-        assert!((1.2_f64.powf(default_zoom_level()) - 0.9).abs() < 1e-12);
+    fn default_zoom_is_eighty_percent() {
+        assert!((1.2_f64.powf(default_zoom_level()) - 0.8).abs() < 1e-12);
     }
 
     #[test]
@@ -176,6 +177,11 @@ mod tests {
     #[test]
     fn viewport_origin_matches_scaled_topbar_height() {
         assert_eq!(TOPBAR_HEIGHT, 52.0 * UI_SCALE);
+    }
+
+    #[test]
+    fn navigation_button_metrics_scale_with_ui() {
+        assert_eq!(NAV_BUTTON_SIZE, 28.0 * UI_SCALE);
     }
 
     #[test]
