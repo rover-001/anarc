@@ -1,0 +1,20 @@
+[
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/history.rs",
+      "src/lifecycle.rs",
+      "src/main.rs",
+      "src/model/space.rs",
+      "src/model/tab.rs",
+      "src/persist.rs",
+      "src/ui/sidebar.rs",
+      "src/ui/space_switcher.rs",
+      "src/ui/tab_list.rs"
+    ],
+    "symbols": [],
+    "guidance": "Implemented engine lifecycle, popup routing, screen metrics, downloads, and deny-by-default permissions. Debug tests/build passed before final refinements; parent requested stopping additional builds. Report: briefs/engine-report.md.",
+    "updated_at": "2026-11-09T12:08:41.554544048+00:00"
+  }
+]

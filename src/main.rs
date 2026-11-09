@@ -348,6 +348,9 @@ impl Lumen {
             return;
         }
         if let Some(idx) = self.spaces.iter().position(|s| s.id == space_id) {
+            for tab in &self.spaces[idx].tabs {
+                self.engine.close_browser(&tab.id);
+            }
             self.spaces.remove(idx);
             if self.active_space == space_id {
                 self.active_space = self.spaces[0].id.clone();
@@ -386,6 +389,7 @@ impl Lumen {
             self.add_tab();
             return;
         };
+        self.engine.close_browser(&active_id);
         let closed = space.tabs.remove(index);
         self.recently_closed_tabs.push((space.id.clone(), closed));
         if space.tabs.is_empty() {
@@ -415,6 +419,19 @@ impl Lumen {
             space.active = Some(id);
             self.active_space = space_id;
         }
+        self.save_state();
+    }
+
+    fn open_popup_tab(&mut self, space_id: &str, url: String) {
+        let Some(space) = self.spaces.iter_mut().find(|space| space.id == space_id) else {
+            return;
+        };
+        let id = next_tab_id(space);
+        let mut tab = Tab::new(&id, "New tab", url);
+        tab.state = TabState::Live;
+        space.tabs.push(tab);
+        space.active = Some(id);
+        self.active_space = space_id.to_owned();
         self.save_state();
     }
 
@@ -812,11 +829,6 @@ impl Render for Lumen {
         }
 
         #[cfg(all(target_os = "linux", not(test)))]
-        for retired in self.engine.take_retired_images() {
-            let _ = _window.drop_image(retired);
-        }
-
-        #[cfg(all(target_os = "linux", not(test)))]
         {
             let current_active_id = self.active_space().active.clone().unwrap_or_default();
             if !current_active_id.is_empty() {
@@ -836,6 +848,21 @@ impl Render for Lumen {
                     }
                 }
             }
+        }
+
+        let expired_tabs = self.engine.discard_inactive();
+        if !expired_tabs.is_empty() {
+            for space in &mut self.spaces {
+                for tab in &mut space.tabs {
+                    if expired_tabs.iter().any(|id| id == &tab.id) {
+                        tab.state = TabState::Discarded;
+                    }
+                }
+            }
+        }
+
+        for (space_id, url) in self.engine.take_popups() {
+            self.open_popup_tab(&space_id, url);
         }
 
         let active_space_id = self.active_space.clone();
@@ -904,6 +931,40 @@ impl Render for Lumen {
                 eprintln!("Lumen CEF browser creation failed: {error}");
             }
             self.engine.set_visible(&active_tab_id_string);
+            let display = _window.display(cx);
+            let window_bounds = _window.bounds();
+            let (screen_width, screen_height) = display
+                .map(|display| {
+                    let bounds = display.bounds();
+                    (
+                        f32::from(bounds.size.width) as i32,
+                        f32::from(bounds.size.height) as i32,
+                    )
+                })
+                .unwrap_or((content_w, content_h));
+            self.engine.set_screen_metrics(
+                &active_tab_id_string,
+                screen_width,
+                screen_height,
+                scale,
+                f32::from(window_bounds.origin.x) as i32,
+                f32::from(window_bounds.origin.y) as i32,
+            );
+            if let Some(tab) = self
+                .active_space_mut()
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.id == active_tab_id_string)
+            {
+                tab.state = TabState::Live;
+            }
+        } else {
+            self.engine.hide_all();
+        }
+
+        #[cfg(all(target_os = "linux", not(test)))]
+        for retired in self.engine.take_retired_images() {
+            let _ = _window.drop_image(retired);
         }
 
         let sidebar_width = px(sidebar_width_f32);
