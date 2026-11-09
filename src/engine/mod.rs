@@ -652,6 +652,7 @@ cef::wrap_life_span_handler! {
         close_state: Arc<(Mutex<usize>, Condvar)>,
         shutdown_requested: Arc<std::sync::atomic::AtomicBool>,
         frame_rate: i32,
+        initial_zoom_level: f64,
     }
 
     impl LifeSpanHandler {
@@ -659,6 +660,7 @@ cef::wrap_life_span_handler! {
             let Some(browser) = browser else { return; };
             if let Some(host) = browser.host() {
                 host.set_windowless_frame_rate(self.frame_rate);
+                host.set_zoom_level(self.initial_zoom_level.clamp(-5.0, 5.0));
                 if std::env::var_os("LUMEN_STATS").is_some_and(|value| value == "1") {
                     eprintln!("Lumen CEF OSR frame rate: {} fps", host.windowless_frame_rate());
                 }
@@ -1075,6 +1077,7 @@ impl Engine {
         width: i32,
         height: i32,
         background_color: u32,
+        initial_zoom_level: f64,
     ) -> Result<(), String> {
         if !self.initialized {
             return Ok(());
@@ -1115,6 +1118,7 @@ impl Engine {
                 self.close_state.clone(),
                 self.shutdown_requested.clone(),
                 self.windowless_frame_rate,
+                initial_zoom_level,
             );
             let download_handler = LumenDownloadHandler::new(self.events.clone());
             let permission_handler = LumenPermissionHandler::new();

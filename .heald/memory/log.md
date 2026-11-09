@@ -46,3 +46,7 @@ Resolved merge5 conflicts in engine, main UI, and web viewport; preserved SpaceT
 ## Session 2026-11-09T14:26:47.927505400+00:00
 
 Fixed CEF DIP sizing and input coordinates, 8 ms split resizing, clipped rounded web frames, split member row flow, and persisted sidebar width/collapse preferences with a serde round-trip test. Cargo checks and diff formatting passed; live verification not run per brief.
+
+## Session 2026-11-09T14:44:46.483401763+00:00
+
+Fixed autocomplete overlay stacking, synced the address bar on tab and space changes, reset and focused it for new tabs, made split rendering depend on active pair membership while retaining sidebar grouping, and set new and reset page zoom to 90%. Added GPUI regression and zoom tests. cargo check --offline and cargo check --tests --offline passed; tests and live UI were not run per brief. Wrote briefs/omni-report.md.
