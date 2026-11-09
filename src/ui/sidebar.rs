@@ -1,4 +1,4 @@
-use crate::ui::visual::UI_SCALE;
+use crate::ui::visual::{SpaceTheme, UI_SCALE};
 use gpui_kit::{FontWeight, assets::IconName, component::Icon, div, prelude::*, px, rgb};
 
 #[allow(dead_code)]
@@ -12,7 +12,7 @@ pub fn section_label(label: &str) -> impl IntoElement {
         .child(label.to_owned())
 }
 
-pub fn new_tab_button() -> impl IntoElement {
+pub fn new_tab_button(theme: SpaceTheme) -> impl IntoElement {
     div()
         .id("new-tab")
         .flex()
@@ -23,7 +23,7 @@ pub fn new_tab_button() -> impl IntoElement {
         .rounded_lg()
         .text_sm()
         .text_color(rgb(0xb9bbc2))
-        .hover(|style| style.bg(rgb(0x282b31)))
+        .hover(move |style| style.bg(rgb(theme.surface_hover)))
         .child(
             div()
                 .w(px(14.0 * UI_SCALE))
