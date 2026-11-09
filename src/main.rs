@@ -19,7 +19,8 @@ use gpui_kit::{
     prelude::*,
     px, rgb, size,
 };
-use model::{Space, Tab, TabState};
+use model::{Space, SplitPair, Tab, TabState};
+use ui::split_view::{self, DIVIDER_WIDTH};
 use ui::web_view::WebViewport;
 use ui::{sidebar, space_switcher, tab_list};
 
@@ -109,6 +110,10 @@ pub(crate) struct Lumen {
     show_suggestions: bool,
     pub(crate) engine: engine::Engine,
     web_viewport: gpui_kit::Entity<WebViewport>,
+    second_web_viewport: gpui_kit::Entity<WebViewport>,
+    focused_pane: usize,
+    split_ratio: f32,
+    split_resizing: bool,
     space_modal: Option<SpaceModal>,
     space_context_menu: Option<SpaceContextMenu>,
     recently_closed_tabs: Vec<(String, Tab)>,
@@ -118,8 +123,16 @@ pub(crate) struct Lumen {
 }
 
 impl Lumen {
-    pub(crate) fn is_app_shortcut_for_view(key: &str, browser_modifier: bool, shift: bool) -> bool {
+    pub(crate) fn is_app_shortcut_for_view(
+        key: &str,
+        browser_modifier: bool,
+        shift: bool,
+        alt: bool,
+    ) -> bool {
         Self::is_app_shortcut(key, browser_modifier, shift)
+            || (browser_modifier
+                && alt
+                && matches!(key, "left" | "arrowleft" | "right" | "arrowright"))
     }
 }
 
@@ -277,6 +290,9 @@ impl Lumen {
         let find_input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in page"));
         let root_entity = cx.weak_entity();
         let web_viewport = cx.new(|_| WebViewport::new(root_entity, browser_focus_handle.clone()));
+        let root_entity = cx.weak_entity();
+        let second_web_viewport =
+            cx.new(|_| WebViewport::new(root_entity, browser_focus_handle.clone()));
         let address_subscription =
             cx.subscribe(&address, |this: &mut Lumen, _, event, cx| match event {
                 InputEvent::PressEnter { .. } => {
@@ -306,6 +322,10 @@ impl Lumen {
             find_input,
             browser_focus_handle,
             web_viewport,
+            second_web_viewport,
+            focused_pane: 0,
+            split_ratio: 0.5,
+            split_resizing: false,
             _address_subscription: address_subscription,
             show_find: false,
             suggestions: Vec::new(),
@@ -477,6 +497,7 @@ impl Lumen {
     }
 
     fn close_active_tab(&mut self) {
+        let active_id = self.focused_tab_id().to_owned();
         let Some(space) = self
             .spaces
             .iter_mut()
@@ -484,10 +505,18 @@ impl Lumen {
         else {
             return;
         };
-        let Some(active_id) = space.active.clone() else {
+        if active_id.is_empty() {
             self.add_tab();
             return;
-        };
+        }
+        if space
+            .split
+            .as_ref()
+            .is_some_and(|pair| pair.first == active_id || pair.second == active_id)
+        {
+            space.split = None;
+            self.focused_pane = 0;
+        }
         let Some(index) = space.tabs.iter().position(|tab| tab.id == active_id) else {
             self.add_tab();
             return;
@@ -589,6 +618,7 @@ impl Lumen {
                 || key == "t"
                 || key == "tab"
                 || key == "r"
+                || (shift && matches!(key, "s" | "w"))
                 || (key == "w" && !shift)
                 || matches!(key, "=" | "+" | "-" | "0")
                 || (!shift && key.len() == 1 && matches!(key.as_bytes()[0], b'1'..=b'9')))
@@ -617,16 +647,14 @@ impl Lumen {
     }
 
     fn reload_active(&self, ignore_cache: bool) {
-        if let Some(tab_id) = self.active_space().active.as_deref() {
-            self.engine.reload(tab_id, ignore_cache);
-        }
+        self.engine.reload(self.focused_tab_id(), ignore_cache);
     }
 
     fn find_in_page(&self, forward: bool, next: bool, cx: &Context<Self>) {
         let query = self.find_input.read(cx).value().to_string();
         if !query.is_empty() {
             self.engine
-                .find(self.active_tab_id(), &query, forward, next);
+                .find(self.focused_tab_id(), &query, forward, next);
         }
     }
 
@@ -749,8 +777,70 @@ impl Lumen {
         self.show_suggestions = false;
         self.selected_suggestion = None;
         window.focus(&self.browser_focus_handle, cx);
-        let tab_id = self.active_tab_id().to_string();
+        if let Some(pair) = self.current_split_pair() {
+            self.engine.set_focus(&pair.first, false);
+            self.engine.set_focus(&pair.second, false);
+        }
+        let tab_id = self.focused_tab_id().to_string();
         self.engine.set_focus(&tab_id, true);
+    }
+
+    fn focused_tab_id(&self) -> &str {
+        self.active_space()
+            .split
+            .as_ref()
+            .map(|pair| split_view::tab_for_pane(&pair.first, &pair.second, self.focused_pane))
+            .unwrap_or_else(|| self.active_tab_id())
+    }
+
+    pub(crate) fn set_focused_pane(&mut self, pane_index: usize) {
+        self.focused_pane = pane_index.min(1);
+        if let Some(pair) = self.current_split_pair() {
+            self.active_space_mut().active = Some(
+                split_view::tab_for_pane(&pair.first, &pair.second, self.focused_pane).to_owned(),
+            );
+        }
+    }
+
+    fn current_split_pair(&self) -> Option<SplitPair> {
+        let space = self.active_space();
+        let pair = space.split.as_ref()?;
+        let has_first = space.tabs.iter().any(|tab| tab.id == pair.first);
+        let has_second = space.tabs.iter().any(|tab| tab.id == pair.second);
+        (has_first && has_second && pair.first != pair.second).then(|| pair.clone())
+    }
+
+    fn split_active_with_next(&mut self) {
+        let space = self.active_space_mut();
+        let Some(first) = space.active.clone() else {
+            return;
+        };
+        let Some(first_index) = space.tabs.iter().position(|tab| tab.id == first) else {
+            return;
+        };
+        let second = if let Some(tab) = space.tabs.get(first_index + 1) {
+            tab.id.clone()
+        } else if space.tabs.len() > 1 {
+            space.tabs[0].id.clone()
+        } else {
+            let id = next_tab_id(space);
+            space.tabs.push(Tab::new(&id, "New tab", "about:blank"));
+            id
+        };
+        if first != second {
+            space.split = Some(SplitPair { first, second });
+            self.focused_pane = 0;
+            self.split_ratio = 0.5;
+            self.save_state();
+        }
+    }
+
+    fn exit_split(&mut self) {
+        if self.active_space().split.is_some() {
+            self.active_space_mut().split = None;
+            self.focused_pane = 0;
+            self.save_state();
+        }
     }
 
     fn active_space_mut(&mut self) -> &mut Space {
@@ -978,22 +1068,30 @@ impl Render for Lumen {
                         if !popups.is_empty() {
                             cx.notify();
                         }
-                        let active_tab_id = this.active_tab_id().to_string();
+                        let visible_ids = this.current_split_pair().map_or_else(
+                            || vec![this.active_tab_id().to_string()],
+                            |pair| vec![pair.first, pair.second],
+                        );
+                        let visible_refs =
+                            visible_ids.iter().map(String::as_str).collect::<Vec<_>>();
                         let (has_updates, has_root_updates) =
-                            this.engine.take_dirty(&active_tab_id);
+                            this.engine.take_dirty_for(&visible_refs);
                         if has_root_updates {
-                            if let Some((title, url)) = this.engine.take_updates(&active_tab_id) {
-                                if let Some(tab) = this
-                                    .active_space_mut()
-                                    .tabs
-                                    .iter_mut()
-                                    .find(|tab| tab.id == active_tab_id)
-                                {
-                                    if let Some(title) = title.filter(|title| !title.is_empty()) {
-                                        tab.title = title;
-                                    }
-                                    if let Some(url) = url.filter(|url| !url.is_empty()) {
-                                        tab.url = url;
+                            for tab_id in &visible_ids {
+                                if let Some((title, url)) = this.engine.take_updates(tab_id) {
+                                    if let Some(tab) = this
+                                        .active_space_mut()
+                                        .tabs
+                                        .iter_mut()
+                                        .find(|tab| tab.id == *tab_id)
+                                    {
+                                        if let Some(title) = title.filter(|title| !title.is_empty())
+                                        {
+                                            tab.title = title;
+                                        }
+                                        if let Some(url) = url.filter(|url| !url.is_empty()) {
+                                            tab.url = url;
+                                        }
                                     }
                                 }
                             }
@@ -1002,14 +1100,21 @@ impl Render for Lumen {
                         if !was_initialized {
                             cx.notify();
                         } else if has_updates {
-                            let tab_id = this.active_tab_id().to_string();
-                            let image = this.engine.get_image(&tab_id);
-                            let cursor = this.engine.get_cursor(&tab_id);
-                            let sidebar_width = this.effective_sidebar_width();
+                            let first_tab = visible_ids[0].clone();
+                            let image = this.engine.get_image(&first_tab);
+                            let cursor = this.engine.get_cursor(&first_tab);
                             this.web_viewport.update(cx, |viewport, cx| {
-                                viewport.set_frame(tab_id, sidebar_width, image, cursor);
+                                viewport.set_content(first_tab, image, cursor);
                                 cx.notify();
                             });
+                            if let Some(second_tab) = visible_ids.get(1).cloned() {
+                                let image = this.engine.get_image(&second_tab);
+                                let cursor = this.engine.get_cursor(&second_tab);
+                                this.second_web_viewport.update(cx, |viewport, cx| {
+                                    viewport.set_content(second_tab, image, cursor);
+                                    cx.notify();
+                                });
+                            }
                         }
                         let delay =
                             engine::pump_sleep_ms(this.engine.take_scheduled_pump_delay_ms());
@@ -1068,7 +1173,7 @@ impl Render for Lumen {
         }
 
         let active_space_id = self.active_space.clone();
-        let active_space = self.active_space();
+        let active_space = self.active_space().clone();
         let active_tab_id = active_space.active.clone();
         let selected_name = active_space.name.clone();
         let _selected_color = active_space.color;
@@ -1096,6 +1201,7 @@ impl Render for Lumen {
             .unwrap_or_else(|| "New tab".into());
         let active_tab_id_string = active_tab_id.clone().unwrap_or_default();
         let active_tab_url = active_tab.map(|tab| tab.url.clone()).unwrap_or_default();
+        let split_pair = self.current_split_pair();
 
         #[cfg(all(target_os = "linux", not(test)))]
         let scale = _window.scale_factor();
@@ -1115,18 +1221,71 @@ impl Render for Lumen {
         #[cfg(all(target_os = "linux", not(test)))]
         if self.engine.is_initialized()
             && !active_tab_id_string.is_empty()
-            && active_tab_url != "lumen://welcome"
-            && active_tab_url != "about:blank"
-            && !active_tab_url.is_empty()
+            && (split_pair.is_some()
+                || (active_tab_url != "lumen://welcome"
+                    && active_tab_url != "about:blank"
+                    && !active_tab_url.is_empty()))
         {
-            if let Err(error) = self.engine.ensure_browser(
-                &active_space_id,
-                &active_tab_id_string,
-                &active_tab_url,
-                content_w,
-                content_h,
-            ) {
-                eprintln!("Lumen CEF browser creation failed: {error}");
+            let (left_width, right_width) =
+                split_view::pane_widths(content_w as f32 / scale, self.split_ratio);
+            let left_width_px = (left_width * scale) as i32;
+            let right_width_px = (right_width * scale) as i32;
+            let active_width = split_pair.as_ref().map_or(content_w, |pair| {
+                if pair.first == active_tab_id_string {
+                    left_width_px
+                } else if pair.second == active_tab_id_string {
+                    right_width_px
+                } else {
+                    content_w
+                }
+            });
+            if active_tab_url != "lumen://welcome"
+                && active_tab_url != "about:blank"
+                && !active_tab_url.is_empty()
+            {
+                if let Err(error) = self.engine.ensure_browser(
+                    &active_space_id,
+                    &active_tab_id_string,
+                    &active_tab_url,
+                    active_width.max(1),
+                    content_h,
+                ) {
+                    eprintln!("Lumen CEF browser creation failed: {error}");
+                }
+            }
+            if let Some(pair) = &split_pair {
+                if let Some(tab) = active_space.tabs.iter().find(|tab| tab.id == pair.first) {
+                    if tab.url != "lumen://welcome"
+                        && tab.url != "about:blank"
+                        && !tab.url.is_empty()
+                    {
+                        if let Err(error) = self.engine.ensure_browser(
+                            &active_space_id,
+                            &pair.first,
+                            &tab.url,
+                            left_width_px.max(1),
+                            content_h,
+                        ) {
+                            eprintln!("Lumen split browser creation failed: {error}");
+                        }
+                    }
+                }
+                if let Some(tab) = active_space.tabs.iter().find(|tab| tab.id == pair.second) {
+                    if tab.url != "lumen://welcome"
+                        && tab.url != "about:blank"
+                        && !tab.url.is_empty()
+                    {
+                        if let Err(error) = self.engine.ensure_browser(
+                            &active_space_id,
+                            &pair.second,
+                            &tab.url,
+                            right_width_px.max(1),
+                            content_h,
+                        ) {
+                            eprintln!("Lumen split browser creation failed: {error}");
+                        }
+                    }
+                }
             }
             let host = url_host(&active_tab_url);
             if !host.is_empty() && self.active_zoom_host.as_deref() != Some(host.as_str()) {
@@ -1136,7 +1295,11 @@ impl Render for Lumen {
             } else if host.is_empty() {
                 self.active_zoom_host = None;
             }
-            self.engine.set_visible(&active_tab_id_string);
+            let visible_ids = split_pair.as_ref().map_or_else(
+                || vec![active_tab_id_string.as_str()],
+                |pair| vec![pair.first.as_str(), pair.second.as_str()],
+            );
+            self.engine.set_visible_tabs(&visible_ids);
             let display = _window.display(cx);
             let window_bounds = _window.bounds();
             let (screen_width, screen_height) = display
@@ -1148,14 +1311,16 @@ impl Render for Lumen {
                     )
                 })
                 .unwrap_or((content_w, content_h));
-            self.engine.set_screen_metrics(
-                &active_tab_id_string,
-                screen_width,
-                screen_height,
-                scale,
-                f32::from(window_bounds.origin.x) as i32,
-                f32::from(window_bounds.origin.y) as i32,
-            );
+            for tab_id in &visible_ids {
+                self.engine.set_screen_metrics(
+                    tab_id,
+                    screen_width,
+                    screen_height,
+                    scale,
+                    f32::from(window_bounds.origin.x) as i32,
+                    f32::from(window_bounds.origin.y) as i32,
+                );
+            }
             if let Some(tab) = self
                 .active_space_mut()
                 .tabs
@@ -1362,7 +1527,20 @@ impl Render for Lumen {
             .bg(rgb(0x111216))
             .text_color(rgb(0xe6e7eb))
             .on_mouse_move(
-                cx.listener(|this, event: &gpui_kit::MouseMoveEvent, _, cx| {
+                cx.listener(|this, event: &gpui_kit::MouseMoveEvent, window, cx| {
+                    if this.split_resizing {
+                        let bounds = window.bounds();
+                        let sidebar = this.effective_sidebar_width();
+                        let card_left = sidebar + CONTENT_BEZEL_X;
+                        let card_width =
+                            f32::from(bounds.size.width) - sidebar - 2.0 * CONTENT_BEZEL_X;
+                        this.split_ratio = split_view::ratio_at_pointer(
+                            f32::from(event.position.x),
+                            card_left,
+                            card_width,
+                        );
+                        cx.notify();
+                    }
                     if this.sidebar_resizing {
                         let new_width = f32::from(event.position.x);
                         this.sidebar_width = new_width.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
@@ -1373,8 +1551,9 @@ impl Render for Lumen {
             .on_mouse_up(
                 gpui_kit::MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    if this.sidebar_resizing {
+                    if this.sidebar_resizing || this.split_resizing {
                         this.sidebar_resizing = false;
+                        this.split_resizing = false;
                         cx.notify();
                     }
                 }),
@@ -1494,26 +1673,45 @@ impl Render for Lumen {
                         },
                     )
                     .child({
-                        #[cfg(all(target_os = "linux", not(test)))]
-                        let viewport_image = self.engine.get_image(&active_tab_id_string);
-                        #[cfg(all(target_os = "linux", not(test)))]
-                        let viewport_cursor = self.engine.get_cursor(&active_tab_id_string);
-                        #[cfg(any(not(target_os = "linux"), test))]
-                        let viewport_image: Option<
-                            std::sync::Arc<gpui_kit::RenderImage>,
-                        > = None;
-                        #[cfg(any(not(target_os = "linux"), test))]
-                        let viewport_cursor = 0;
                         let viewport_sidebar = self.effective_sidebar_width();
+                        let total_width = f32::from(_window.bounds().size.width)
+                            - viewport_sidebar
+                            - 2.0 * CONTENT_BEZEL_X;
+                        let (left_width, right_width) =
+                            split_view::pane_widths(total_width, self.split_ratio);
+                        let left_tab_id = split_pair
+                            .as_ref()
+                            .map(|pair| pair.first.clone())
+                            .unwrap_or_else(|| active_tab_id_string.clone());
+                        let left_image = self.engine.get_image(&left_tab_id);
+                        let left_cursor = self.engine.get_cursor(&left_tab_id);
                         self.web_viewport.update(cx, |viewport, cx| {
                             viewport.set_frame(
-                                active_tab_id_string.clone(),
+                                left_tab_id.clone(),
                                 viewport_sidebar,
-                                viewport_image,
-                                viewport_cursor,
+                                left_image,
+                                left_cursor,
+                                0.0,
+                                0,
                             );
                             cx.notify();
                         });
+                        let right_tab_id = split_pair.as_ref().map(|pair| pair.second.clone());
+                        if let Some(right_tab_id) = right_tab_id {
+                            let right_image = self.engine.get_image(&right_tab_id);
+                            let right_cursor = self.engine.get_cursor(&right_tab_id);
+                            self.second_web_viewport.update(cx, |viewport, cx| {
+                                viewport.set_frame(
+                                    right_tab_id.clone(),
+                                    viewport_sidebar,
+                                    right_image,
+                                    right_cursor,
+                                    left_width + DIVIDER_WIDTH,
+                                    1,
+                                );
+                                cx.notify();
+                            });
+                        }
                         div()
                             .id("web-content-card")
                             .flex_1()
@@ -1522,19 +1720,50 @@ impl Render for Lumen {
                             .rounded(px(CARD_RADIUS))
                             .bg(rgb(0x15161a))
                             .overflow_hidden()
-                            .child(
-                                if active_tab_url == "lumen://welcome"
-                                    || active_tab_url == "about:blank"
-                                    || active_tab_url.is_empty()
-                                {
-                                    div().id("empty-space").size_full()
-                                } else {
-                                    div()
-                                        .id("web-viewport-entity")
-                                        .size_full()
-                                        .child(self.web_viewport.clone())
-                                },
-                            )
+                            .child(if split_pair.is_some() {
+                                div()
+                                    .id("split-viewports")
+                                    .size_full()
+                                    .flex()
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .w(px(left_width))
+                                            .child(self.web_viewport.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("split-divider")
+                                            .w(px(DIVIDER_WIDTH))
+                                            .h_full()
+                                            .bg(rgb(0x15161a))
+                                            .hover(|style| style.bg(rgb(0x3e424d)))
+                                            .cursor_col_resize()
+                                            .on_mouse_down(
+                                                gpui_kit::MouseButton::Left,
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.split_resizing = true;
+                                                    cx.notify();
+                                                }),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .w(px(right_width))
+                                            .child(self.second_web_viewport.clone()),
+                                    )
+                            } else if active_tab_url == "lumen://welcome"
+                                || active_tab_url == "about:blank"
+                                || active_tab_url.is_empty()
+                            {
+                                div().id("empty-space").size_full()
+                            } else {
+                                div()
+                                    .id("web-viewport-entity")
+                                    .size_full()
+                                    .child(self.web_viewport.clone())
+                            })
                     }),
             );
 
@@ -1566,6 +1795,45 @@ impl Render for Lumen {
                 let key = event.keystroke.key.to_lowercase();
                 let modifiers = &event.keystroke.modifiers;
                 let browser_modifier = modifiers.control || modifiers.platform;
+                if !event.is_held && browser_modifier && modifiers.shift && key == "s" {
+                    this.split_active_with_next();
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
+                if !event.is_held && browser_modifier && modifiers.shift && key == "w" {
+                    this.exit_split();
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
+                if !event.is_held
+                    && modifiers.alt
+                    && browser_modifier
+                    && this.active_space().split.is_some()
+                    && matches!(key.as_str(), "left" | "arrowleft" | "right" | "arrowright")
+                {
+                    let pane_index = if matches!(key.as_str(), "left" | "arrowleft") {
+                        0
+                    } else {
+                        1
+                    };
+                    this.set_focused_pane(pane_index);
+                    if let Some(pair) = this.current_split_pair() {
+                        this.engine.set_focus(&pair.first, false);
+                        this.engine.set_focus(&pair.second, false);
+                    }
+                    let focused = this.focused_tab_id().to_string();
+                    this.engine.set_focus(&focused, true);
+                    this.browser_focused = true;
+                    window.focus(&this.browser_focus_handle, cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
                 if this.show_find && matches!(key.as_str(), "enter" | "return") {
                     this.find_in_page(!modifiers.shift, true, cx);
                     window.prevent_default();
@@ -1574,7 +1842,7 @@ impl Render for Lumen {
                 }
                 if matches!(key.as_str(), "escape" | "esc") {
                     if this.show_find {
-                        this.engine.stop_finding(this.active_tab_id());
+                        this.engine.stop_finding(this.focused_tab_id());
                         this.show_find = false;
                         this.focus_browser(window, cx);
                         window.prevent_default();
@@ -1582,8 +1850,8 @@ impl Render for Lumen {
                         cx.notify();
                         return;
                     }
-                    if this.engine.is_loading(this.active_tab_id()) {
-                        this.engine.stop_load(this.active_tab_id());
+                    if this.engine.is_loading(this.focused_tab_id()) {
+                        this.engine.stop_load(this.focused_tab_id());
                         window.prevent_default();
                         cx.stop_propagation();
                         return;
@@ -1592,7 +1860,7 @@ impl Render for Lumen {
                 if browser_modifier && key == "f" && !modifiers.shift {
                     this.show_find = true;
                     this.browser_focused = false;
-                    this.engine.set_focus(this.active_tab_id(), false);
+                    this.engine.set_focus(this.focused_tab_id(), false);
                     this.find_input
                         .update(cx, |input, cx| input.focus(window, cx));
                     window.prevent_default();
@@ -1601,13 +1869,13 @@ impl Render for Lumen {
                     return;
                 }
                 if modifiers.alt && matches!(key.as_str(), "left" | "arrowleft") {
-                    this.engine.go_back(this.active_tab_id());
+                    this.engine.go_back(this.focused_tab_id());
                     window.prevent_default();
                     cx.stop_propagation();
                     return;
                 }
                 if modifiers.alt && matches!(key.as_str(), "right" | "arrowright") {
-                    this.engine.go_forward(this.active_tab_id());
+                    this.engine.go_forward(this.focused_tab_id());
                     window.prevent_default();
                     cx.stop_propagation();
                     return;
@@ -1642,7 +1910,7 @@ impl Render for Lumen {
                     cx.stop_propagation();
                     cx.notify();
                 } else if browser_modifier && key == "l" && !modifiers.shift {
-                    let tab_id = this.active_tab_id().to_string();
+                    let tab_id = this.focused_tab_id().to_string();
                     this.engine.set_focus(&tab_id, false);
                     this.address.update(cx, |input, cx| {
                         input.focus(window, cx);
@@ -2047,6 +2315,14 @@ mod tests {
                 let focus_handle = cx.focus_handle();
                 cx.new(|_| WebViewport::new(root_entity, focus_handle))
             },
+            second_web_viewport: {
+                let root_entity = cx.weak_entity();
+                let focus_handle = cx.focus_handle();
+                cx.new(|_| WebViewport::new(root_entity, focus_handle))
+            },
+            focused_pane: 0,
+            split_ratio: 0.5,
+            split_resizing: false,
             _address_subscription: address_subscription,
             show_find: false,
             suggestions: Vec::new(),
@@ -2094,6 +2370,45 @@ mod tests {
         view.read_with(cx, |app, _| assert_eq!(app.active_tab_id(), "tab-1"));
         dispatch_test_key(cx, handle, "ctrl-shift-t");
         view.read_with(cx, |app, _| assert_eq!(app.active_tab_id(), "tab-2"));
+    }
+
+    #[gpui::test]
+    fn split_shortcuts_create_focus_and_exit_the_pane_pair(cx: &mut gpui::TestAppContext) {
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| test_app(window, cx))
+            })
+            .expect("open test window")
+        });
+        dispatch_test_key(cx, handle, "ctrl-shift-s");
+        view.read_with(cx, |app, _| {
+            assert_eq!(
+                app.current_split_pair(),
+                Some(SplitPair {
+                    first: "tab-1".into(),
+                    second: "tab-2".into(),
+                })
+            );
+        });
+        dispatch_test_key(cx, handle, "ctrl-shift-w");
+        view.read_with(cx, |app, _| assert!(app.current_split_pair().is_none()));
+        dispatch_test_key(cx, handle, "ctrl-shift-s");
+        dispatch_test_key(cx, handle, "ctrl-alt-right");
+        view.read_with(cx, |app, _| {
+            assert_eq!(app.focused_pane, 1);
+            assert_eq!(app.focused_tab_id(), "tab-2");
+        });
+        view.update(cx, |app, _| app.close_active_tab());
+        view.read_with(cx, |app, _| {
+            assert!(app.current_split_pair().is_none());
+            assert_eq!(app.active_space().tabs.len(), 1);
+            assert_eq!(app.active_tab_id(), "tab-1");
+        });
+        view.read_with(cx, |app, _| {
+            assert_eq!(app.focused_pane, 0);
+            assert!(app.current_split_pair().is_none());
+        });
     }
 
     #[gpui::test]
