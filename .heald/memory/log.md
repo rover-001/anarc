@@ -18,3 +18,7 @@ Round 2 integrated perf WebViewport and on_schedule_message_pump_work with infra
 ## Session 2026-11-09T12:20:58.240823179+00:00
 
 Round 3 fixed CEF cache nesting: root_cache_path uses LUMEN_DATA_DIR/cef and per-space RequestContext cache paths use root/profiles/<space_id>. Updated path tests and README Testing guidance; LUMEN_CACHE_DIR remains for non-profile caches. cargo test --offline passed (29), cargo build --release --offline passed, fmt check passed. Round 3 appended to integrate-report.md. Live cache persistence remains unverified.
+
+## Session 2026-11-09T12:52:46.308762987+00:00
+
+Implemented SQLite history with main-frame navigation and title recording, history autocomplete, and the Ctrl+K palette with fuzzy tab/history/action search and keyboard activation. Verified 34 tests, release build, isolated startup stats; visual OSR remains unverified in DRM-limited runtime.

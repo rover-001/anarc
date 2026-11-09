@@ -12,6 +12,7 @@ serde_json = "=1.0.154"
 x11 = { version = "=2.21.0", features = ["xlib"] }
 image = "=0.25.10"
 smallvec = "=1.16.5"
+rusqlite = { version = "=0.41.1", features = ["bundled"] }
 
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
