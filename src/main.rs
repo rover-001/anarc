@@ -267,25 +267,35 @@ fn move_suggestion_selection(current: Option<usize>, count: usize, down: bool) -
 
 impl Lumen {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (mut spaces, active_space) = if let Some(mut saved) = persist::load_state() {
-            if !saved.spaces.is_empty() {
-                for space in &mut saved.spaces {
-                    if !SPACE_ICONS.contains(&space.icon.as_str()) {
-                        space.icon = "compass".to_string();
+        let (mut spaces, active_space, sidebar_width, sidebar_collapsed) =
+            if let Some(mut saved) = persist::load_state() {
+                if !saved.spaces.is_empty() {
+                    for space in &mut saved.spaces {
+                        if !SPACE_ICONS.contains(&space.icon.as_str()) {
+                            space.icon = "compass".to_string();
+                        }
                     }
-                }
-                let active = if saved.spaces.iter().any(|s| s.id == saved.active_space) {
-                    saved.active_space
+                    let active = if saved.spaces.iter().any(|s| s.id == saved.active_space) {
+                        saved.active_space
+                    } else {
+                        saved.spaces[0].id.clone()
+                    };
+                    (
+                        saved.spaces,
+                        active,
+                        saved
+                            .sidebar_width
+                            .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
+                        saved.sidebar_collapsed,
+                    )
                 } else {
-                    saved.spaces[0].id.clone()
-                };
-                (saved.spaces, active)
+                    let (spaces, active) = create_default_space();
+                    (spaces, active, 240.0 * UI_SCALE, false)
+                }
             } else {
-                create_default_space()
-            }
-        } else {
-            create_default_space()
-        };
+                let (spaces, active) = create_default_space();
+                (spaces, active, 240.0 * UI_SCALE, false)
+            };
 
         let initial_query = std::env::args().skip(1).find(|arg| !arg.starts_with("--"));
         let initial_http_first = initial_query
@@ -297,7 +307,7 @@ impl Lumen {
             }
         }
 
-        persist::save_state(&spaces, &active_space);
+        persist::save_state(&spaces, &active_space, sidebar_width, sidebar_collapsed);
 
         let address = cx.new(|cx| {
             let input =
@@ -355,8 +365,8 @@ impl Lumen {
         Self {
             spaces,
             active_space,
-            sidebar_collapsed: false,
-            sidebar_width: 240.0 * UI_SCALE,
+            sidebar_collapsed,
+            sidebar_width,
             sidebar_resizing: false,
             started_at: Instant::now(),
             first_frame_logged: false,
@@ -818,7 +828,13 @@ impl Lumen {
 
     fn save_state(&self) {
         #[cfg(not(test))]
-        persist::save_state(&self.spaces, &self.active_space);
+        persist::save_state(
+            &self.spaces,
+            &self.active_space,
+            self.sidebar_width
+                .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
+            self.sidebar_collapsed,
+        );
         #[cfg(test)]
         let _ = self;
     }
@@ -1515,10 +1531,9 @@ impl Render for Lumen {
         #[cfg(all(target_os = "linux", not(test)))]
         let height = f32::from(bounds.size.height);
         #[cfg(all(target_os = "linux", not(test)))]
-        let content_w =
-            ((width - sidebar_width_f32 - (CONTENT_BEZEL_X * 2.0)).max(100.0) * scale) as i32;
+        let content_w = (width - sidebar_width_f32 - (CONTENT_BEZEL_X * 2.0)).max(100.0) as i32;
         #[cfg(all(target_os = "linux", not(test)))]
-        let content_h = ((height - TOPBAR_HEIGHT - CONTENT_BEZEL_BOTTOM).max(100.0) * scale) as i32;
+        let content_h = (height - TOPBAR_HEIGHT - CONTENT_BEZEL_BOTTOM).max(100.0) as i32;
 
         #[cfg(all(target_os = "linux", not(test)))]
         if self.engine.is_initialized()
@@ -1529,14 +1544,14 @@ impl Render for Lumen {
                     && !active_tab_url.is_empty()))
         {
             let (left_width, right_width) =
-                split_view::pane_widths(content_w as f32 / scale, self.split_ratio);
-            let left_width_px = (left_width * scale) as i32;
-            let right_width_px = (right_width * scale) as i32;
+                split_view::pane_widths(content_w as f32, self.split_ratio);
+            let left_width_dip = left_width as i32;
+            let right_width_dip = right_width as i32;
             let active_width = split_pair.as_ref().map_or(content_w, |pair| {
                 if pair.first == active_tab_id_string {
-                    left_width_px
+                    left_width_dip
                 } else if pair.second == active_tab_id_string {
-                    right_width_px
+                    right_width_dip
                 } else {
                     content_w
                 }
@@ -1566,7 +1581,7 @@ impl Render for Lumen {
                             &active_space_id,
                             &pair.first,
                             &tab.url,
-                            left_width_px.max(1),
+                            left_width_dip.max(1),
                             content_h,
                             0xff000000 | theme.surface,
                         ) {
@@ -1583,7 +1598,7 @@ impl Render for Lumen {
                             &active_space_id,
                             &pair.second,
                             &tab.url,
-                            right_width_px.max(1),
+                            right_width_dip.max(1),
                             content_h,
                             0xff000000 | theme.surface,
                         ) {
@@ -1700,7 +1715,7 @@ impl Render for Lumen {
                     crate::engine::log_favicon_row_rendered(&second.0, second.2.is_some());
                     let pair_for_focus = pair.clone();
                     let group_id = pair.first.clone();
-                    let mut group_row = div()
+                    let group_row = div()
                         .id("split-tab-group")
                         .w_full()
                         .h(px(visual::TAB_ROW_HEIGHT))
@@ -1787,6 +1802,7 @@ impl Render for Lumen {
                             ),
                         );
                     if expanded {
+                        let mut member_rows = Vec::new();
                         for (pane_index, member) in [first, second].into_iter().enumerate() {
                             let member_id = member.0.clone();
                             let close_id = member_id.clone();
@@ -1812,7 +1828,10 @@ impl Render for Lumen {
                                         .flex()
                                         .items_center()
                                         .gap(px(visual::SIDEBAR_ROW_GAP))
-                                        .px(px(visual::SIDEBAR_ROW_PADDING_X))
+                                        .pl(px(visual::SIDEBAR_ROW_PADDING_X
+                                            + visual::SIDEBAR_ROW_ICON_SIZE
+                                            + visual::SIDEBAR_ROW_GAP))
+                                        .pr(px(visual::SIDEBAR_ROW_PADDING_X))
                                         .rounded_lg()
                                         .when(selected_member, |row| row.bg(rgb(theme.surface)))
                                         .when(!selected_member, |row| {
@@ -1823,7 +1842,7 @@ impl Render for Lumen {
                                             div()
                                                 .flex_1()
                                                 .text_sm()
-                                                .text_color(rgb(theme.muted))
+                                                .text_color(rgb(theme.text))
                                                 .overflow_hidden()
                                                 .whitespace_nowrap()
                                                 .text_ellipsis()
@@ -1879,10 +1898,15 @@ impl Render for Lumen {
                                         },
                                     ),
                                 );
-                            group_row = group_row.child(member_row);
+                            member_rows.push(member_row);
                         }
+                        sidebar_content = sidebar_content.child(group_row);
+                        for member_row in member_rows {
+                            sidebar_content = sidebar_content.child(member_row);
+                        }
+                    } else {
+                        sidebar_content = sidebar_content.child(group_row);
                     }
-                    sidebar_content = sidebar_content.child(group_row);
                 }
             }
 
@@ -2092,6 +2116,7 @@ impl Render for Lumen {
                         .child("›")
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.sidebar_collapsed = false;
+                            this.save_state();
                             cx.notify();
                         })),
                 )
@@ -2144,25 +2169,24 @@ impl Render for Lumen {
                     let finish_split_resize = this.split_resizing;
                     if finish_split_resize {
                         if let Some(pair) = this.current_split_pair() {
-                            let scale = window.scale_factor();
                             let bounds = window.bounds();
                             let sidebar = this.effective_sidebar_width();
                             let total_width =
                                 f32::from(bounds.size.width) - sidebar - 2.0 * CONTENT_BEZEL_X;
                             let (left_width, right_width) =
                                 split_view::pane_widths(total_width, this.split_ratio);
-                            let height = ((f32::from(bounds.size.height)
+                            let height = (f32::from(bounds.size.height)
                                 - TOPBAR_HEIGHT
                                 - CONTENT_BEZEL_BOTTOM)
-                                * scale) as i32;
+                                as i32;
                             this.engine.flush_resize_browser(
                                 &pair.first,
-                                (left_width * scale) as i32,
+                                left_width as i32,
                                 height,
                             );
                             this.engine.flush_resize_browser(
                                 &pair.second,
-                                (right_width * scale) as i32,
+                                right_width as i32,
                                 height,
                             );
                         }
@@ -2170,6 +2194,7 @@ impl Render for Lumen {
                     if this.sidebar_resizing || this.split_resizing {
                         this.sidebar_resizing = false;
                         this.split_resizing = false;
+                        this.save_state();
                         cx.notify();
                     }
                 }),

@@ -42,3 +42,7 @@ Resolved merge conflicts in src/main.rs and src/ui/sidebar.rs, preserving aligne
 ## Session 2026-11-09T14:12:37.214071957+00:00
 
 Resolved merge5 conflicts in engine, main UI, and web viewport; preserved SpaceTheme rendering and splitfix sizing/resizing behavior. No conflict markers remain. Formatting and diff checks passed; compile/live verification not run per task instructions.
+
+## Session 2026-11-09T14:26:47.927505400+00:00
+
+Fixed CEF DIP sizing and input coordinates, 8 ms split resizing, clipped rounded web frames, split member row flow, and persisted sidebar width/collapse preferences with a serde round-trip test. Cargo checks and diff formatting passed; live verification not run per brief.

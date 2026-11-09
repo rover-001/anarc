@@ -135,5 +135,18 @@
     "symbols": [],
     "guidance": "Resolved merge5 conflicts in engine, main UI, and web viewport; preserved SpaceTheme rendering and splitfix sizing/resizing behavior. No conflict markers remain. Formatting and diff checks passed; compile/live verification not run per task instructions.",
     "updated_at": "2026-11-09T14:12:37.218107820+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/persist.rs",
+      "src/ui/split_view.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Fixed CEF DIP sizing and input coordinates, 8 ms split resizing, clipped rounded web frames, split member row flow, and persisted sidebar width/collapse preferences with a serde round-trip test. Cargo checks and diff formatting passed; live verification not run per brief.",
+    "updated_at": "2026-11-09T14:26:47.933415939+00:00"
   }
 ]
