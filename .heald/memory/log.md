@@ -46,3 +46,7 @@ Resolved merge5 conflicts in engine, main UI, and web viewport; preserved SpaceT
 ## Session 2026-11-09T14:26:47.927505400+00:00
 
 Fixed CEF DIP sizing and input coordinates, 8 ms split resizing, clipped rounded web frames, split member row flow, and persisted sidebar width/collapse preferences with a serde round-trip test. Cargo checks and diff formatting passed; live verification not run per brief.
+
+## Session 2026-11-09T14:58:38.661431036+00:00
+
+Motion worktree: added shared motion helpers and easing/theme unit coverage, tab/split entrance fades, menu entrances, root theme interpolation, and a 150ms previous-frame viewport crossfade. cargo check --offline and cargo check --tests --offline plus rustfmt and diff checks passed. No live run or test execution per brief. Requested interaction, exit, highlight and sidebar freeze-animation requirements remain; report at briefs/motion-report.md. hc send failed because the core could not start on a read-only filesystem.

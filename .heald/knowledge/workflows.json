@@ -148,5 +148,19 @@
     "symbols": [],
     "guidance": "Fixed CEF DIP sizing and input coordinates, 8 ms split resizing, clipped rounded web frames, split member row flow, and persisted sidebar width/collapse preferences with a serde round-trip test. Cargo checks and diff formatting passed; live verification not run per brief.",
     "updated_at": "2026-11-09T14:26:47.933415939+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/mod.rs",
+      "src/ui/split_view.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Motion worktree: added shared motion helpers and easing/theme unit coverage, tab/split entrance fades, menu entrances, root theme interpolation, and a 150ms previous-frame viewport crossfade. cargo check --offline and cargo check --tests --offline plus rustfmt and diff checks passed. No live run or test execution per brief. Requested interaction, exit, highlight and sidebar freeze-animation requirements remain; report at briefs/motion-report.md. hc send failed because the core could not start on a read-only filesystem.",
+    "updated_at": "2026-11-09T14:58:38.668838210+00:00"
   }
 ]
