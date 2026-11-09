@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gpui_kit::{Context, Render, Window, div, prelude::*, px, rgb};
 
-use crate::ui::visual::TOPBAR_HEIGHT;
+use crate::ui::{split_view::frame_logical_size, visual::TOPBAR_HEIGHT};
 use crate::{CONTENT_BEZEL_X, Lumen};
 
 pub struct WebViewport {
@@ -87,9 +87,9 @@ fn browser_point_in_pane(
 }
 
 impl Render for WebViewport {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         for image in self.retired_images.drain(..) {
-            let _ = _window.drop_image(image);
+            let _ = window.drop_image(image);
         }
 
         let tab_id_down = self.tab_id.clone();
@@ -131,6 +131,7 @@ impl Render for WebViewport {
 
         let mut viewport = div()
             .id("web-view-viewport")
+            .relative()
             .track_focus(&self.focus_handle)
             .size_full()
             .bg(rgb(0x15161a))
@@ -424,10 +425,20 @@ impl Render for WebViewport {
             );
 
         if let Some(image) = self.image.clone() {
+            let size = image.size(0);
+            let (width, height) = frame_logical_size(
+                u32::from(size.width),
+                u32::from(size.height),
+                window.scale_factor(),
+            );
             viewport = viewport.child(
-                gpui_kit::img(image)
-                    .size_full()
-                    .rounded(px(crate::CARD_RADIUS)),
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .w(px(width))
+                    .h(px(height))
+                    .child(gpui_kit::img(image).size_full()),
             );
         }
         viewport

@@ -26,3 +26,7 @@ Implemented Phase 2 shield: adblock-backed CEF request filtering with persisted 
 ## Session 2026-11-09T13:46:58.935580177+00:00
 
 Implemented grouped split tabs, favicon rendering, per-tab hover close, and tab context actions in the tabs worktree; tests/build had completed before the parent stop instruction, and the final occlude adjustment remains unverified.
+
+## Session 2026-11-09T14:10:01.985057440+00:00
+
+splitfix: implemented 1:1 OSR frame sizing, split resize coalescing/final flush, and invisible divider hit area; offline cargo checks passed. Live tests skipped per brief; commit and hc send blocked by read-only environment.

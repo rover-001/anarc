@@ -831,6 +831,7 @@ pub struct BrowserEntry {
 
 pub struct Engine {
     browsers: HashMap<String, BrowserEntry>,
+    resize_state: HashMap<String, (Instant, i32, i32)>,
     pending_browsers: HashMap<String, Arc<Mutex<BrowserSharedState>>>,
     canceled_browsers: HashSet<String>,
     contexts: HashMap<String, RequestContext>,
@@ -850,11 +851,24 @@ pub struct Engine {
     https_state: Arc<Mutex<HttpsFirstState>>,
 }
 
+fn resize_should_send(
+    previous: Option<&(Instant, i32, i32)>,
+    requested: (i32, i32),
+    now: Instant,
+    force: bool,
+) -> bool {
+    previous.is_none_or(|(last_sent, width, height)| {
+        (*width != requested.0 || *height != requested.1)
+            && (force || now.duration_since(*last_sent) >= Duration::from_millis(16))
+    })
+}
+
 impl Engine {
     pub fn new() -> Self {
         let (ui_update_wake, ui_update_receiver) = async_channel::bounded(1);
         Self {
             browsers: HashMap::new(),
+            resize_state: HashMap::new(),
             pending_browsers: HashMap::new(),
             canceled_browsers: HashSet::new(),
             contexts: HashMap::new(),
@@ -946,6 +960,11 @@ impl Engine {
                 continue;
             }
             if let Some(state) = self.pending_browsers.remove(&id) {
+                let dimensions = state.lock().ok().map(|state| (state.width, state.height));
+                if let Some((width, height)) = dimensions {
+                    self.resize_state
+                        .insert(id.clone(), (Instant::now(), width, height));
+                }
                 self.browsers
                     .insert(id.clone(), BrowserEntry { browser, state });
                 self.lifecycle.opened(&id, Instant::now());
@@ -1147,6 +1166,7 @@ impl Engine {
     pub fn close_browser(&mut self, tab_id: &str) {
         self.close_browser_entry(tab_id);
         self.lifecycle.closed(tab_id);
+        self.resize_state.remove(tab_id);
         self.visible.retain(|id| id != tab_id);
     }
 
@@ -1354,12 +1374,23 @@ impl Engine {
         None
     }
 
-    pub fn resize_browser(&self, tab_id: &str, width: i32, height: i32) {
-        if let Some(entry) = self.browsers.get(tab_id) {
-            let mut state = entry.state.lock().unwrap();
-            let w = width.max(1);
-            let h = height.max(1);
-            if state.width != w || state.height != h {
+    pub fn resize_browser(&mut self, tab_id: &str, width: i32, height: i32) {
+        self.resize_browser_inner(tab_id, width, height, false);
+    }
+
+    pub fn flush_resize_browser(&mut self, tab_id: &str, width: i32, height: i32) {
+        self.resize_browser_inner(tab_id, width, height, true);
+    }
+
+    fn resize_browser_inner(&mut self, tab_id: &str, width: i32, height: i32, force: bool) {
+        let w = width.max(1);
+        let h = height.max(1);
+        let now = Instant::now();
+        let should_resize = resize_should_send(self.resize_state.get(tab_id), (w, h), now, force);
+        if should_resize {
+            self.resize_state.insert(tab_id.to_owned(), (now, w, h));
+            if let Some(entry) = self.browsers.get(tab_id) {
+                let mut state = entry.state.lock().unwrap();
                 state.width = w;
                 state.height = h;
                 drop(state);
@@ -1728,6 +1759,36 @@ mod tests {
             frame_rate_for_refresh(Some(std::time::Duration::from_millis(4))),
             120
         );
+    }
+
+    #[test]
+    fn resize_coalescing_limits_frames_and_flushes_final_size() {
+        let start = Instant::now();
+        let sent = (start, 800, 600);
+        assert!(!resize_should_send(
+            Some(&sent),
+            (810, 600),
+            start + Duration::from_millis(8),
+            false,
+        ));
+        assert!(resize_should_send(
+            Some(&sent),
+            (810, 600),
+            start + Duration::from_millis(16),
+            false,
+        ));
+        assert!(resize_should_send(
+            Some(&sent),
+            (810, 600),
+            start + Duration::from_millis(8),
+            true,
+        ));
+        assert!(!resize_should_send(
+            Some(&sent),
+            (800, 600),
+            start + Duration::from_millis(16),
+            true,
+        ));
     }
 
     #[test]

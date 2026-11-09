@@ -81,5 +81,18 @@
     "symbols": [],
     "guidance": "Implemented grouped split tabs, favicon rendering, per-tab hover close, and tab context actions in the tabs worktree; tests/build had completed before the parent stop instruction, and the final occlude adjustment remains unverified.",
     "updated_at": "2026-11-09T13:46:58.941813811+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/split_view.rs",
+      "src/ui/tab_list.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "splitfix: implemented 1:1 OSR frame sizing, split resize coalescing/final flush, and invisible divider hit area; offline cargo checks passed. Live tests skipped per brief; commit and hc send blocked by read-only environment.",
+    "updated_at": "2026-11-09T14:10:01.990674247+00:00"
   }
 ]

@@ -1,6 +1,7 @@
 use crate::ui::visual::UI_SCALE;
 
 pub const DIVIDER_WIDTH: f32 = 4.0 * UI_SCALE;
+pub const DIVIDER_HIT_WIDTH: f32 = 8.0 * UI_SCALE;
 pub const MIN_PANE_WIDTH: f32 = 240.0 * UI_SCALE;
 
 pub fn tab_for_pane<'a>(first: &'a str, second: &'a str, pane_index: usize) -> &'a str {
@@ -26,6 +27,11 @@ pub fn ratio_at_pointer(pointer_x: f32, card_left: f32, card_width: f32) -> f32 
     let min_ratio = (MIN_PANE_WIDTH / available).min(0.5);
     ((pointer_x - card_left).clamp(MIN_PANE_WIDTH, available - MIN_PANE_WIDTH) / available)
         .clamp(min_ratio, 1.0 - min_ratio)
+}
+
+pub fn frame_logical_size(pixel_width: u32, pixel_height: u32, scale: f32) -> (f32, f32) {
+    let scale = scale.max(f32::EPSILON);
+    (pixel_width as f32 / scale, pixel_height as f32 / scale)
 }
 
 #[cfg(test)]
@@ -54,5 +60,11 @@ mod tests {
     fn pane_input_routes_to_the_tab_in_that_pane() {
         assert_eq!(tab_for_pane("left-tab", "right-tab", 0), "left-tab");
         assert_eq!(tab_for_pane("left-tab", "right-tab", 1), "right-tab");
+    }
+
+    #[test]
+    fn frame_size_is_one_to_one_in_device_pixels() {
+        assert_eq!(frame_logical_size(1600, 900, 2.0), (800.0, 450.0));
+        assert_eq!(frame_logical_size(1200, 800, 1.5), (800.0, 800.0 / 1.5));
     }
 }
