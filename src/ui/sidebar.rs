@@ -1,3 +1,4 @@
+use crate::ui::visual::UI_SCALE;
 use gpui_kit::{FontWeight, assets::IconName, component::Icon, div, prelude::*, px, rgb};
 
 #[allow(dead_code)]
@@ -25,7 +26,7 @@ pub fn new_tab_button() -> impl IntoElement {
         .hover(|style| style.bg(rgb(0x282b31)))
         .child(
             div()
-                .w(px(14.0))
+                .w(px(14.0 * UI_SCALE))
                 .flex()
                 .items_center()
                 .justify_center()

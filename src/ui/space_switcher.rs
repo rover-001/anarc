@@ -1,3 +1,4 @@
+use crate::ui::visual::{UI_SCALE, tint_rgb};
 use gpui_kit::{assets::IconName, component::Icon, div, prelude::*, px, rgb};
 
 pub fn render_space_icon(name: &str) -> Icon {
@@ -29,12 +30,20 @@ pub fn render_space_icon(name: &str) -> Icon {
     Icon::new(icon_name)
 }
 
-pub fn space_icon_button(icon: &str, is_active: bool, _accent: u32) -> impl IntoElement {
-    let bg_color = if is_active { 0x333742 } else { 0x1f2127 };
-    let border_color = if is_active { 0x4a4f5d } else { 0x282b33 };
+pub fn space_icon_button(icon: &str, is_active: bool, accent: u32) -> impl IntoElement {
+    let bg_color = if is_active {
+        tint_rgb(0x191a1f, accent, 0.18)
+    } else {
+        0x1f2127
+    };
+    let border_color = if is_active {
+        tint_rgb(0x282b33, accent, 0.55)
+    } else {
+        0x282b33
+    };
     let text_color = if is_active { 0xf0f1f4 } else { 0x8b8f9a };
     div()
-        .size(px(28.0))
+        .size(px(28.0 * UI_SCALE))
         .rounded_lg()
         .flex()
         .items_center()
@@ -50,7 +59,7 @@ pub fn space_icon_button(icon: &str, is_active: bool, _accent: u32) -> impl Into
 
 pub fn add_space_button() -> impl IntoElement {
     div()
-        .size(px(28.0))
+        .size(px(28.0 * UI_SCALE))
         .rounded_lg()
         .flex()
         .items_center()
@@ -64,7 +73,7 @@ pub fn add_space_button() -> impl IntoElement {
 
 pub fn settings_button() -> impl IntoElement {
     div()
-        .size(px(28.0))
+        .size(px(28.0 * UI_SCALE))
         .rounded_lg()
         .flex()
         .items_center()
@@ -77,7 +86,7 @@ pub fn settings_button() -> impl IntoElement {
 
 pub fn downloads_button() -> impl IntoElement {
     div()
-        .size(px(28.0))
+        .size(px(28.0 * UI_SCALE))
         .rounded_lg()
         .flex()
         .items_center()

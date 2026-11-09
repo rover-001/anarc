@@ -25,6 +25,7 @@ use gpui_kit::{
 use model::{Space, SplitPair, Tab, TabState};
 use ui::command_palette::{self, PaletteAction, PaletteItem, PaletteTab, PaletteTarget};
 use ui::split_view::{self, DIVIDER_WIDTH};
+use ui::visual::{self, ADDRESS_BAR_HEIGHT, TOPBAR_HEIGHT, UI_SCALE};
 use ui::web_view::WebViewport;
 use ui::{sidebar, space_switcher, tab_list};
 
@@ -75,12 +76,12 @@ struct SpaceContextMenu {
     space_id: String,
 }
 
-pub const SIDEBAR_MIN_WIDTH: f32 = 160.0;
-pub const SIDEBAR_MAX_WIDTH: f32 = 320.0;
-pub const SIDEBAR_COLLAPSED_WIDTH: f32 = 64.0;
-pub const CONTENT_BEZEL_X: f32 = 4.0;
-pub const CONTENT_BEZEL_BOTTOM: f32 = 4.0;
-pub const CARD_RADIUS: f32 = 16.0;
+pub const SIDEBAR_MIN_WIDTH: f32 = 160.0 * UI_SCALE;
+pub const SIDEBAR_MAX_WIDTH: f32 = 320.0 * UI_SCALE;
+pub const SIDEBAR_COLLAPSED_WIDTH: f32 = 64.0 * UI_SCALE;
+pub const CONTENT_BEZEL_X: f32 = 4.0 * UI_SCALE;
+pub const CONTENT_BEZEL_BOTTOM: f32 = 4.0 * UI_SCALE;
+pub const CARD_RADIUS: f32 = 16.0 * UI_SCALE;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SuggestionItem {
@@ -328,7 +329,7 @@ impl Lumen {
             spaces,
             active_space,
             sidebar_collapsed: false,
-            sidebar_width: 240.0,
+            sidebar_width: 240.0 * UI_SCALE,
             sidebar_resizing: false,
             started_at: Instant::now(),
             first_frame_logged: false,
@@ -710,11 +711,7 @@ impl Lumen {
         if host.is_empty() {
             return;
         }
-        let level = if delta == 0.0 {
-            0.0
-        } else {
-            (self.zoom_levels.get(&host).copied().unwrap_or(0.0) + delta).clamp(-5.0, 5.0)
-        };
+        let level = visual::zoom_after_delta(self.zoom_levels.get(&host).copied(), delta);
         self.zoom_levels.insert(host, level);
         save_zooms(&self.zoom_levels);
         self.engine.set_zoom_level(&tab_id, level);
@@ -1175,6 +1172,7 @@ fn submit_address(space: &mut Space, input: &str) -> Option<(String, String, boo
 
 impl Render for Lumen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        _window.set_rem_size(px(16.0 * UI_SCALE));
         stats::record_ui_render();
         if !self.first_frame_logged {
             self.first_frame_logged = true;
@@ -1375,7 +1373,7 @@ impl Render for Lumen {
         let active_space = self.active_space().clone();
         let active_tab_id = active_space.active.clone();
         let selected_name = active_space.name.clone();
-        let _selected_color = active_space.color;
+        let selected_color = active_space.color;
         let tabs: Vec<(
             String,
             String,
@@ -1415,7 +1413,7 @@ impl Render for Lumen {
         let content_w =
             ((width - sidebar_width_f32 - (CONTENT_BEZEL_X * 2.0)).max(100.0) * scale) as i32;
         #[cfg(all(target_os = "linux", not(test)))]
-        let content_h = ((height - 52.0 - CONTENT_BEZEL_BOTTOM).max(100.0) * scale) as i32;
+        let content_h = ((height - TOPBAR_HEIGHT - CONTENT_BEZEL_BOTTOM).max(100.0) * scale) as i32;
 
         #[cfg(all(target_os = "linux", not(test)))]
         if self.engine.is_initialized()
@@ -1488,7 +1486,7 @@ impl Render for Lumen {
             }
             let host = url_host(&active_tab_url);
             if !host.is_empty() && self.active_zoom_host.as_deref() != Some(host.as_str()) {
-                let level = self.zoom_levels.get(&host).copied().unwrap_or(0.0);
+                let level = visual::zoom_after_delta(self.zoom_levels.get(&host).copied(), 0.0);
                 self.engine.set_zoom_level(&active_tab_id_string, level);
                 self.active_zoom_host = Some(host);
             } else if host.is_empty() {
@@ -1548,7 +1546,7 @@ impl Render for Lumen {
             .px_3()
             .py_3()
             .gap_2()
-            .bg(rgb(0x191a1f));
+            .bg(rgb(visual::tint_rgb(0x191a1f, selected_color, 0.04)));
 
         if !self.sidebar_collapsed {
             sidebar_content = sidebar_content
@@ -1558,8 +1556,8 @@ impl Render for Lumen {
                         .absolute()
                         .top_0()
                         .bottom_0()
-                        .right(px(-2.0))
-                        .w(px(6.0))
+                        .right(px(-2.0 * UI_SCALE))
+                        .w(px(6.0 * UI_SCALE))
                         .cursor_col_resize()
                         .hover(|s| s.bg(rgb(0x3e424d)))
                         .on_mouse_down(
@@ -1588,7 +1586,15 @@ impl Render for Lumen {
                     div()
                         .id(format!("tab-{id}"))
                         .w_full()
+                        .h(px(visual::TAB_ROW_HEIGHT))
                         .cursor_pointer()
+                        .when(selected, |row| {
+                            row.rounded_lg()
+                                .px(px(UI_SCALE))
+                                .border_l_2()
+                                .border_color(rgb(selected_color))
+                                .bg(rgb(visual::tint_rgb(0x191a1f, selected_color, 0.18)))
+                        })
                         .child(tab_list::tab(title, selected, favicon.clone()))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(space) = this
@@ -1620,7 +1626,7 @@ impl Render for Lumen {
             );
 
             // Spacer pushing the Arc-style dock to the bottom
-            sidebar_content = sidebar_content.child(div().flex_1().min_h(px(8.0)));
+            sidebar_content = sidebar_content.child(div().flex_1().min_h(px(8.0 * UI_SCALE)));
 
             // Bottom bar with Settings, Space Switcher (icons like Arc), and Downloads
             let mut spaces_dock = div().id("spaces-dock").flex().items_center().gap_1();
@@ -1766,47 +1772,56 @@ impl Render for Lumen {
                     .flex()
                     .flex_col()
                     .child(
-                        div().h(px(52.0)).flex().items_center().px_4().child(
-                            div()
-                                .id("address-bar-container")
-                                .flex_1()
-                                .h(px(36.0))
-                                .px_3()
-                                .rounded_lg()
-                                .bg(rgb(0x191a1f))
-                                .border_1()
-                                .border_color(rgb(0x282b33))
-                                .hover(|s| s.border_color(rgb(0x3e424d)))
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .cursor_text()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.browser_focused = false;
-                                    let tab_id = this.active_tab_id().to_string();
-                                    this.engine.set_focus(&tab_id, false);
-                                    this.address.update(cx, |input, cx| {
-                                        input.focus(window, cx);
-                                    });
-                                    let text = this.address.read(cx).value().to_string();
-                                    this.update_suggestions(&text);
-                                    cx.notify();
-                                }))
-                                .child(
-                                    div()
-                                        .text_color(rgb(0x777b85))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(Icon::new(IconName::Search)),
-                                )
-                                .child(
-                                    Input::new(&self.address)
-                                        .id("address-bar")
-                                        .w_full()
-                                        .appearance(false),
-                                ),
-                        ),
+                        div()
+                            .h(px(TOPBAR_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .px_4()
+                            .child(
+                                div()
+                                    .id("address-bar-container")
+                                    .flex_1()
+                                    .h(px(ADDRESS_BAR_HEIGHT))
+                                    .px_3()
+                                    .rounded_lg()
+                                    .bg(rgb(0x191a1f))
+                                    .border_1()
+                                    .border_color(rgb(if self.browser_focused {
+                                        0x282b33
+                                    } else {
+                                        selected_color
+                                    }))
+                                    .hover(|s| s.border_color(rgb(0x3e424d)))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .cursor_text()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.browser_focused = false;
+                                        let tab_id = this.active_tab_id().to_string();
+                                        this.engine.set_focus(&tab_id, false);
+                                        this.address.update(cx, |input, cx| {
+                                            input.focus(window, cx);
+                                        });
+                                        let text = this.address.read(cx).value().to_string();
+                                        this.update_suggestions(&text);
+                                        cx.notify();
+                                    }))
+                                    .child(
+                                        div()
+                                            .text_color(rgb(0x777b85))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(Icon::new(IconName::Search)),
+                                    )
+                                    .child(
+                                        Input::new(&self.address)
+                                            .id("address-bar")
+                                            .w_full()
+                                            .appearance(false),
+                                    ),
+                            ),
                     )
                     .when(
                         self.show_suggestions && !self.suggestions.is_empty(),
@@ -1815,9 +1830,9 @@ impl Render for Lumen {
                                 .id("autocomplete-suggestions")
                                 .occlude()
                                 .absolute()
-                                .top(px(56.0))
-                                .left(px(16.0))
-                                .w(px(560.0))
+                                .top(px(TOPBAR_HEIGHT + 4.0 * UI_SCALE))
+                                .left(px(16.0 * UI_SCALE))
+                                .w(px(560.0 * UI_SCALE))
                                 .bg(rgb(0x191a1f))
                                 .border_1()
                                 .border_color(rgb(0x2f323a))
@@ -1851,7 +1866,7 @@ impl Render for Lumen {
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
-                                                .size(px(16.0))
+                                                .size(px(16.0 * UI_SCALE))
                                                 .child(match icon_type.as_str() {
                                                     "globe" => Icon::new(IconName::Globe),
                                                     "zap" => Icon::new(IconName::Zap),
@@ -1982,10 +1997,10 @@ impl Render for Lumen {
                 div()
                     .id("find-in-page")
                     .absolute()
-                    .top(px(8.0))
-                    .right(px(16.0))
-                    .w(px(300.0))
-                    .h(px(36.0))
+                    .top(px(8.0 * UI_SCALE))
+                    .right(px(16.0 * UI_SCALE))
+                    .w(px(300.0 * UI_SCALE))
+                    .h(px(36.0 * UI_SCALE))
                     .px_3()
                     .rounded_lg()
                     .bg(rgb(0x191a1f))
@@ -2044,8 +2059,8 @@ impl Render for Lumen {
             }
             let panel = div()
                 .id("command-palette")
-                .w(px(640.0))
-                .max_h(px(520.0))
+                .w(px(640.0 * UI_SCALE))
+                .max_h(px(520.0 * UI_SCALE))
                 .overflow_hidden()
                 .rounded_xl()
                 .bg(rgb(0x191a1f))
@@ -2069,7 +2084,7 @@ impl Render for Lumen {
             root = root.child(
                 div()
                     .absolute()
-                    .top(px(88.0))
+                    .top(px(88.0 * UI_SCALE))
                     .left(px(0.0))
                     .right(px(0.0))
                     .flex()
@@ -2276,9 +2291,9 @@ impl Render for Lumen {
                     .id("space-context-menu")
                     .occlude()
                     .absolute()
-                    .bottom(px(48.0))
-                    .left(px(8.0))
-                    .w(px(224.0))
+                    .bottom(px(48.0 * UI_SCALE))
+                    .left(px(8.0 * UI_SCALE))
+                    .w(px(224.0 * UI_SCALE))
                     .bg(rgb(0x1e2026))
                     .border_1()
                     .border_color(rgb(0x32353e))
@@ -2359,9 +2374,9 @@ impl Render for Lumen {
                 .id("space-popover-card")
                 .occlude()
                 .absolute()
-                .bottom(px(52.0))
-                .left(px(8.0))
-                .w(px(224.0))
+                .bottom(px(52.0 * UI_SCALE))
+                .left(px(8.0 * UI_SCALE))
+                .w(px(224.0 * UI_SCALE))
                 .bg(rgb(0x191a1f))
                 .border_1()
                 .border_color(rgb(0x2f323a))
@@ -2431,7 +2446,7 @@ impl Render for Lumen {
                         .child({
                             let mut icons_grid = div()
                                 .id("svg-picker-grid")
-                                .h(px(100.0))
+                                .h(px(100.0 * UI_SCALE))
                                 .overflow_y_scroll()
                                 .p_1()
                                 .rounded_md()
@@ -2447,7 +2462,7 @@ impl Render for Lumen {
                                 icons_grid = icons_grid.child(
                                     div()
                                         .id(format!("space-icon-choice-{i}"))
-                                        .size(px(26.0))
+                                        .size(px(26.0 * UI_SCALE))
                                         .rounded_md()
                                         .flex()
                                         .items_center()
@@ -2497,7 +2512,7 @@ impl Render for Lumen {
                                 colors_row = colors_row.child(
                                     div()
                                         .id(format!("space-color-choice-{i}"))
-                                        .size(px(18.0))
+                                        .size(px(18.0 * UI_SCALE))
                                         .rounded_full()
                                         .bg(rgb(color))
                                         .border_2()
@@ -2673,7 +2688,7 @@ mod tests {
             spaces,
             active_space,
             sidebar_collapsed: false,
-            sidebar_width: 240.0,
+            sidebar_width: 240.0 * UI_SCALE,
             sidebar_resizing: false,
             started_at: Instant::now(),
             first_frame_logged: true,
@@ -3141,11 +3156,11 @@ mod tests {
     fn sidebar_width_has_minimum_and_maximum_clamp() {
         let requested_shrink = 50.0_f32;
         let clamped = requested_shrink.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
-        assert_eq!(clamped, 160.0);
+        assert_eq!(clamped, SIDEBAR_MIN_WIDTH);
 
         let requested_grow = 500.0_f32;
         let clamped_grow = requested_grow.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
-        assert_eq!(clamped_grow, 320.0);
+        assert_eq!(clamped_grow, SIDEBAR_MAX_WIDTH);
 
         let mid = 240.0_f32;
         assert_eq!(mid.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH), 240.0);
@@ -3154,7 +3169,7 @@ mod tests {
     #[test]
     fn sidebar_width_depends_only_on_manual_collapse_state() {
         assert_eq!(sidebar_width_for(false, 240.0), 240.0);
-        assert_eq!(sidebar_width_for(true, 240.0), 64.0);
+        assert_eq!(sidebar_width_for(true, 240.0), SIDEBAR_COLLAPSED_WIDTH);
     }
 
     #[test]
