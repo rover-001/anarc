@@ -13,8 +13,9 @@ mod ui;
 use std::time::Instant;
 
 use gpui_kit::{
-    AnyView, Bounds, Context, Focusable, FontWeight, KeyDownEvent, KeyUpEvent, Render,
-    StyleRefinement, Window, WindowBounds, WindowOptions,
+    Animation, AnimationExt as _, AnyView, Bounds, Context, Focusable, FontWeight, KeyDownEvent,
+    KeyUpEvent, Render, SpringAnimation, SpringConfig, StyleRefinement, Window, WindowBounds,
+    WindowOptions,
     assets::IconName,
     component::Icon,
     component::input::{Input, InputEvent, InputState},
@@ -121,6 +122,10 @@ pub(crate) struct Lumen {
     sidebar_collapsed: bool,
     sidebar_width: f32,
     sidebar_resizing: bool,
+    sidebar_width_transition: Option<(f32, f32, Instant, u64)>,
+    sidebar_transition_serial: u64,
+    theme_transition: Option<(visual::SpaceTheme, Instant, u64)>,
+    theme_transition_id: u64,
     #[cfg(all(target_os = "linux", not(test)))]
     resize_drag: split_view::ResizeDrag,
     started_at: Instant,
@@ -138,6 +143,10 @@ pub(crate) struct Lumen {
     show_command_palette: bool,
     selected_command: usize,
     suggestions: Vec<SuggestionItem>,
+    suggestion_snapshot: Vec<SuggestionItem>,
+    suggestions_were_visible: bool,
+    suggestion_closing: Option<(Vec<SuggestionItem>, u64)>,
+    suggestion_animation_serial: u64,
     selected_suggestion: Option<usize>,
     recent_searches: Vec<String>,
     zoom_levels: std::collections::HashMap<String, f64>,
@@ -155,6 +164,8 @@ pub(crate) struct Lumen {
     tab_context_menu: Option<TabContextMenu>,
     split_group_expanded: bool,
     recently_closed_tabs: Vec<(String, Tab)>,
+    closing_tab: Option<(String, Tab, usize, Instant, u64)>,
+    closing_tab_serial: u64,
     browser_focused: bool,
     #[cfg(not(test))]
     cef_task_started: bool,
@@ -382,6 +393,10 @@ impl Lumen {
             sidebar_collapsed,
             sidebar_width,
             sidebar_resizing: false,
+            sidebar_width_transition: None,
+            sidebar_transition_serial: 0,
+            theme_transition: None,
+            theme_transition_id: 0,
             #[cfg(all(target_os = "linux", not(test)))]
             resize_drag: split_view::ResizeDrag::default(),
             started_at: Instant::now(),
@@ -404,6 +419,10 @@ impl Lumen {
             show_command_palette: false,
             selected_command: 0,
             suggestions: Vec::new(),
+            suggestion_snapshot: Vec::new(),
+            suggestions_were_visible: false,
+            suggestion_closing: None,
+            suggestion_animation_serial: 0,
             selected_suggestion: None,
             recent_searches: history::load_recent_searches(),
             zoom_levels: load_zooms(),
@@ -416,6 +435,8 @@ impl Lumen {
             tab_context_menu: None,
             split_group_expanded: false,
             recently_closed_tabs: Vec::new(),
+            closing_tab: None,
+            closing_tab_serial: 0,
             browser_focused: false,
             #[cfg(not(test))]
             cef_task_started: false,
@@ -430,6 +451,26 @@ impl Lumen {
     }
 
     fn activate_space(&mut self, id: &str) {
+        if self.active_space == id {
+            return;
+        }
+        if self.spaces.iter().any(|space| space.id == id) {
+            let current_theme = visual::space_theme(self.active_space().color);
+            let displayed_theme =
+                self.theme_transition
+                    .map_or(current_theme, |(from, started, _)| {
+                        let progress = started.elapsed().as_secs_f32()
+                            / ui::motion::MOTION_THEME.as_secs_f32().max(f32::EPSILON);
+                        visual::interpolate_theme(
+                            from,
+                            current_theme,
+                            ui::motion::ease_out_quint(progress),
+                        )
+                    });
+            self.theme_transition_id = self.theme_transition_id.wrapping_add(1);
+            self.theme_transition =
+                Some((displayed_theme, Instant::now(), self.theme_transition_id));
+        }
         self.show_suggestions = false;
         self.active_space = id.to_owned();
         self.save_state();
@@ -594,6 +635,8 @@ impl Lumen {
             return false;
         };
         let was_active = space.active.as_deref() == Some(tab_id);
+        let closing_space_id = space.id.clone();
+        let closing_snapshot = space.tabs[index].clone();
         let split_other = space.split.as_ref().and_then(|pair| {
             if pair.first == tab_id {
                 Some(pair.second.clone())
@@ -619,6 +662,14 @@ impl Lumen {
         } else if was_active {
             space.active = Some(space.tabs[index.min(space.tabs.len() - 1)].id.clone());
         }
+        self.closing_tab_serial = self.closing_tab_serial.wrapping_add(1);
+        self.closing_tab = Some((
+            closing_space_id,
+            closing_snapshot,
+            index,
+            Instant::now(),
+            self.closing_tab_serial,
+        ));
         self.save_state();
         true
     }
@@ -841,6 +892,91 @@ impl Lumen {
 
     fn effective_sidebar_width(&self) -> f32 {
         sidebar_width_for(self.sidebar_collapsed, self.sidebar_width)
+    }
+
+    #[cfg(all(target_os = "linux", not(test)))]
+    fn browser_sizes_for_sidebar(
+        &self,
+        window: &Window,
+        sidebar_width: f32,
+    ) -> Vec<split_view::BrowserSize> {
+        let bounds = window.bounds();
+        let content_width =
+            (f32::from(bounds.size.width) - sidebar_width - 2.0 * CONTENT_BEZEL_X).max(100.0);
+        let height = (f32::from(bounds.size.height) - TOPBAR_HEIGHT - CONTENT_BEZEL_BOTTOM)
+            .max(100.0) as i32;
+        if let Some(pair) = self.current_split_pair() {
+            let (left, right) = split_view::pane_widths(content_width, self.split_ratio);
+            vec![
+                split_view::BrowserSize {
+                    tab_id: pair.first,
+                    width: left.max(1.0) as i32,
+                    height,
+                },
+                split_view::BrowserSize {
+                    tab_id: pair.second,
+                    width: right.max(1.0) as i32,
+                    height,
+                },
+            ]
+        } else {
+            self.active_space()
+                .active
+                .clone()
+                .map(|tab_id| {
+                    vec![split_view::BrowserSize {
+                        tab_id,
+                        width: content_width.max(1.0) as i32,
+                        height,
+                    }]
+                })
+                .unwrap_or_default()
+        }
+    }
+
+    fn animate_sidebar_toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        let _ = window;
+        let from = self.sidebar_width_transition.map_or_else(
+            || self.effective_sidebar_width(),
+            |(from, to, started, _)| {
+                let progress = started.elapsed().as_secs_f32()
+                    / ui::motion::MOTION_SLOW.as_secs_f32().max(f32::EPSILON);
+                from + (to - from) * ui::motion::ease_out_quint(progress)
+            },
+        );
+        let collapsing = !self.sidebar_collapsed;
+        let target = if collapsing {
+            SIDEBAR_COLLAPSED_WIDTH
+        } else {
+            self.sidebar_width
+        };
+        #[cfg(all(target_os = "linux", not(test)))]
+        self.begin_browser_resize_drag(window, false);
+        #[cfg(all(target_os = "linux", not(test)))]
+        let final_sizes = self.browser_sizes_for_sidebar(window, target);
+        self.sidebar_transition_serial = self.sidebar_transition_serial.wrapping_add(1);
+        let serial = self.sidebar_transition_serial;
+        self.sidebar_width_transition = Some((from, target, Instant::now(), serial));
+        self.sidebar_collapsed = collapsing;
+        self.save_state();
+
+        #[cfg(all(target_os = "linux", not(test)))]
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(ui::motion::duration(ui::motion::MOTION_SLOW))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.sidebar_transition_serial == serial {
+                    this.sidebar_width_transition = None;
+                    this.finish_browser_resize_drag(final_sizes, "sidebar-toggle");
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+
+        cx.notify();
     }
 
     #[cfg(all(target_os = "linux", not(test)))]
@@ -1665,7 +1801,14 @@ impl Render for Lumen {
 
         #[cfg(all(target_os = "linux", not(test)))]
         let scale = _window.scale_factor();
-        let sidebar_width_f32 = self.effective_sidebar_width();
+        let sidebar_width_f32 = self.sidebar_width_transition.map_or_else(
+            || self.effective_sidebar_width(),
+            |(from, to, started, _)| {
+                let progress = started.elapsed().as_secs_f32()
+                    / ui::motion::MOTION_SLOW.as_secs_f32().max(f32::EPSILON);
+                from + (to - from) * ui::motion::ease_out_quint(progress)
+            },
+        );
         #[cfg(all(target_os = "linux", not(test)))]
         let bounds = _window.bounds();
         #[cfg(all(target_os = "linux", not(test)))]
@@ -1835,6 +1978,30 @@ impl Render for Lumen {
             .bg(rgb(theme.base));
 
         if !self.sidebar_collapsed {
+            let mut sidebar_row_index = 0usize;
+            let mut active_row_index = None;
+            if let Some(pair) = &stored_split_pair {
+                if active_tab_id.as_deref() == Some(pair.first.as_str()) {
+                    active_row_index =
+                        Some(sidebar_row_index + usize::from(self.split_group_expanded));
+                } else if active_tab_id.as_deref() == Some(pair.second.as_str()) {
+                    active_row_index =
+                        Some(sidebar_row_index + usize::from(self.split_group_expanded) * 2);
+                }
+                sidebar_row_index += 1 + usize::from(self.split_group_expanded) * 2;
+            }
+            for (id, _, _) in &tabs {
+                if stored_split_pair
+                    .as_ref()
+                    .is_some_and(|pair| id == &pair.first || id == &pair.second)
+                {
+                    continue;
+                }
+                if active_tab_id.as_deref() == Some(id.as_str()) {
+                    active_row_index = Some(sidebar_row_index);
+                }
+                sidebar_row_index += 1;
+            }
             sidebar_content = sidebar_content
                 .child(
                     div()
@@ -1866,6 +2033,42 @@ impl Render for Lumen {
                     ),
                 );
 
+            if let Some(row_index) = active_row_index {
+                let target_top =
+                    52.0 * UI_SCALE + row_index as f32 * (visual::TAB_ROW_HEIGHT + 8.0 * UI_SCALE);
+                let highlight = div()
+                    .id("active-tab-highlight")
+                    .absolute()
+                    .left_0()
+                    .w_full()
+                    .h(px(visual::TAB_ROW_HEIGHT))
+                    .rounded_lg()
+                    .bg(rgb(theme.surface))
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .bottom_0()
+                            .w(px(2.0 * UI_SCALE))
+                            .rounded_full()
+                            .bg(rgb(selected_color)),
+                    );
+                let highlight = if ui::motion::reduced_motion() {
+                    highlight.top(px(target_top)).into_any_element()
+                } else {
+                    highlight
+                        .with_spring(
+                            "active-tab-highlight-position",
+                            SpringAnimation::new(SpringConfig::new(400.0, 32.0, 1.0))
+                                .to(px(target_top)),
+                            |highlight, top| highlight.top(top),
+                        )
+                        .into_any_element()
+                };
+                sidebar_content = sidebar_content.child(highlight);
+            }
+
             if let Some(pair) = &stored_split_pair {
                 let first = tabs.iter().find(|(id, _, _)| id == &pair.first);
                 let second = tabs.iter().find(|(id, _, _)| id == &pair.second);
@@ -1873,23 +2076,39 @@ impl Render for Lumen {
                     let group_name = tab_list::group_label(&first.1, &second.1);
                     let group_key = format!("split-{}-{}", pair.first, pair.second);
                     let expanded = self.split_group_expanded;
-                    let active_group = active_tab_id
-                        .as_ref()
-                        .is_some_and(|id| id == &pair.first || id == &pair.second);
                     crate::engine::log_favicon_row_rendered(&first.0, first.2.is_some());
                     crate::engine::log_favicon_row_rendered(&second.0, second.2.is_some());
                     let group_id = pair.first.clone();
+                    let target_rotation = if expanded { std::f32::consts::PI } else { 0.0 };
+                    let chevron = Icon::new(IconName::ChevronDown).size(px(14.0 * UI_SCALE));
+                    let chevron = if ui::motion::reduced_motion() {
+                        chevron
+                            .rotate(gpui_kit::percentage(
+                                target_rotation / (2.0 * std::f32::consts::PI),
+                            ))
+                            .into_any_element()
+                    } else {
+                        chevron
+                            .with_spring(
+                                "split-group-chevron-rotation",
+                                SpringAnimation::new(SpringConfig::new(400.0, 32.0, 1.0))
+                                    .to(target_rotation),
+                                |icon, angle| {
+                                    icon.rotate(gpui_kit::percentage(
+                                        angle / (2.0 * std::f32::consts::PI),
+                                    ))
+                                },
+                            )
+                            .into_any_element()
+                    };
                     let group_row = div()
                         .id("split-tab-group")
                         .w_full()
                         .h(px(visual::TAB_ROW_HEIGHT))
                         .cursor_pointer()
+                        .active(|style| style.opacity(0.92))
                         .border_l_2()
-                        .border_color(rgb(if active_group {
-                            selected_color
-                        } else {
-                            0x191a1f
-                        }))
+                        .border_color(rgb(theme.base))
                         .group(group_key.clone())
                         .child(
                             div()
@@ -1900,11 +2119,7 @@ impl Render for Lumen {
                                 .gap(px(visual::SIDEBAR_ROW_GAP))
                                 .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                 .rounded_lg()
-                                .when(active_group, |row| row.bg(rgb(theme.surface)))
-                                .when(!active_group, |row| {
-                                    row.bg(rgb(theme.surface_hover))
-                                        .hover(|style| style.bg(rgb(theme.surface_hover)))
-                                })
+                                .hover(|row| row.bg(rgb(theme.surface_hover)))
                                 .child(tab_list::split_favicon(first.2.clone(), second.2.clone()))
                                 .child(
                                     div()
@@ -1926,14 +2141,7 @@ impl Render for Lumen {
                                         .text_color(rgb(theme.muted))
                                         .opacity(if expanded { 1.0 } else { 0.0 })
                                         .group_hover(group_key.clone(), |style| style.opacity(1.0))
-                                        .child(
-                                            Icon::new(if expanded {
-                                                IconName::ChevronUp
-                                            } else {
-                                                IconName::ChevronDown
-                                            })
-                                            .size(px(14.0 * UI_SCALE)),
-                                        )
+                                        .child(chevron)
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.split_group_expanded = !this.split_group_expanded;
                                             cx.stop_propagation();
@@ -1968,22 +2176,24 @@ impl Render for Lumen {
                         let mut member_rows = Vec::new();
                         for (pane_index, member) in [first, second].into_iter().enumerate() {
                             let member_id = member.0.clone();
+                            let member_animation_id = member_id.clone();
                             let close_id = member_id.clone();
                             let pane = pane_index;
-                            let selected_member = active_tab_id.as_ref() == Some(&member_id);
+                            let stagger = std::time::Duration::from_millis(30 * pane_index as u64);
+                            let total_duration = ui::motion::MOTION_BASE + stagger;
+                            let base_seconds = ui::motion::MOTION_BASE.as_secs_f32();
+                            let delay_seconds = stagger.as_secs_f32();
+                            let total_seconds = total_duration.as_secs_f32();
                             crate::engine::log_favicon_row_rendered(&member.0, member.2.is_some());
                             let member_row = div()
                                 .id(format!("split-member-{member_id}"))
                                 .w_full()
                                 .h(px(visual::TAB_ROW_HEIGHT))
                                 .cursor_pointer()
+                                .active(|style| style.opacity(0.92))
                                 .group(format!("tab-row-{member_id}"))
                                 .border_l_2()
-                                .border_color(rgb(if selected_member {
-                                    theme.accent
-                                } else {
-                                    theme.base
-                                }))
+                                .border_color(rgb(theme.base))
                                 .child(
                                     div()
                                         .w_full()
@@ -1996,10 +2206,7 @@ impl Render for Lumen {
                                             + visual::SIDEBAR_ROW_GAP))
                                         .pr(px(visual::SIDEBAR_ROW_PADDING_X))
                                         .rounded_lg()
-                                        .when(selected_member, |row| row.bg(rgb(theme.surface)))
-                                        .when(!selected_member, |row| {
-                                            row.hover(|style| style.bg(rgb(theme.surface_hover)))
-                                        })
+                                        .hover(|row| row.bg(rgb(theme.surface_hover)))
                                         .child(tab_list::favicon(member.2.clone()))
                                         .child(
                                             div()
@@ -2060,6 +2267,22 @@ impl Render for Lumen {
                                             cx.notify();
                                         },
                                     ),
+                                )
+                                .with_animation(
+                                    format!("split-member-entry-{member_animation_id}"),
+                                    Animation::new(ui::motion::duration(total_duration))
+                                        .with_easing(move |progress| {
+                                            ui::motion::spring_out(
+                                                ((progress * total_seconds - delay_seconds)
+                                                    / base_seconds)
+                                                    .clamp(0.0, 1.0),
+                                            )
+                                        }),
+                                    move |row, progress| {
+                                        let progress = progress.clamp(0.0, 1.0);
+                                        row.h(px(visual::TAB_ROW_HEIGHT * progress))
+                                            .opacity(progress)
+                                    },
                                 );
                             member_rows.push(member_row);
                         }
@@ -2093,8 +2316,9 @@ impl Render for Lumen {
                         .w_full()
                         .h(px(visual::TAB_ROW_HEIGHT))
                         .cursor_pointer()
+                        .active(|style| style.opacity(0.92))
                         .border_l_2()
-                        .border_color(rgb(if selected { theme.accent } else { theme.base }))
+                        .border_color(rgb(theme.base))
                         .group(row_group.clone())
                         .child(
                             div()
@@ -2105,11 +2329,7 @@ impl Render for Lumen {
                                 .gap(px(visual::SIDEBAR_ROW_GAP))
                                 .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                 .rounded_lg()
-                                .when(selected, |row| row.bg(rgb(theme.surface)))
-                                .when(!selected, |row| {
-                                    row.bg(rgb(theme.surface))
-                                        .hover(|style| style.bg(rgb(theme.surface_hover)))
-                                })
+                                .hover(|row| row.bg(rgb(theme.surface_hover)))
                                 .child(tab_list::favicon(favicon.clone()))
                                 .child(
                                     div()
@@ -2171,6 +2391,70 @@ impl Render for Lumen {
                                     cx.notify();
                                 },
                             ),
+                        )
+                        .with_animation(
+                            format!("tab-row-entry-{id}"),
+                            Animation::new(ui::motion::duration(ui::motion::MOTION_BASE))
+                                .with_easing(ui::motion::spring_out),
+                            move |row, progress| {
+                                let progress = progress.clamp(0.0, 1.0);
+                                row.h(px(visual::TAB_ROW_HEIGHT * progress))
+                                    .opacity(progress)
+                            },
+                        ),
+                );
+            }
+
+            if let Some((closing_space, closing_tab, closing_index, started, serial)) =
+                &self.closing_tab
+                && closing_space == &active_space_id
+                && started.elapsed() < ui::motion::MOTION_FAST
+            {
+                let row_index = if let Some(pair) = &stored_split_pair {
+                    let before = tabs
+                        .iter()
+                        .take(*closing_index)
+                        .filter(|(id, _, _)| id != &pair.first && id != &pair.second)
+                        .count();
+                    1 + usize::from(self.split_group_expanded) * 2 + before
+                } else {
+                    *closing_index
+                };
+                let top =
+                    52.0 * UI_SCALE + row_index as f32 * (visual::TAB_ROW_HEIGHT + 8.0 * UI_SCALE);
+                sidebar_content = sidebar_content.child(
+                    div()
+                        .id(format!("closing-tab-{}-{serial}", closing_tab.id))
+                        .absolute()
+                        .left_0()
+                        .top(px(top))
+                        .w_full()
+                        .h(px(visual::TAB_ROW_HEIGHT))
+                        .overflow_hidden()
+                        .rounded_lg()
+                        .bg(rgb(theme.surface))
+                        .child(
+                            div()
+                                .w_full()
+                                .h_full()
+                                .flex()
+                                .items_center()
+                                .gap(px(visual::SIDEBAR_ROW_GAP))
+                                .px(px(visual::SIDEBAR_ROW_PADDING_X))
+                                .text_sm()
+                                .text_color(rgb(theme.muted))
+                                .child(tab_list::favicon(None))
+                                .child(closing_tab.title.clone()),
+                        )
+                        .with_animation(
+                            format!("tab-row-close-{}-{serial}", closing_tab.id),
+                            Animation::new(ui::motion::duration(ui::motion::MOTION_FAST))
+                                .with_easing(ui::motion::ease_out_quint),
+                            move |row, progress| {
+                                let remaining = 1.0 - progress.clamp(0.0, 1.0);
+                                row.h(px(visual::TAB_ROW_HEIGHT * remaining))
+                                    .opacity(remaining)
+                            },
                         ),
                 );
             }
@@ -2181,6 +2465,7 @@ impl Render for Lumen {
                     .w_full()
                     .h(px(visual::TAB_ROW_HEIGHT))
                     .cursor_pointer()
+                    .active(|style| style.opacity(0.92))
                     .border_l_2()
                     .border_color(rgb(theme.base))
                     .child(sidebar::new_tab_button(theme))
@@ -2213,6 +2498,7 @@ impl Render for Lumen {
                     div()
                         .id(format!("space-icon-{id}"))
                         .cursor_pointer()
+                        .active(|style| style.opacity(0.92))
                         .child(icon_btn)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.space_context_menu = None;
@@ -2235,6 +2521,7 @@ impl Render for Lumen {
                 div()
                     .id("add-space-btn")
                     .cursor_pointer()
+                    .active(|style| style.opacity(0.92))
                     .child(space_switcher::add_space_button(theme))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_create_space_modal(window, cx);
@@ -2277,10 +2564,8 @@ impl Render for Lumen {
                         .hover(|style| style.bg(rgb(theme.surface_hover)))
                         .cursor_pointer()
                         .child("›")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.sidebar_collapsed = false;
-                            this.save_state();
-                            cx.notify();
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.animate_sidebar_toggle(window, cx);
                         })),
                 )
                 .child(div().flex_1())
@@ -2297,6 +2582,21 @@ impl Render for Lumen {
                         )),
                 );
         }
+
+        let sidebar_content = if let Some((from, to, _, serial)) = self.sidebar_width_transition {
+            sidebar_content
+                .with_animation(
+                    format!("sidebar-width-transition-{serial}"),
+                    Animation::new(ui::motion::duration(ui::motion::MOTION_SLOW))
+                        .with_easing(ui::motion::ease_out_quint),
+                    move |sidebar, progress| {
+                        sidebar.w(px(from + (to - from) * progress.clamp(0.0, 1.0)))
+                    },
+                )
+                .into_any_element()
+        } else {
+            sidebar_content.into_any_element()
+        };
 
         let mut root = div()
             .relative()
@@ -2447,7 +2747,7 @@ impl Render for Lumen {
                             ),
                     )
                     .child({
-                        let viewport_sidebar = self.effective_sidebar_width();
+                        let viewport_sidebar = sidebar_width_f32;
                         let total_width = f32::from(_window.bounds().size.width)
                             - viewport_sidebar
                             - 2.0 * CONTENT_BEZEL_X;
@@ -2506,10 +2806,26 @@ impl Render for Lumen {
                                     .size_full()
                                     .flex()
                                     .child(
-                                        div().h_full().w(px(left_width)).child(
-                                            AnyView::from(self.web_viewport.clone())
-                                                .cached(StyleRefinement::default().size_full()),
-                                        ),
+                                        div()
+                                            .h_full()
+                                            .w(px(left_width))
+                                            .with_animation(
+                                                format!(
+                                                    "split-left-enter-{}",
+                                                    split_pair.as_ref().unwrap().first
+                                                ),
+                                                Animation::new(ui::motion::duration(
+                                                    ui::motion::MOTION_SLOW,
+                                                ))
+                                                .with_easing(ui::motion::ease_out_quint),
+                                                |pane, progress| {
+                                                    pane.opacity(progress.clamp(0.0, 1.0))
+                                                },
+                                            )
+                                            .child(
+                                                AnyView::from(self.web_viewport.clone())
+                                                    .cached(StyleRefinement::default().size_full()),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -2526,13 +2842,41 @@ impl Render for Lumen {
                                                     this.begin_browser_resize_drag(_window, true);
                                                     cx.notify();
                                                 }),
+                                            )
+                                            .with_animation(
+                                                "split-divider-enter",
+                                                Animation::new(ui::motion::duration(
+                                                    ui::motion::MOTION_SLOW,
+                                                ))
+                                                .with_easing(ui::motion::ease_out_quint),
+                                                |divider, progress| {
+                                                    divider.opacity(
+                                                        (0.35 + 0.65 * progress).clamp(0.0, 1.0),
+                                                    )
+                                                },
                                             ),
                                     )
                                     .child(
-                                        div().h_full().w(px(right_width)).child(
-                                            AnyView::from(self.second_web_viewport.clone())
-                                                .cached(StyleRefinement::default().size_full()),
-                                        ),
+                                        div()
+                                            .h_full()
+                                            .w(px(right_width))
+                                            .with_animation(
+                                                format!(
+                                                    "split-right-enter-{}",
+                                                    split_pair.as_ref().unwrap().second
+                                                ),
+                                                Animation::new(ui::motion::duration(
+                                                    ui::motion::MOTION_SLOW,
+                                                ))
+                                                .with_easing(ui::motion::ease_out_quint),
+                                                |pane, progress| {
+                                                    pane.opacity(progress.clamp(0.0, 1.0))
+                                                },
+                                            )
+                                            .child(
+                                                AnyView::from(self.second_web_viewport.clone())
+                                                    .cached(StyleRefinement::default().size_full()),
+                                            ),
                                     )
                             } else if active_tab_url == "lumen://welcome"
                                 || active_tab_url == "about:blank"
@@ -2548,67 +2892,134 @@ impl Render for Lumen {
                     }),
             );
 
-        root = root.when(
-            self.show_suggestions && !self.suggestions.is_empty(),
-            |this| {
-                let mut list = div()
-                    .id("autocomplete-suggestions")
-                    .occlude()
-                    .absolute()
-                    .top(px(TOPBAR_HEIGHT + 4.0 * UI_SCALE))
-                    .left(px(self.effective_sidebar_width() + 16.0 * UI_SCALE))
-                    .w(px(560.0 * UI_SCALE))
-                    .bg(rgb(theme.surface))
-                    .border_1()
-                    .border_color(rgb(theme.border))
-                    .rounded_xl()
-                    .p_1p5()
-                    .flex()
-                    .flex_col()
-                    .gap_1();
+        let suggestions_open = self.show_suggestions && !self.suggestions.is_empty();
+        if suggestions_open {
+            if !self.suggestions_were_visible {
+                self.suggestion_animation_serial = self.suggestion_animation_serial.wrapping_add(1);
+                self.suggestions_were_visible = true;
+                self.suggestion_closing = None;
+            }
+            self.suggestion_snapshot.clone_from(&self.suggestions);
+        } else if self.suggestions_were_visible {
+            self.suggestions_were_visible = false;
+            self.suggestion_animation_serial = self.suggestion_animation_serial.wrapping_add(1);
+            let serial = self.suggestion_animation_serial;
+            self.suggestion_closing = Some((self.suggestion_snapshot.clone(), serial));
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(ui::motion::duration(ui::motion::MOTION_FAST))
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    if this
+                        .suggestion_closing
+                        .as_ref()
+                        .is_some_and(|(_, current)| *current == serial)
+                    {
+                        this.suggestion_closing = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        let suggestion_items = if suggestions_open {
+            self.suggestions.clone()
+        } else {
+            self.suggestion_closing
+                .as_ref()
+                .map(|(items, _)| items.clone())
+                .unwrap_or_default()
+        };
+        let closing_suggestions = self.suggestion_closing.as_ref().map(|(_, serial)| *serial);
 
-                for (idx, item) in self.suggestions.iter().enumerate() {
-                    let target = item.target.clone();
-                    let title = item.title.clone();
-                    let icon_type = item.icon_type.clone();
-                    list = list.child(
-                        div()
-                            .id(format!("suggestion-item-{idx}"))
-                            .px_3()
-                            .py_2()
-                            .rounded_lg()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(rgb(theme.surface_hover)))
-                            .when(self.selected_suggestion == Some(idx), |row| {
-                                row.bg(rgb(theme.surface_hover))
-                            })
-                            .child(
-                                div()
-                                    .text_color(rgb(0x8b8f9a))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .size(px(16.0 * UI_SCALE))
-                                    .child(match icon_type.as_str() {
-                                        "globe" => Icon::new(IconName::Globe),
-                                        "zap" => Icon::new(IconName::Zap),
-                                        _ => Icon::new(IconName::Search),
-                                    }),
-                            )
-                            .child(div().text_sm().text_color(rgb(theme.text)).child(title))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.navigate_to(&target, window, cx);
-                                cx.notify();
-                            })),
-                    );
-                }
+        root = root.when(suggestions_open || closing_suggestions.is_some(), |this| {
+            let mut list = div()
+                .id("autocomplete-suggestions")
+                .occlude()
+                .absolute()
+                .top(px(TOPBAR_HEIGHT + 4.0 * UI_SCALE))
+                .left(px(sidebar_width_f32 + 16.0 * UI_SCALE))
+                .w(px(560.0 * UI_SCALE))
+                .bg(rgb(theme.surface))
+                .border_1()
+                .border_color(rgb(theme.border))
+                .rounded_xl()
+                .p_1p5()
+                .flex()
+                .flex_col()
+                .gap_1();
 
-                this.child(list)
-            },
-        );
+            for (idx, item) in suggestion_items.iter().enumerate() {
+                let target = item.target.clone();
+                let title = item.title.clone();
+                let icon_type = item.icon_type.clone();
+                list = list.child(
+                    div()
+                        .id(format!("suggestion-item-{idx}"))
+                        .px_3()
+                        .py_2()
+                        .rounded_lg()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(rgb(theme.surface_hover)))
+                        .when(
+                            closing_suggestions.is_none() && self.selected_suggestion == Some(idx),
+                            |row| row.bg(rgb(theme.surface_hover)),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(0x8b8f9a))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .size(px(16.0 * UI_SCALE))
+                                .child(match icon_type.as_str() {
+                                    "globe" => Icon::new(IconName::Globe),
+                                    "zap" => Icon::new(IconName::Zap),
+                                    _ => Icon::new(IconName::Search),
+                                }),
+                        )
+                        .child(div().text_sm().text_color(rgb(theme.text)).child(title))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.navigate_to(&target, window, cx);
+                            cx.notify();
+                        })),
+                );
+            }
+
+            let list = if let Some(serial) = closing_suggestions {
+                list.with_animation(
+                    format!("autocomplete-suggestions-exit-{serial}"),
+                    Animation::new(ui::motion::duration(ui::motion::MOTION_FAST))
+                        .with_easing(ui::motion::ease_out_quint),
+                    |panel, progress| {
+                        let remaining = 1.0 - progress.clamp(0.0, 1.0);
+                        panel
+                            .w(px(560.0 * UI_SCALE * (0.96 + 0.04 * remaining)))
+                            .opacity(remaining)
+                    },
+                )
+                .into_any_element()
+            } else {
+                list.with_animation(
+                    format!(
+                        "autocomplete-suggestions-entrance-{}",
+                        self.suggestion_animation_serial
+                    ),
+                    Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
+                        .with_easing(ui::motion::ease_out_quint),
+                    |panel, progress| {
+                        panel
+                            .w(px(560.0 * UI_SCALE * (0.96 + 0.04 * progress)))
+                            .opacity(progress.clamp(0.0, 1.0))
+                    },
+                )
+                .into_any_element()
+            };
+            this.child(list)
+        });
 
         root = root.when(self.show_find, |root| {
             root.child(
@@ -2700,7 +3111,17 @@ impl Render for Lumen {
                                 .appearance(false),
                         ),
                 )
-                .child(list);
+                .child(list)
+                .with_animation(
+                    "command-palette-entrance",
+                    Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
+                        .with_easing(ui::motion::ease_out_quint),
+                    |panel, progress| {
+                        panel
+                            .w(px(640.0 * UI_SCALE * (0.96 + 0.04 * progress)))
+                            .opacity(progress.clamp(0.0, 1.0))
+                    },
+                );
             root = root.child(
                 div()
                     .absolute()
@@ -2989,12 +3410,23 @@ impl Render for Lumen {
                     );
                 }
 
-                root = root.child(ctx_menu);
+                root = root.child(
+                    ctx_menu.with_animation(
+                        format!("space-menu-entrance-{}", target_space.id),
+                        Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
+                            .with_easing(ui::motion::ease_out_quint),
+                        |menu, progress| {
+                            menu.w(px(224.0 * UI_SCALE * (0.96 + 0.04 * progress)))
+                                .opacity(progress.clamp(0.0, 1.0))
+                        },
+                    ),
+                );
             }
         }
 
         if let Some(menu) = &self.tab_context_menu {
             let target_id = menu.tab_id.clone();
+            let menu_width = menu.width;
             let target_tab = self
                 .active_space()
                 .tabs
@@ -3253,6 +3685,16 @@ impl Render for Lumen {
                         })),
                 );
             }
+            let panel = panel.with_animation(
+                format!("tab-menu-entrance-{}", menu.tab_id),
+                Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
+                    .with_easing(ui::motion::ease_out_quint),
+                move |panel, progress| {
+                    panel
+                        .w(px(menu_width * (0.96 + 0.04 * progress)))
+                        .opacity(progress.clamp(0.0, 1.0))
+                },
+            );
             root = root.child(menu_layer.child(panel));
         }
 
@@ -3481,8 +3923,35 @@ impl Render for Lumen {
                         ),
                 );
 
-            root = root.child(popover);
+            root = root.child(
+                popover.with_animation(
+                    "space-popover-entrance",
+                    Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
+                        .with_easing(ui::motion::ease_out_quint),
+                    |popover, progress| {
+                        popover
+                            .w(px(224.0 * UI_SCALE * (0.96 + 0.04 * progress)))
+                            .opacity(progress.clamp(0.0, 1.0))
+                    },
+                ),
+            );
         }
+
+        let root = if let Some((from_theme, _, transition_id)) = self.theme_transition {
+            let to_theme = theme;
+            root.with_animation(
+                format!("space-theme-transition-{transition_id}"),
+                Animation::new(ui::motion::duration(ui::motion::MOTION_THEME))
+                    .with_easing(ui::motion::ease_out_quint),
+                move |root, progress| {
+                    let theme = visual::interpolate_theme(from_theme, to_theme, progress);
+                    root.bg(rgb(theme.base)).text_color(rgb(theme.text))
+                },
+            )
+            .into_any_element()
+        } else {
+            root.into_any_element()
+        };
 
         root
     }
@@ -3595,6 +4064,10 @@ mod tests {
             sidebar_collapsed: false,
             sidebar_width: 240.0 * UI_SCALE,
             sidebar_resizing: false,
+            sidebar_width_transition: None,
+            sidebar_transition_serial: 0,
+            theme_transition: None,
+            theme_transition_id: 0,
             #[cfg(all(target_os = "linux", not(test)))]
             resize_drag: split_view::ResizeDrag::default(),
             started_at: Instant::now(),
@@ -3625,6 +4098,10 @@ mod tests {
             show_command_palette: false,
             selected_command: 0,
             suggestions: Vec::new(),
+            suggestion_snapshot: Vec::new(),
+            suggestions_were_visible: false,
+            suggestion_closing: None,
+            suggestion_animation_serial: 0,
             selected_suggestion: None,
             recent_searches: Vec::new(),
             zoom_levels: std::collections::HashMap::new(),
@@ -3637,6 +4114,8 @@ mod tests {
             tab_context_menu: None,
             split_group_expanded: false,
             recently_closed_tabs: Vec::new(),
+            closing_tab: None,
+            closing_tab_serial: 0,
             browser_focused: false,
             #[cfg(not(test))]
             cef_task_started: false,

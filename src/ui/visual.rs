@@ -24,6 +24,28 @@ pub struct SpaceTheme {
     pub muted: u32,
 }
 
+pub fn interpolate_theme(from: SpaceTheme, to: SpaceTheme, progress: f32) -> SpaceTheme {
+    let progress = progress.clamp(0.0, 1.0);
+    let color = |a, b| {
+        let channel = |shift| {
+            let a = ((a >> shift) & 0xff_u32) as f32;
+            let b = ((b >> shift) & 0xff_u32) as f32;
+            (a + (b - a) * progress).round() as u32
+        };
+        channel(16) << 16 | channel(8) << 8 | channel(0)
+    };
+    SpaceTheme {
+        base: color(from.base, to.base),
+        surface: color(from.surface, to.surface),
+        surface_hover: color(from.surface_hover, to.surface_hover),
+        border: color(from.border, to.border),
+        border_hover: color(from.border_hover, to.border_hover),
+        accent: color(from.accent, to.accent),
+        text: color(from.text, to.text),
+        muted: color(from.muted, to.muted),
+    }
+}
+
 /// Derives every chrome color from the active space's accent.
 pub fn space_theme(accent: u32) -> SpaceTheme {
     let surface = tint_rgb(0x191a1f, accent, 0.18);
@@ -142,5 +164,17 @@ mod tests {
         assert_eq!(SIDEBAR_ROW_PADDING_X, 12.0);
         assert_eq!(SIDEBAR_ROW_ICON_SIZE, 16.0 * UI_SCALE);
         assert_eq!(SIDEBAR_ROW_GAP, 8.0);
+    }
+
+    #[test]
+    fn space_theme_interpolation_reaches_both_endpoints_and_midpoint() {
+        let from = space_theme(0x9aa6ff);
+        let to = space_theme(0x76d7b2);
+        assert_eq!(interpolate_theme(from, to, 0.0), from);
+        assert_eq!(interpolate_theme(from, to, 1.0), to);
+        let middle = interpolate_theme(from, to, 0.5);
+        assert_eq!(middle.accent, 0x8890d8);
+        assert_ne!(middle.base, from.base);
+        assert_ne!(middle.base, to.base);
     }
 }

@@ -161,5 +161,21 @@
     "symbols": [],
     "guidance": "Fixed autocomplete overlay stacking, synced the address bar on tab and space changes, reset and focused it for new tabs, made split rendering depend on active pair membership while retaining sidebar grouping, and set new and reset page zoom to 90%. Added GPUI regression and zoom tests. cargo check --offline and cargo check --tests --offline passed; tests and live UI were not run per brief. Wrote briefs/omni-report.md.",
     "updated_at": "2026-11-09T14:44:46.491780423+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/mod.rs",
+      "src/ui/motion.rs",
+      "src/ui/sidebar.rs",
+      "src/ui/space_switcher.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Resolved the main.rs merge import conflict retaining omni Focusable and motion Animation imports; web_view corner rings and frame transitions are preserved. Implemented spring-driven active row highlight and chevron, 30ms split-member stagger, closing-row collapse, autocomplete enter/exit, and sidebar width transition with CEF frozen to max frame size then resized once at completion. cargo check --offline and --tests --offline passed; no tests/live run. Updated briefs/motion-report.md. hc send t20 was attempted but Core unavailable due read-only filesystem.",
+    "updated_at": "2026-11-09T15:27:12.598303730+00:00"
   }
 ]

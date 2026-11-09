@@ -39,6 +39,7 @@ pub fn space_icon_button(icon: &str, is_active: bool, theme: SpaceTheme) -> impl
     };
     let text_color = if is_active { theme.text } else { theme.muted };
     div()
+        .id("space-switcher-icon")
         .size(px(28.0 * UI_SCALE))
         .rounded_lg()
         .flex()
@@ -48,6 +49,7 @@ pub fn space_icon_button(icon: &str, is_active: bool, theme: SpaceTheme) -> impl
         .border_1()
         .border_color(rgb(border_color))
         .text_color(rgb(text_color))
+        .active(|style| style.opacity(0.92))
         .hover(move |style| {
             style
                 .bg(rgb(theme.surface_hover))
@@ -59,6 +61,7 @@ pub fn space_icon_button(icon: &str, is_active: bool, theme: SpaceTheme) -> impl
 
 pub fn add_space_button(theme: SpaceTheme) -> impl IntoElement {
     div()
+        .id("add-space-button")
         .size(px(28.0 * UI_SCALE))
         .rounded_lg()
         .flex()
@@ -66,6 +69,7 @@ pub fn add_space_button(theme: SpaceTheme) -> impl IntoElement {
         .justify_center()
         .bg(rgb(theme.surface))
         .text_color(rgb(theme.muted))
+        .active(|style| style.opacity(0.92))
         .hover(move |style| {
             style
                 .bg(rgb(theme.surface_hover))
@@ -77,12 +81,14 @@ pub fn add_space_button(theme: SpaceTheme) -> impl IntoElement {
 
 pub fn settings_button(theme: SpaceTheme) -> impl IntoElement {
     div()
+        .id("settings-button")
         .size(px(28.0 * UI_SCALE))
         .rounded_lg()
         .flex()
         .items_center()
         .justify_center()
         .text_color(rgb(theme.muted))
+        .active(|style| style.opacity(0.92))
         .hover(move |style| {
             style
                 .bg(rgb(theme.surface_hover))
@@ -94,12 +100,14 @@ pub fn settings_button(theme: SpaceTheme) -> impl IntoElement {
 
 pub fn downloads_button(theme: SpaceTheme) -> impl IntoElement {
     div()
+        .id("downloads-button")
         .size(px(28.0 * UI_SCALE))
         .rounded_lg()
         .flex()
         .items_center()
         .justify_center()
         .text_color(rgb(theme.muted))
+        .active(|style| style.opacity(0.92))
         .hover(move |style| {
             style
                 .bg(rgb(theme.surface_hover))
