@@ -204,6 +204,10 @@ impl Engine {
 /// Run CEF's subprocess entry point before GPUI starts, as required for renderer
 /// and GPU child processes. `None` means this is the browser process.
 pub fn execute_subprocess() -> Option<i32> {
+    // CEF leaves its API version at -1 until this is called. cef-rs exposes
+    // the raw API hash function and expects the application to configure it
+    // before crossing the C++ wrapper boundary.
+    let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
     let args = Args::new();
     let mut app = LumenCefApp::new();
     let result = cef::execute_process(
