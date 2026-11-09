@@ -656,7 +656,7 @@ pub struct Engine {
     initialized: bool,
     args: Args,
     app: Option<cef::App>,
-    visible: Option<String>,
+    visible: Vec<String>,
     lifecycle: TabLifecycle,
     events: Arc<Mutex<EngineEvents>>,
     retired_images: Vec<Arc<RenderImage>>,
@@ -672,7 +672,7 @@ impl Engine {
             initialized: false,
             args: Args::new(),
             app: None,
-            visible: None,
+            visible: Vec::new(),
             lifecycle: TabLifecycle::default(),
             events: Arc::new(Mutex::new(EngineEvents::default())),
             retired_images: Vec::new(),
@@ -746,6 +746,10 @@ impl Engine {
     }
 
     pub fn take_dirty(&self, active_tab_id: &str) -> (bool, bool) {
+        self.take_dirty_for(&[active_tab_id])
+    }
+
+    pub fn take_dirty_for(&self, active_tab_ids: &[&str]) -> (bool, bool) {
         self.browsers
             .iter()
             .fold((false, false), |(dirty, root_dirty), (id, entry)| {
@@ -753,8 +757,9 @@ impl Engine {
                     entry.state.lock().ok().map_or((false, false), |mut state| {
                         let entry_dirty = state.dirty;
                         state.dirty = false;
-                        let entry_root_dirty = id == active_tab_id && state.root_dirty;
-                        if id == active_tab_id {
+                        let is_visible = active_tab_ids.contains(&id.as_str());
+                        let entry_root_dirty = is_visible && state.root_dirty;
+                        if is_visible {
                             state.root_dirty = false;
                         }
                         (entry_dirty, entry_root_dirty)
@@ -867,28 +872,46 @@ impl Engine {
     /// Marks only `tab_id` as visible. Hidden OSR browsers stop producing frames,
     /// so background tabs no longer burn CPU or trigger UI re-renders.
     pub fn set_visible(&mut self, tab_id: &str) {
-        if self.visible.as_deref() == Some(tab_id) || !self.browsers.contains_key(tab_id) {
+        self.set_visible_tabs(&[tab_id]);
+    }
+
+    pub fn set_visible_tabs(&mut self, tab_ids: &[&str]) {
+        let next = tab_ids
+            .iter()
+            .filter(|id| self.browsers.contains_key(**id))
+            .map(|id| (*id).to_owned())
+            .collect::<Vec<_>>();
+        if self.visible == next {
             return;
         }
         let now = Instant::now();
-        if let Some(previous) = self.visible.as_deref() {
-            self.lifecycle.deactivated(previous, now);
+        for previous in &self.visible {
+            if !next.contains(previous) {
+                self.lifecycle.deactivated(previous, now);
+            }
         }
         for (id, entry) in &self.browsers {
             if let Some(host) = entry.browser.host() {
-                host.was_hidden((id != tab_id) as i32);
+                host.was_hidden((!next.contains(id)) as i32);
             }
         }
-        self.visible = Some(tab_id.to_owned());
-        self.lifecycle.activated(tab_id, now);
+        for tab_id in &next {
+            if !self.visible.contains(tab_id) {
+                self.lifecycle.activated(tab_id, now);
+            }
+        }
+        self.visible = next;
     }
 
     pub fn hide_all(&mut self) {
-        let Some(previous) = self.visible.take() else {
+        if self.visible.is_empty() {
             return;
-        };
+        }
+        let previous = std::mem::take(&mut self.visible);
         let now = Instant::now();
-        self.lifecycle.deactivated(&previous, now);
+        for id in previous {
+            self.lifecycle.deactivated(&id, now);
+        }
         for entry in self.browsers.values() {
             if let Some(host) = entry.browser.host() {
                 host.was_hidden(1);
@@ -899,9 +922,7 @@ impl Engine {
     pub fn close_browser(&mut self, tab_id: &str) {
         self.close_browser_entry(tab_id);
         self.lifecycle.closed(tab_id);
-        if self.visible.as_deref() == Some(tab_id) {
-            self.visible = None;
-        }
+        self.visible.retain(|id| id != tab_id);
     }
 
     fn close_browser_entry(&mut self, tab_id: &str) {
@@ -924,7 +945,7 @@ impl Engine {
     pub fn discard_inactive(&mut self) -> Vec<String> {
         let expired = self
             .lifecycle
-            .discard_expired(Instant::now(), self.visible.as_deref());
+            .discard_expired_many(Instant::now(), &self.visible);
         for tab_id in &expired {
             self.close_browser_entry(tab_id);
         }

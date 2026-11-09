@@ -39,12 +39,20 @@ impl TabLifecycle {
         self.states.get(tab_id).copied()
     }
 
+    #[cfg(test)]
     pub fn discard_expired(&mut self, now: Instant, active: Option<&str>) -> Vec<String> {
+        self.discard_expired_many(
+            now,
+            &active.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+        )
+    }
+
+    pub fn discard_expired_many(&mut self, now: Instant, active: &[String]) -> Vec<String> {
         let expired: Vec<String> = self
             .last_active
             .iter()
             .filter(|(id, last)| {
-                active != Some(id.as_str())
+                !active.iter().any(|active_id| active_id == *id)
                     && now.saturating_duration_since(**last) >= DISCARD_AFTER
                     && self.states.get(*id) == Some(&TabState::Live)
             })
