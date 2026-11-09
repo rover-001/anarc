@@ -9,6 +9,8 @@ pub struct WebViewport {
     focus_handle: gpui_kit::FocusHandle,
     tab_id: String,
     sidebar_width: f32,
+    pane_offset: f32,
+    pane_index: usize,
     image: Option<Arc<gpui_kit::RenderImage>>,
     retired_images: Vec<Arc<gpui_kit::RenderImage>>,
     cursor: i32,
@@ -21,6 +23,8 @@ impl WebViewport {
             focus_handle,
             tab_id: String::new(),
             sidebar_width: 320.0,
+            pane_offset: 0.0,
+            pane_index: 0,
             image: None,
             retired_images: Vec::new(),
             cursor: 0,
@@ -34,21 +38,49 @@ impl WebViewport {
         image: Option<Arc<gpui_kit::RenderImage>>,
         cursor: i32,
         retired_images: Vec<Arc<gpui_kit::RenderImage>>,
+        pane_offset: f32,
+        pane_index: usize,
     ) {
         self.tab_id = tab_id;
         self.sidebar_width = effective_sidebar_width;
         self.image = image;
         self.cursor = cursor;
         self.retired_images.extend(retired_images);
+        self.pane_offset = pane_offset;
+        self.pane_index = pane_index;
+    }
+
+    pub fn set_content(
+        &mut self,
+        tab_id: String,
+        image: Option<Arc<gpui_kit::RenderImage>>,
+        cursor: i32,
+        retired_images: Vec<Arc<gpui_kit::RenderImage>>,
+    ) {
+        self.tab_id = tab_id;
+        self.image = image;
+        self.cursor = cursor;
+        self.retired_images.extend(retired_images);
     }
 }
 
+#[cfg(test)]
 fn browser_point(
     position: gpui_kit::Point<gpui_kit::Pixels>,
     scale: f32,
     sidebar_width: f32,
 ) -> (i32, i32) {
-    let x = ((f32::from(position.x) - sidebar_width - CONTENT_BEZEL_X).max(0.0) * scale) as i32;
+    browser_point_in_pane(position, scale, sidebar_width, 0.0)
+}
+
+fn browser_point_in_pane(
+    position: gpui_kit::Point<gpui_kit::Pixels>,
+    scale: f32,
+    sidebar_width: f32,
+    pane_offset: f32,
+) -> (i32, i32) {
+    let x = ((f32::from(position.x) - sidebar_width - CONTENT_BEZEL_X - pane_offset).max(0.0)
+        * scale) as i32;
     let y = ((f32::from(position.y) - 52.0).max(0.0) * scale) as i32;
     (x, y)
 }
@@ -65,6 +97,8 @@ impl Render for WebViewport {
         let tab_id_scroll = self.tab_id.clone();
         let tab_id_exit = self.tab_id.clone();
         let down_sidebar = self.sidebar_width;
+        let pane_offset = self.pane_offset;
+        let pane_index = self.pane_index;
         let up_sidebar = self.sidebar_width;
         let move_sidebar = self.sidebar_width;
         let scroll_sidebar = self.sidebar_width;
@@ -120,7 +154,16 @@ impl Render for WebViewport {
                 cx.listener(move |_, event: &gpui_kit::KeyDownEvent, window, cx| {
                     let handled = parent_key_down
                         .update(cx, |this, _| {
-                            if !this.browser_focused {
+                            if !this.browser_focused
+                                || this.focused_pane != pane_index
+                                || Lumen::is_app_shortcut_for_view(
+                                    &event.keystroke.key.to_lowercase(),
+                                    event.keystroke.modifiers.control
+                                        || event.keystroke.modifiers.platform,
+                                    event.keystroke.modifiers.shift,
+                                    event.keystroke.modifiers.alt,
+                                )
+                            {
                                 return false;
                             }
                             this.engine.send_key_down(&key_tab_id, event);
@@ -138,11 +181,13 @@ impl Render for WebViewport {
                     let handled = parent_key_up
                         .update(cx, |this, _| {
                             if !this.browser_focused
+                                || this.focused_pane != pane_index
                                 || Lumen::is_app_shortcut_for_view(
                                     &event.keystroke.key.to_lowercase(),
                                     event.keystroke.modifiers.control
                                         || event.keystroke.modifiers.platform,
                                     event.keystroke.modifiers.shift,
+                                    event.keystroke.modifiers.alt,
                                 )
                             {
                                 return false;
@@ -162,9 +207,15 @@ impl Render for WebViewport {
                 cx.listener(move |_, event: &gpui_kit::MouseDownEvent, window, cx| {
                     let parent = parent_down.clone();
                     let tab_id = tab_id_down.clone();
-                    let (x, y) = browser_point(event.position, window.scale_factor(), down_sidebar);
+                    let (x, y) = browser_point_in_pane(
+                        event.position,
+                        window.scale_factor(),
+                        down_sidebar,
+                        pane_offset,
+                    );
                     parent
                         .update(cx, |this, cx| {
+                            this.set_focused_pane(pane_index);
                             this.focus_browser(window, cx);
                             this.engine.send_mouse_click(
                                 &tab_id,
@@ -175,6 +226,7 @@ impl Render for WebViewport {
                                 event.click_count as i32,
                                 &event.modifiers,
                             );
+                            cx.notify();
                         })
                         .ok();
                 }),
@@ -182,7 +234,12 @@ impl Render for WebViewport {
             .on_mouse_up(
                 gpui_kit::MouseButton::Left,
                 cx.listener(move |_, event: &gpui_kit::MouseUpEvent, window, cx| {
-                    let (x, y) = browser_point(event.position, window.scale_factor(), up_sidebar);
+                    let (x, y) = browser_point_in_pane(
+                        event.position,
+                        window.scale_factor(),
+                        up_sidebar,
+                        pane_offset,
+                    );
                     parent_up
                         .update(cx, |this, _| {
                             this.engine.send_mouse_click(
@@ -193,7 +250,7 @@ impl Render for WebViewport {
                                 true,
                                 event.click_count as i32,
                                 &event.modifiers,
-                            )
+                            );
                         })
                         .ok();
                 }),
@@ -201,10 +258,16 @@ impl Render for WebViewport {
             .on_mouse_down(
                 gpui_kit::MouseButton::Right,
                 cx.listener(move |_, event: &gpui_kit::MouseDownEvent, window, cx| {
-                    let (x, y) =
-                        browser_point(event.position, window.scale_factor(), sidebar_right_down);
+                    let (x, y) = browser_point_in_pane(
+                        event.position,
+                        window.scale_factor(),
+                        sidebar_right_down,
+                        pane_offset,
+                    );
                     parent_right_down
-                        .update(cx, |this, _| {
+                        .update(cx, |this, cx| {
+                            this.set_focused_pane(pane_index);
+                            this.focus_browser(window, cx);
                             this.engine.send_mouse_click(
                                 &tab_id_right_down,
                                 x,
@@ -213,7 +276,8 @@ impl Render for WebViewport {
                                 false,
                                 event.click_count as i32,
                                 &event.modifiers,
-                            )
+                            );
+                            cx.notify();
                         })
                         .ok();
                 }),
@@ -221,8 +285,12 @@ impl Render for WebViewport {
             .on_mouse_up(
                 gpui_kit::MouseButton::Right,
                 cx.listener(move |_, event: &gpui_kit::MouseUpEvent, window, cx| {
-                    let (x, y) =
-                        browser_point(event.position, window.scale_factor(), sidebar_right_up);
+                    let (x, y) = browser_point_in_pane(
+                        event.position,
+                        window.scale_factor(),
+                        sidebar_right_up,
+                        pane_offset,
+                    );
                     parent_right_up
                         .update(cx, |this, _| {
                             this.engine.send_mouse_click(
@@ -241,10 +309,16 @@ impl Render for WebViewport {
             .on_mouse_down(
                 gpui_kit::MouseButton::Middle,
                 cx.listener(move |_, event: &gpui_kit::MouseDownEvent, window, cx| {
-                    let (x, y) =
-                        browser_point(event.position, window.scale_factor(), sidebar_middle_down);
+                    let (x, y) = browser_point_in_pane(
+                        event.position,
+                        window.scale_factor(),
+                        sidebar_middle_down,
+                        pane_offset,
+                    );
                     parent_middle_down
-                        .update(cx, |this, _| {
+                        .update(cx, |this, cx| {
+                            this.set_focused_pane(pane_index);
+                            this.focus_browser(window, cx);
                             this.engine.send_mouse_click(
                                 &tab_id_middle_down,
                                 x,
@@ -261,8 +335,12 @@ impl Render for WebViewport {
             .on_mouse_up(
                 gpui_kit::MouseButton::Middle,
                 cx.listener(move |_, event: &gpui_kit::MouseUpEvent, window, cx| {
-                    let (x, y) =
-                        browser_point(event.position, window.scale_factor(), sidebar_middle_up);
+                    let (x, y) = browser_point_in_pane(
+                        event.position,
+                        window.scale_factor(),
+                        sidebar_middle_up,
+                        pane_offset,
+                    );
                     parent_middle_up
                         .update(cx, |this, _| {
                             this.engine.send_mouse_click(
@@ -296,7 +374,12 @@ impl Render for WebViewport {
             )
             .on_mouse_move(
                 cx.listener(move |_, event: &gpui_kit::MouseMoveEvent, window, cx| {
-                    let (x, y) = browser_point(event.position, window.scale_factor(), move_sidebar);
+                    let (x, y) = browser_point_in_pane(
+                        event.position,
+                        window.scale_factor(),
+                        move_sidebar,
+                        pane_offset,
+                    );
                     parent_move
                         .update(cx, |this, _| {
                             this.engine
@@ -316,7 +399,8 @@ impl Render for WebViewport {
             .on_scroll(
                 cx.listener(move |_, event: &gpui_kit::ScrollEvent, window, cx| {
                     let scale = window.scale_factor();
-                    let (x, y) = browser_point(event.position, scale, scroll_sidebar);
+                    let (x, y) =
+                        browser_point_in_pane(event.position, scale, scroll_sidebar, pane_offset);
                     let (dx, dy) = match event.delta {
                         gpui_kit::ScrollDelta::Pixels(p) => {
                             (f32::from(p.x) * scale, f32::from(p.y) * scale)
@@ -357,5 +441,14 @@ mod tests {
         let position = gpui_kit::point(px(340.0), px(72.0));
         assert_eq!(browser_point(position, 2.0, 320.0), (32, 40));
         assert_eq!(browser_point(position, 1.0, 64.0), (272, 20));
+    }
+
+    #[test]
+    fn pane_coordinates_are_local_to_the_selected_viewport() {
+        let position = gpui_kit::point(px(520.0), px(72.0));
+        assert_eq!(
+            browser_point_in_pane(position, 2.0, 320.0, 100.0),
+            (192, 40)
+        );
     }
 }
