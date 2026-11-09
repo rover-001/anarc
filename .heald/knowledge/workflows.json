@@ -120,5 +120,20 @@
     "symbols": [],
     "guidance": "Resolved merge conflicts in src/main.rs and src/ui/sidebar.rs, preserving aligned sidebar row metrics and applying SpaceTheme colors. Offline cargo checks, rustfmt, diff check, and conflict marker scan passed. Wrote merge4 report; no commit.",
     "updated_at": "2026-11-09T14:10:40.545326727+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/sidebar.rs",
+      "src/ui/space_switcher.rs",
+      "src/ui/split_view.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Resolved merge5 conflicts in engine, main UI, and web viewport; preserved SpaceTheme rendering and splitfix sizing/resizing behavior. No conflict markers remain. Formatting and diff checks passed; compile/live verification not run per task instructions.",
+    "updated_at": "2026-11-09T14:12:37.218107820+00:00"
   }
 ]

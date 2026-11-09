@@ -38,3 +38,7 @@ Aligned sidebar tab, split, and new-tab rows with shared padding, icon, gap, and
 ## Session 2026-11-09T14:10:40.539612811+00:00
 
 Resolved merge conflicts in src/main.rs and src/ui/sidebar.rs, preserving aligned sidebar row metrics and applying SpaceTheme colors. Offline cargo checks, rustfmt, diff check, and conflict marker scan passed. Wrote merge4 report; no commit.
+
+## Session 2026-11-09T14:12:37.214071957+00:00
+
+Resolved merge5 conflicts in engine, main UI, and web viewport; preserved SpaceTheme rendering and splitfix sizing/resizing behavior. No conflict markers remain. Formatting and diff checks passed; compile/live verification not run per task instructions.
