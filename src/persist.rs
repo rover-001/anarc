@@ -12,8 +12,7 @@ pub struct AppState {
 }
 
 pub fn spaces_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(home).join(".config/lumen/spaces.json")
+    crate::paths::config_dir().join("spaces.json")
 }
 
 pub fn load_state() -> Option<AppState> {
