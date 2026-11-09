@@ -1441,6 +1441,20 @@ impl Engine {
         self.shield.blocked_counts()
     }
 
+    pub fn execute_script(&self, id: &str, script: &str) {
+        if let Some(frame) = self
+            .browsers
+            .get(id)
+            .and_then(|entry| entry.browser.main_frame())
+        {
+            frame.execute_java_script(
+                Some(&CefString::from(script)),
+                Some(&CefString::from("lumen://reader-mode")),
+                1,
+            );
+        }
+    }
+
     pub fn reload(&self, id: &str, ignore_cache: bool) {
         if let Some(entry) = self.browsers.get(id) {
             if ignore_cache {

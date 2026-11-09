@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Transaction, params};
 
 const MAX_RECENT_SEARCHES: usize = 10;
 
@@ -40,7 +40,13 @@ fn initialize_database(connection: &Connection) -> rusqlite::Result<()> {
             visit_time INTEGER NOT NULL,
             visit_count INTEGER NOT NULL DEFAULT 1
         );
-        CREATE INDEX IF NOT EXISTS history_visit_time ON history(visit_time DESC);",
+        CREATE INDEX IF NOT EXISTS history_visit_time ON history(visit_time DESC);
+        CREATE TABLE IF NOT EXISTS imported_visits (
+            url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            visit_time_ms INTEGER NOT NULL,
+            PRIMARY KEY(url, title, visit_time_ms)
+        );",
     )
 }
 
@@ -68,6 +74,52 @@ pub fn record_visit(url: &str, title: &str) {
         return;
     };
     let _ = record_visit_in(&connection, url, title);
+}
+
+/// Merge imported browser visits into the same SQLite history used by search.
+/// The source identity table makes importing the same profile idempotent.
+pub fn import_visits<I>(visits: I) -> rusqlite::Result<usize>
+where
+    I: IntoIterator<Item = (String, String, i64)>,
+{
+    let mut connection = open_database()?;
+    let transaction = connection.transaction()?;
+    let imported = import_visits_in(&transaction, visits)?;
+    transaction.commit()?;
+    Ok(imported)
+}
+
+fn import_visits_in<I>(
+    transaction: &Transaction<'_>,
+    visits: I,
+) -> rusqlite::Result<usize>
+where
+    I: IntoIterator<Item = (String, String, i64)>,
+{
+    let mut imported = 0;
+    for (url, title, visit_time_ms) in visits {
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            continue;
+        }
+        let inserted = transaction.execute(
+            "INSERT OR IGNORE INTO imported_visits(url, title, visit_time_ms)
+             VALUES (?1, ?2, ?3)",
+            params![url, title, visit_time_ms],
+        )?;
+        if inserted == 0 {
+            continue;
+        }
+        transaction.execute(
+            "INSERT INTO history(url, title, visit_time, visit_count) VALUES (?1, ?2, ?3, 1)
+             ON CONFLICT(url) DO UPDATE SET
+                title = CASE WHEN excluded.title != '' THEN excluded.title ELSE history.title END,
+                visit_time = MAX(history.visit_time, excluded.visit_time),
+                visit_count = history.visit_count + 1",
+            params![url, title, visit_time_ms / 1_000],
+        )?;
+        imported += 1;
+    }
+    Ok(imported)
 }
 
 fn record_visit_in(connection: &Connection, url: &str, title: &str) -> rusqlite::Result<()> {
@@ -176,6 +228,29 @@ mod tests {
         assert_eq!(by_url[0].title, "Example One Updated");
         let ranked = search_in(&connection, "https://", 10);
         assert_eq!(ranked[0].url, "https://example.com/one");
+    }
+
+    #[test]
+    fn imported_visits_merge_into_search_history_idempotently() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_database(&connection).unwrap();
+        let visits = vec![
+            ("https://example.com/".to_owned(), "Example".to_owned(), 1_000),
+            ("https://example.com/".to_owned(), "Example".to_owned(), 1_000),
+            ("https://example.com/".to_owned(), "Example".to_owned(), 2_000),
+        ];
+        let transaction = connection.transaction().unwrap();
+        assert_eq!(import_visits_in(&transaction, visits.clone()).unwrap(), 2);
+        transaction.commit().unwrap();
+
+        let transaction = connection.transaction().unwrap();
+        assert_eq!(import_visits_in(&transaction, visits).unwrap(), 0);
+        transaction.commit().unwrap();
+
+        let found = search_in(&connection, "example.com", 10);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].visit_count, 2);
+        assert_eq!(found[0].visit_time, 2);
     }
 }
 
