@@ -1679,6 +1679,8 @@ impl Render for Lumen {
                     let active_group = active_tab_id
                         .as_ref()
                         .is_some_and(|id| id == &pair.first || id == &pair.second);
+                    crate::engine::log_favicon_row_rendered(&first.0, first.2.is_some());
+                    crate::engine::log_favicon_row_rendered(&second.0, second.2.is_some());
                     let pair_for_focus = pair.clone();
                     let group_id = pair.first.clone();
                     let mut group_row = div()
@@ -1717,15 +1719,20 @@ impl Render for Lumen {
                                 .child(
                                     div()
                                         .id("split-group-toggle")
-                                        .w(px(20.0 * UI_SCALE))
-                                        .h(px(20.0 * UI_SCALE))
+                                        .size(px(16.0 * UI_SCALE))
                                         .flex()
                                         .items_center()
                                         .justify_center()
                                         .text_color(rgb(0xa6a9b1))
+                                        .opacity(if expanded { 1.0 } else { 0.0 })
+                                        .group_hover(group_key.clone(), |style| style.opacity(1.0))
                                         .child(
-                                            Icon::new(IconName::ChevronDown)
-                                                .size(px(14.0 * UI_SCALE)),
+                                            Icon::new(if expanded {
+                                                IconName::ChevronUp
+                                            } else {
+                                                IconName::ChevronDown
+                                            })
+                                            .size(px(14.0 * UI_SCALE)),
                                         )
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.split_group_expanded = !this.split_group_expanded;
@@ -1764,6 +1771,7 @@ impl Render for Lumen {
                             let close_id = member_id.clone();
                             let pane = pane_index;
                             let selected_member = active_tab_id.as_ref() == Some(&member_id);
+                            crate::engine::log_favicon_row_rendered(&member.0, member.2.is_some());
                             let member_row = div()
                                 .id(format!("split-member-{member_id}"))
                                 .w_full()
@@ -1802,14 +1810,19 @@ impl Render for Lumen {
                                         .child(
                                             div()
                                                 .id(format!("close-member-{member_id}"))
+                                                .size(px(16.0 * UI_SCALE))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
                                                 .opacity(0.0)
                                                 .group_hover(format!("tab-row-{member_id}"), |s| {
                                                     s.opacity(1.0)
                                                 })
-                                                .child(tab_list::trailing_icon(
-                                                    IconName::X,
-                                                    0xa6a9b1,
-                                                ))
+                                                .text_color(rgb(0xa6a9b1))
+                                                .child(
+                                                    Icon::new(IconName::X)
+                                                        .size(px(14.0 * UI_SCALE)),
+                                                )
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.close_tab_by_id(&close_id);
                                                     cx.stop_propagation();
@@ -1858,6 +1871,7 @@ impl Render for Lumen {
                 {
                     continue;
                 }
+                crate::engine::log_favicon_row_rendered(id, favicon.is_some());
                 let tab_id = id.clone();
                 let close_id = tab_id.clone();
                 let current_space_id = active_space_id.clone();
@@ -1903,9 +1917,14 @@ impl Render for Lumen {
                                 .child(
                                     div()
                                         .id(format!("close-tab-{id}"))
+                                        .size(px(16.0 * UI_SCALE))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
                                         .opacity(0.0)
                                         .group_hover(row_group.clone(), |s| s.opacity(1.0))
-                                        .child(tab_list::trailing_icon(IconName::X, 0xa6a9b1))
+                                        .text_color(rgb(0xa6a9b1))
+                                        .child(Icon::new(IconName::X).size(px(14.0 * UI_SCALE)))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.close_tab_by_id(&close_id);
                                             cx.stop_propagation();

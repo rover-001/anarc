@@ -48,6 +48,16 @@ fn origin_favicon_url(page_url: &str) -> Option<String> {
     Some(format!("{scheme}://{authority}/favicon.ico"))
 }
 
+fn favicon_debug(message: std::fmt::Arguments<'_>) {
+    if std::env::var_os("LUMEN_DEBUG_FAVICON").is_some_and(|value| value == "1") {
+        eprintln!("Lumen favicon: {message}");
+    }
+}
+
+pub fn log_favicon_row_rendered(tab_id: &str, has_image: bool) {
+    favicon_debug(format_args!("row rendered tab={tab_id} image={has_image}"));
+}
+
 pub fn frame_rate_for_refresh(refresh_interval: Option<std::time::Duration>) -> i32 {
     refresh_interval
         .filter(|interval| !interval.is_zero())
@@ -342,32 +352,51 @@ cef::wrap_context_menu_handler! {
 cef::wrap_download_image_callback! {
     struct LumenFaviconCallback {
         shared: Arc<Mutex<BrowserSharedState>>,
+        tab_id: String,
+        wake: async_channel::Sender<()>,
         preferred: bool,
     }
 
     impl DownloadImageCallback {
         fn on_download_image_finished(
             &self,
-            _image_url: Option<&CefString>,
+            image_url: Option<&CefString>,
             http_status_code: i32,
             favicon_image: Option<&mut Image>,
         ) {
+            favicon_debug(format_args!(
+                "download finished tab={} url={} status={http_status_code}",
+                self.tab_id,
+                image_url.map(ToString::to_string).unwrap_or_default()
+            ));
             if !(200..300).contains(&http_status_code) {
                 return;
             }
             let Some(png) = favicon_image.and_then(|image| image.as_png(1.0, 1, None, None)) else {
+                favicon_debug(format_args!("no PNG image for tab={}", self.tab_id));
                 return;
             };
             let size = png.size();
+            favicon_debug(format_args!("PNG bytes tab={} size={size}", self.tab_id));
             if size == 0 || size > 512 * 1024 {
                 return;
             }
             let mut bytes = vec![0; size];
             let copied = png.data(Some(&mut bytes), 0).min(size);
             bytes.truncate(copied);
-            let Ok(decoded) = image::load_from_memory(&bytes) else {
-                return;
+            let decoded = match image::load_from_memory(&bytes) {
+                Ok(decoded) => decoded,
+                Err(error) => {
+                    favicon_debug(format_args!("decode failed tab={}: {error}", self.tab_id));
+                    return;
+                }
             };
+            favicon_debug(format_args!(
+                "decoded tab={} dimensions={}x{}",
+                self.tab_id,
+                decoded.width(),
+                decoded.height()
+            ));
             let frame = image::Frame::new(decoded.to_rgba8());
             let render_image = Arc::new(RenderImage::new(smallvec::smallvec![frame]));
             if let Ok(mut state) = self.shared.lock() {
@@ -375,6 +404,10 @@ cef::wrap_download_image_callback! {
                     state.favicon = Some(render_image);
                     state.dirty = true;
                     state.root_dirty = true;
+                    favicon_debug(format_args!("stored image for tab={}", self.tab_id));
+                    let _ = self.wake.try_send(());
+                } else {
+                    favicon_debug(format_args!("kept existing image for tab={}", self.tab_id));
                 }
             }
         }
@@ -477,6 +510,8 @@ cef::wrap_render_handler! {
 cef::wrap_display_handler! {
     struct LumenDisplayHandler {
         shared: Arc<Mutex<BrowserSharedState>>,
+        tab_id: String,
+        ui_update_wake: async_channel::Sender<()>,
     }
 
     impl DisplayHandler {
@@ -492,12 +527,21 @@ cef::wrap_display_handler! {
                 .into_iter()
                 .find(|url| url.starts_with("http://") || url.starts_with("https://"))
             else {
+                favicon_debug(format_args!("no HTTP icon URL for tab={}", self.tab_id));
                 return;
             };
+            favicon_debug(format_args!("URL found tab={} url={url}", self.tab_id));
             let Some(host) = browser.and_then(|browser| browser.host()) else {
+                favicon_debug(format_args!("no browser host for icon tab={}", self.tab_id));
                 return;
             };
-            let mut callback = LumenFaviconCallback::new(self.shared.clone(), true);
+            let mut callback = LumenFaviconCallback::new(
+                self.shared.clone(),
+                self.tab_id.clone(),
+                self.ui_update_wake.clone(),
+                true,
+            );
+            favicon_debug(format_args!("download started tab={} url={url}", self.tab_id));
             host.download_image(
                 Some(&CefString::from(url.as_str())),
                 1,
@@ -567,10 +611,20 @@ cef::wrap_display_handler! {
                     state.dirty = true;
                     state.root_dirty = true;
                 }
+                let _ = self.ui_update_wake.try_send(());
                 if let Some(favicon_url) = origin_favicon_url(&page_url)
                     && let Some(host) = browser.and_then(|browser| browser.host())
                 {
-                    let mut callback = LumenFaviconCallback::new(self.shared.clone(), false);
+                    let mut callback = LumenFaviconCallback::new(
+                        self.shared.clone(),
+                        self.tab_id.clone(),
+                        self.ui_update_wake.clone(),
+                        false,
+                    );
+                    favicon_debug(format_args!(
+                        "fallback download started tab={} url={favicon_url}",
+                        self.tab_id
+                    ));
                     host.download_image(
                         Some(&CefString::from(favicon_url.as_str())),
                         1,
@@ -578,6 +632,11 @@ cef::wrap_display_handler! {
                         0,
                         Some(&mut callback),
                     );
+                } else {
+                    favicon_debug(format_args!(
+                        "no HTTP origin fallback for tab={} page={page_url}",
+                        self.tab_id
+                    ));
                 }
             }
         }
@@ -1020,7 +1079,11 @@ impl Engine {
             }));
             let render_handler =
                 LumenRenderHandler::new(shared.clone(), self.ui_update_wake.clone());
-            let display_handler = LumenDisplayHandler::new(shared.clone());
+            let display_handler = LumenDisplayHandler::new(
+                shared.clone(),
+                id.to_owned(),
+                self.ui_update_wake.clone(),
+            );
             let life_span_handler = LumenLifeSpanHandler::new(
                 self.events.clone(),
                 space_id.to_owned(),
@@ -1728,6 +1791,20 @@ mod tests {
             frame_rate_for_refresh(Some(std::time::Duration::from_millis(4))),
             120
         );
+    }
+
+    #[test]
+    fn origin_favicon_url_uses_only_http_origins() {
+        assert_eq!(
+            origin_favicon_url("https://www.google.com/search?q=lumen"),
+            Some("https://www.google.com/favicon.ico".to_owned())
+        );
+        assert_eq!(
+            origin_favicon_url("http://localhost:8080/page"),
+            Some("http://localhost:8080/favicon.ico".to_owned())
+        );
+        assert_eq!(origin_favicon_url("about:blank"), None);
+        assert_eq!(origin_favicon_url("file:///tmp/page.html"), None);
     }
 
     #[test]
