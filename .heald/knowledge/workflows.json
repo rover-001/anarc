@@ -52,5 +52,17 @@
     "symbols": [],
     "guidance": "Round 3 fixed CEF cache nesting: root_cache_path uses LUMEN_DATA_DIR/cef and per-space RequestContext cache paths use root/profiles/<space_id>. Updated path tests and README Testing guidance; LUMEN_CACHE_DIR remains for non-profile caches. cargo test --offline passed (29), cargo build --release --offline passed, fmt check passed. Round 3 appended to integrate-report.md. Live cache persistence remains unverified.",
     "updated_at": "2026-11-09T12:20:58.244478042+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/paths.rs",
+      "src/stats.rs"
+    ],
+    "symbols": [],
+    "guidance": "Implemented Phase 2 shield: adblock-backed CEF request filtering with persisted per-site exceptions and per-tab stats; HTTPS-first GET navigation with one-time per-host fallback. Verified 34 tests, release build, benchmark, and isolated live blocking run. Parent owns commit; live HTTPS failure fallback remains unverified.",
+    "updated_at": "2026-11-09T12:58:15.092506507+00:00"
   }
 ]

@@ -1,0 +1,10 @@
+! Title: Lumen starter filters
+! Description: Small, self-authored EasyList-format starter rules for Lumen.
+! License: CC0-1.0; rules authored for this project, no upstream list text included.
+||doubleclick.net^
+||googlesyndication.com^
+||googleadservices.com^
+||adnxs.com^
+||adsrvr.org^
+||adsafeprotected.com^
+||scorecardresearch.com^
