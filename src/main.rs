@@ -1686,26 +1686,31 @@ impl Render for Lumen {
                     let mut group_row = div()
                         .id("split-tab-group")
                         .w_full()
+                        .h(px(visual::TAB_ROW_HEIGHT))
                         .cursor_pointer()
+                        .border_l_2()
+                        .border_color(rgb(if active_group {
+                            selected_color
+                        } else {
+                            0x191a1f
+                        }))
                         .group(group_key.clone())
                         .child(
                             div()
+                                .w_full()
+                                .h_full()
                                 .flex()
                                 .items_center()
-                                .gap_2()
-                                .px_3()
-                                .py_2()
+                                .gap(px(visual::SIDEBAR_ROW_GAP))
+                                .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                 .rounded_lg()
                                 .when(active_group, |row| {
-                                    row.border_l_2()
-                                        .border_color(rgb(selected_color))
-                                        .bg(rgb(visual::tint_rgb(0x191a1f, selected_color, 0.18)))
+                                    row.bg(rgb(visual::tint_rgb(0x191a1f, selected_color, 0.18)))
                                 })
                                 .when(!active_group, |row| {
                                     row.bg(rgb(0x30343c)).hover(|style| style.bg(rgb(0x2a2d34)))
                                 })
-                                .child(tab_list::favicon(first.2.clone()))
-                                .child(tab_list::favicon(second.2.clone()))
+                                .child(tab_list::split_favicon(first.2.clone(), second.2.clone()))
                                 .child(
                                     div()
                                         .flex_1()
@@ -1778,21 +1783,28 @@ impl Render for Lumen {
                                 .h(px(visual::TAB_ROW_HEIGHT))
                                 .cursor_pointer()
                                 .group(format!("tab-row-{member_id}"))
-                                .when(selected_member, |row| {
-                                    row.rounded_lg()
-                                        .border_l_2()
-                                        .border_color(rgb(selected_color))
-                                        .bg(rgb(visual::tint_rgb(0x191a1f, selected_color, 0.18)))
-                                })
+                                .border_l_2()
+                                .border_color(rgb(if selected_member {
+                                    selected_color
+                                } else {
+                                    0x191a1f
+                                }))
                                 .child(
                                     div()
+                                        .w_full()
+                                        .h_full()
                                         .flex()
                                         .items_center()
-                                        .gap_2()
-                                        .ml_4()
-                                        .px_2()
-                                        .py_2()
+                                        .gap(px(visual::SIDEBAR_ROW_GAP))
+                                        .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                         .rounded_lg()
+                                        .when(selected_member, |row| {
+                                            row.bg(rgb(visual::tint_rgb(
+                                                0x191a1f,
+                                                selected_color,
+                                                0.18,
+                                            )))
+                                        })
                                         .when(!selected_member, |row| {
                                             row.hover(|style| style.bg(rgb(0x2a2d34)))
                                         })
@@ -1884,22 +1896,21 @@ impl Render for Lumen {
                         .w_full()
                         .h(px(visual::TAB_ROW_HEIGHT))
                         .cursor_pointer()
-                        .when(selected, |row| {
-                            row.rounded_lg()
-                                .px(px(UI_SCALE))
-                                .border_l_2()
-                                .border_color(rgb(selected_color))
-                                .bg(rgb(visual::tint_rgb(0x191a1f, selected_color, 0.18)))
-                        })
+                        .border_l_2()
+                        .border_color(rgb(if selected { selected_color } else { 0x191a1f }))
                         .group(row_group.clone())
                         .child(
                             div()
+                                .w_full()
+                                .h_full()
                                 .flex()
                                 .items_center()
-                                .gap_2()
-                                .px_3()
-                                .py_2()
+                                .gap(px(visual::SIDEBAR_ROW_GAP))
+                                .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                 .rounded_lg()
+                                .when(selected, |row| {
+                                    row.bg(rgb(visual::tint_rgb(0x191a1f, selected_color, 0.18)))
+                                })
                                 .when(!selected, |row| {
                                     row.bg(rgb(0x202227)).hover(|style| style.bg(rgb(0x2a2d34)))
                                 })
@@ -1968,7 +1979,10 @@ impl Render for Lumen {
                 div()
                     .id("new-tab-action")
                     .w_full()
+                    .h(px(visual::TAB_ROW_HEIGHT))
                     .cursor_pointer()
+                    .border_l_2()
+                    .border_color(rgb(0x191a1f))
                     .child(sidebar::new_tab_button())
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.add_tab();

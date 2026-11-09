@@ -5,6 +5,10 @@ pub const UI_SCALE: f32 = 0.85;
 pub const TOPBAR_HEIGHT: f32 = 52.0 * UI_SCALE;
 pub const ADDRESS_BAR_HEIGHT: f32 = 36.0 * UI_SCALE;
 pub const TAB_ROW_HEIGHT: f32 = 36.0 * UI_SCALE;
+/// Shared horizontal geometry for tab, split, and new-tab rows.
+pub const SIDEBAR_ROW_PADDING_X: f32 = 12.0;
+pub const SIDEBAR_ROW_ICON_SIZE: f32 = 16.0 * UI_SCALE;
+pub const SIDEBAR_ROW_GAP: f32 = 8.0;
 
 pub const DEFAULT_PAGE_ZOOM_FACTOR: f64 = 1.0;
 
@@ -63,5 +67,12 @@ mod tests {
     #[test]
     fn viewport_origin_matches_scaled_topbar_height() {
         assert_eq!(TOPBAR_HEIGHT, 52.0 * UI_SCALE);
+    }
+
+    #[test]
+    fn sidebar_rows_share_icon_and_spacing_metrics() {
+        assert_eq!(SIDEBAR_ROW_PADDING_X, 12.0);
+        assert_eq!(SIDEBAR_ROW_ICON_SIZE, 16.0 * UI_SCALE);
+        assert_eq!(SIDEBAR_ROW_GAP, 8.0);
     }
 }
