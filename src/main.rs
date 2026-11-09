@@ -5,8 +5,8 @@ mod lifecycle;
 mod model;
 mod paths;
 mod persist;
-mod shield;
 mod reader;
+mod shield;
 mod stats;
 mod ui;
 
@@ -75,6 +75,11 @@ struct SpaceContextMenu {
     space_id: String,
 }
 
+struct TabContextMenu {
+    tab_id: String,
+    showing_split_targets: bool,
+}
+
 pub const SIDEBAR_MIN_WIDTH: f32 = 160.0;
 pub const SIDEBAR_MAX_WIDTH: f32 = 320.0;
 pub const SIDEBAR_COLLAPSED_WIDTH: f32 = 64.0;
@@ -121,6 +126,8 @@ pub(crate) struct Lumen {
     split_resizing: bool,
     space_modal: Option<SpaceModal>,
     space_context_menu: Option<SpaceContextMenu>,
+    tab_context_menu: Option<TabContextMenu>,
+    split_group_expanded: bool,
     recently_closed_tabs: Vec<(String, Tab)>,
     browser_focused: bool,
     #[cfg(not(test))]
@@ -356,6 +363,8 @@ impl Lumen {
             engine,
             space_modal: None,
             space_context_menu: None,
+            tab_context_menu: None,
+            split_group_expanded: false,
             recently_closed_tabs: Vec::new(),
             browser_focused: false,
             #[cfg(not(test))]
@@ -516,6 +525,85 @@ impl Lumen {
 
     fn close_active_tab(&mut self) {
         let active_id = self.focused_tab_id().to_owned();
+        if active_id.is_empty() || !self.close_tab_by_id(&active_id) {
+            self.add_tab();
+        }
+    }
+
+    fn close_tab_by_id(&mut self, tab_id: &str) -> bool {
+        let Some(space) = self
+            .spaces
+            .iter_mut()
+            .find(|space| space.id == self.active_space)
+        else {
+            return false;
+        };
+        let Some(index) = space.tabs.iter().position(|tab| tab.id == tab_id) else {
+            return false;
+        };
+        let was_active = space.active.as_deref() == Some(tab_id);
+        let split_other = space.split.as_ref().and_then(|pair| {
+            if pair.first == tab_id {
+                Some(pair.second.clone())
+            } else if pair.second == tab_id {
+                Some(pair.first.clone())
+            } else {
+                None
+            }
+        });
+        if split_other.is_some() {
+            space.split = None;
+            self.focused_pane = 0;
+        }
+        self.engine.close_browser(tab_id);
+        let closed = space.tabs.remove(index);
+        self.recently_closed_tabs.push((space.id.clone(), closed));
+        if space.tabs.is_empty() {
+            let id = next_tab_id(space);
+            space.tabs.push(Tab::new(&id, "New tab", "about:blank"));
+            space.active = Some(id);
+        } else if let Some(other) = split_other {
+            space.active = Some(other);
+        } else if was_active {
+            space.active = Some(space.tabs[index.min(space.tabs.len() - 1)].id.clone());
+        }
+        self.save_state();
+        true
+    }
+
+    fn split_tabs(&mut self, first: &str, second: &str) -> bool {
+        if first == second
+            || !self.active_space().tabs.iter().any(|tab| tab.id == first)
+            || !self.active_space().tabs.iter().any(|tab| tab.id == second)
+        {
+            return false;
+        }
+        self.active_space_mut().split = Some(SplitPair {
+            first: first.to_owned(),
+            second: second.to_owned(),
+        });
+        self.focused_pane = 0;
+        self.split_ratio = 0.5;
+        self.save_state();
+        true
+    }
+
+    fn choose_split_target(&mut self, target_id: &str) -> bool {
+        let Some(menu) = self.tab_context_menu.as_ref() else {
+            return false;
+        };
+        if !menu.showing_split_targets {
+            return false;
+        }
+        let first_id = menu.tab_id.clone();
+        let split = self.split_tabs(&first_id, target_id);
+        if split {
+            self.tab_context_menu = None;
+        }
+        split
+    }
+
+    fn duplicate_tab(&mut self, tab_id: &str) {
         let Some(space) = self
             .spaces
             .iter_mut()
@@ -523,33 +611,16 @@ impl Lumen {
         else {
             return;
         };
-        if active_id.is_empty() {
-            self.add_tab();
-            return;
-        }
-        if space
-            .split
-            .as_ref()
-            .is_some_and(|pair| pair.first == active_id || pair.second == active_id)
-        {
-            space.split = None;
-            self.focused_pane = 0;
-        }
-        let Some(index) = space.tabs.iter().position(|tab| tab.id == active_id) else {
-            self.add_tab();
+        let Some(source) = space.tabs.iter().find(|tab| tab.id == tab_id).cloned() else {
             return;
         };
-        self.engine.close_browser(&active_id);
-        let closed = space.tabs.remove(index);
-        self.recently_closed_tabs.push((space.id.clone(), closed));
-        if space.tabs.is_empty() {
-            let id = next_tab_id(space);
-            space.tabs.push(Tab::new(&id, "New tab", "about:blank"));
-            space.active = Some(id);
-        } else {
-            let next = index.min(space.tabs.len() - 1);
-            space.active = Some(space.tabs[next].id.clone());
-        }
+        let id = next_tab_id(space);
+        let mut duplicate = source;
+        duplicate.id = id.clone();
+        duplicate.state = TabState::Discarded;
+        space.tabs.push(duplicate);
+        space.active = Some(id);
+        self.tab_context_menu = None;
         self.save_state();
     }
 
@@ -1580,16 +1651,200 @@ impl Render for Lumen {
                     ),
                 );
 
+            if let Some(pair) = &split_pair {
+                let first = tabs.iter().find(|(id, _, _)| id == &pair.first);
+                let second = tabs.iter().find(|(id, _, _)| id == &pair.second);
+                if let (Some(first), Some(second)) = (first, second) {
+                    let group_name = tab_list::group_label(&first.1, &second.1);
+                    let group_key = format!("split-{}-{}", pair.first, pair.second);
+                    let expanded = self.split_group_expanded;
+                    let pair_for_focus = pair.clone();
+                    let group_id = pair.first.clone();
+                    let mut group_row = div()
+                        .id("split-tab-group")
+                        .w_full()
+                        .cursor_pointer()
+                        .group(group_key.clone())
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .px_3()
+                                .py_2()
+                                .rounded_lg()
+                                .bg(rgb(0x30343c))
+                                .hover(|style| style.bg(rgb(0x2a2d34)))
+                                .child(tab_list::favicon(first.2.clone()))
+                                .child(tab_list::favicon(second.2.clone()))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .text_sm()
+                                        .text_color(rgb(0xf0f1f4))
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .text_ellipsis()
+                                        .child(group_name),
+                                )
+                                .child(
+                                    div()
+                                        .id("split-group-toggle")
+                                        .w(px(20.0))
+                                        .h(px(20.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(rgb(0xa6a9b1))
+                                        .child(Icon::new(IconName::ChevronDown).size(px(14.0)))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.split_group_expanded = !this.split_group_expanded;
+                                            cx.stop_propagation();
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.focused_pane = 0;
+                            this.active_space_mut().active = Some(pair_for_focus.first.clone());
+                            cx.notify();
+                        }))
+                        .on_mouse_down(
+                            gpui_kit::MouseButton::Right,
+                            cx.listener(move |this, _, _, cx| {
+                                this.tab_context_menu = Some(TabContextMenu {
+                                    tab_id: group_id.clone(),
+                                    showing_split_targets: false,
+                                });
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        );
+                    if expanded {
+                        for (pane_index, member) in [first, second].into_iter().enumerate() {
+                            let member_id = member.0.clone();
+                            let close_id = member_id.clone();
+                            let pane = pane_index;
+                            let member_row = div()
+                                .id(format!("split-member-{member_id}"))
+                                .w_full()
+                                .cursor_pointer()
+                                .group(format!("tab-row-{member_id}"))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .ml_4()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_lg()
+                                        .hover(|style| style.bg(rgb(0x2a2d34)))
+                                        .child(tab_list::favicon(member.2.clone()))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .text_sm()
+                                                .text_color(rgb(0xa6a9b1))
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .text_ellipsis()
+                                                .child(member.1.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .id(format!("close-member-{member_id}"))
+                                                .opacity(0.0)
+                                                .group_hover(format!("tab-row-{member_id}"), |s| {
+                                                    s.opacity(1.0)
+                                                })
+                                                .child(tab_list::trailing_icon(
+                                                    IconName::X,
+                                                    0xa6a9b1,
+                                                ))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.close_tab_by_id(&close_id);
+                                                    cx.stop_propagation();
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.set_focused_pane(pane);
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }))
+                                .on_mouse_down(
+                                    gpui_kit::MouseButton::Right,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.tab_context_menu = Some(TabContextMenu {
+                                            tab_id: member_id.clone(),
+                                            showing_split_targets: false,
+                                        });
+                                        cx.stop_propagation();
+                                        cx.notify();
+                                    }),
+                                );
+                            group_row = group_row.child(member_row);
+                        }
+                    }
+                    sidebar_content = sidebar_content.child(group_row);
+                }
+            }
+
             for (id, title, favicon) in &tabs {
+                if split_pair
+                    .as_ref()
+                    .is_some_and(|pair| id == &pair.first || id == &pair.second)
+                {
+                    continue;
+                }
                 let tab_id = id.clone();
+                let close_id = tab_id.clone();
                 let current_space_id = active_space_id.clone();
                 let selected = active_tab_id.as_ref() == Some(id);
+                let row_group = format!("tab-row-{id}");
+                let context_tab = id.clone();
                 sidebar_content = sidebar_content.child(
                     div()
                         .id(format!("tab-{id}"))
                         .w_full()
                         .cursor_pointer()
-                        .child(tab_list::tab(title, selected, favicon.clone()))
+                        .group(row_group.clone())
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .px_3()
+                                .py_2()
+                                .rounded_lg()
+                                .bg(rgb(if selected { 0x30343c } else { 0x202227 }))
+                                .hover(|style| style.bg(rgb(0x2a2d34)))
+                                .child(tab_list::favicon(favicon.clone()))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .text_sm()
+                                        .text_color(rgb(if selected { 0xf0f1f4 } else { 0xa6a9b1 }))
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .text_ellipsis()
+                                        .child(title.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .id(format!("close-tab-{id}"))
+                                        .opacity(0.0)
+                                        .group_hover(row_group.clone(), |s| s.opacity(1.0))
+                                        .child(tab_list::trailing_icon(IconName::X, 0xa6a9b1))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.close_tab_by_id(&close_id);
+                                            cx.stop_propagation();
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(space) = this
                                 .spaces
@@ -1599,7 +1854,18 @@ impl Render for Lumen {
                                 space.active = Some(tab_id.clone());
                             }
                             cx.notify();
-                        })),
+                        }))
+                        .on_mouse_down(
+                            gpui_kit::MouseButton::Right,
+                            cx.listener(move |this, _, _, cx| {
+                                this.tab_context_menu = Some(TabContextMenu {
+                                    tab_id: context_tab.clone(),
+                                    showing_split_targets: false,
+                                });
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        ),
                 );
             }
 
@@ -1927,13 +2193,10 @@ impl Render for Lumen {
                                     .size_full()
                                     .flex()
                                     .child(
-                                        div()
-                                            .h_full()
-                                            .w(px(left_width))
-                                            .child(
-                                                AnyView::from(self.web_viewport.clone())
-                                                    .cached(StyleRefinement::default().size_full()),
-                                            ),
+                                        div().h_full().w(px(left_width)).child(
+                                            AnyView::from(self.web_viewport.clone())
+                                                .cached(StyleRefinement::default().size_full()),
+                                        ),
                                     )
                                     .child(
                                         div()
@@ -1952,13 +2215,10 @@ impl Render for Lumen {
                                             ),
                                     )
                                     .child(
-                                        div()
-                                            .h_full()
-                                            .w(px(right_width))
-                                            .child(
-                                                AnyView::from(self.second_web_viewport.clone())
-                                                    .cached(StyleRefinement::default().size_full()),
-                                            ),
+                                        div().h_full().w(px(right_width)).child(
+                                            AnyView::from(self.second_web_viewport.clone())
+                                                .cached(StyleRefinement::default().size_full()),
+                                        ),
                                     )
                             } else if active_tab_url == "lumen://welcome"
                                 || active_tab_url == "about:blank"
@@ -1966,13 +2226,10 @@ impl Render for Lumen {
                             {
                                 div().id("empty-space").size_full()
                             } else {
-                                div()
-                                    .id("web-viewport-entity")
-                                    .size_full()
-                                    .child(
-                                        AnyView::from(self.web_viewport.clone())
-                                            .cached(StyleRefinement::default().size_full()),
-                                    )
+                                div().id("web-viewport-entity").size_full().child(
+                                    AnyView::from(self.web_viewport.clone())
+                                        .cached(StyleRefinement::default().size_full()),
+                                )
                             })
                     }),
             );
@@ -2084,6 +2341,16 @@ impl Render for Lumen {
                 let key = event.keystroke.key.to_lowercase();
                 let modifiers = &event.keystroke.modifiers;
                 let browser_modifier = modifiers.control || modifiers.platform;
+                if !event.is_held
+                    && matches!(key.as_str(), "escape" | "esc")
+                    && this.tab_context_menu.is_some()
+                {
+                    this.tab_context_menu = None;
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
                 if browser_modifier && key == "k" && !modifiers.shift && !event.is_held {
                     this.open_command_palette(window, cx);
                     window.prevent_default();
@@ -2346,6 +2613,267 @@ impl Render for Lumen {
 
                 root = root.child(ctx_menu);
             }
+        }
+
+        if let Some(menu) = &self.tab_context_menu {
+            let target_id = menu.tab_id.clone();
+            let target_tab = self
+                .active_space()
+                .tabs
+                .iter()
+                .find(|tab| tab.id == target_id);
+            let is_split = self
+                .active_space()
+                .split
+                .as_ref()
+                .is_some_and(|pair| pair.first == target_id || pair.second == target_id);
+            let menu_layer = div()
+                .id("tab-context-dismiss-layer")
+                .occlude()
+                .absolute()
+                .inset_0()
+                .on_mouse_down(
+                    gpui_kit::MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.tab_context_menu = None;
+                        cx.notify();
+                    }),
+                );
+            let mut panel = div()
+                .id("tab-context-menu")
+                .occlude()
+                .absolute()
+                .top(px(96.0))
+                .left(px(8.0))
+                .w(px(240.0))
+                .bg(rgb(0x1e2026))
+                .border_1()
+                .border_color(rgb(0x32353e))
+                .rounded_xl()
+                .p_2()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .on_mouse_down(
+                    gpui_kit::MouseButton::Left,
+                    cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                );
+
+            if menu.showing_split_targets {
+                panel = panel.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(0x7e828d))
+                        .child("Split with…"),
+                );
+                for (id, title, favicon) in &tabs {
+                    if id == &target_id {
+                        continue;
+                    }
+                    let other_id = id.clone();
+                    panel = panel.child(
+                        div()
+                            .id(format!("split-target-{id}"))
+                            .px_2()
+                            .py_2()
+                            .rounded_md()
+                            .text_sm()
+                            .text_color(rgb(0xe6e7eb))
+                            .hover(|style| style.bg(rgb(0x282b33)))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(tab_list::favicon(favicon.clone()))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(title.clone()),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.choose_split_target(&other_id);
+                                cx.notify();
+                            })),
+                    );
+                }
+            } else {
+                panel = panel.child(
+                    div()
+                        .id("ctx-split-with")
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(0xe6e7eb))
+                        .hover(|style| style.bg(rgb(0x282b33)))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(IconName::Columns2))
+                        .child("Split with…")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(menu) = &mut this.tab_context_menu {
+                                menu.showing_split_targets = true;
+                            }
+                            cx.notify();
+                        })),
+                );
+                if is_split {
+                    panel = panel.child(
+                        div()
+                            .id("ctx-unsplit")
+                            .px_2()
+                            .py_2()
+                            .rounded_md()
+                            .text_sm()
+                            .text_color(rgb(0xe6e7eb))
+                            .hover(|style| style.bg(rgb(0x282b33)))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Icon::new(IconName::Columns2))
+                            .child("Unsplit")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.exit_split();
+                                this.tab_context_menu = None;
+                                cx.notify();
+                            })),
+                    );
+                }
+                let reload_id = target_id.clone();
+                panel = panel.child(
+                    div()
+                        .id("ctx-reload")
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(0xe6e7eb))
+                        .hover(|style| style.bg(rgb(0x282b33)))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(IconName::RotateCw))
+                        .child("Reload")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.engine.reload(&reload_id, false);
+                            this.tab_context_menu = None;
+                            cx.notify();
+                        })),
+                );
+                let duplicate_id = target_id.clone();
+                panel = panel.child(
+                    div()
+                        .id("ctx-duplicate")
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(0xe6e7eb))
+                        .hover(|style| style.bg(rgb(0x282b33)))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(IconName::CopyPlus))
+                        .child("Duplicate tab")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.duplicate_tab(&duplicate_id);
+                            cx.notify();
+                        })),
+                );
+                let copy_url = target_tab.map(|tab| tab.url.clone()).unwrap_or_default();
+                panel = panel.child(
+                    div()
+                        .id("ctx-copy-link")
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(0xe6e7eb))
+                        .hover(|style| style.bg(rgb(0x282b33)))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(IconName::Copy))
+                        .child("Copy link")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                copy_url.clone(),
+                            ));
+                            this.tab_context_menu = None;
+                            cx.notify();
+                        })),
+                );
+                let close_id = target_id.clone();
+                panel = panel.child(
+                    div()
+                        .id("ctx-close-tab")
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(0xe6e7eb))
+                        .hover(|style| style.bg(rgb(0x282b33)))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(IconName::X))
+                        .child("Close tab")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.close_tab_by_id(&close_id);
+                            this.tab_context_menu = None;
+                            cx.notify();
+                        })),
+                );
+                let other_ids: Vec<String> = self
+                    .active_space()
+                    .tabs
+                    .iter()
+                    .filter(|tab| tab.id != target_id)
+                    .map(|tab| tab.id.clone())
+                    .collect();
+                let keep_id = target_id.clone();
+                panel = panel.child(
+                    div()
+                        .id("ctx-close-others")
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(0xe6e7eb))
+                        .hover(|style| style.bg(rgb(0x282b33)))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(IconName::X))
+                        .child("Close other tabs")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            for id in &other_ids {
+                                this.close_tab_by_id(id);
+                            }
+                            this.active_space_mut().active = Some(keep_id.clone());
+                            this.active_space_mut().split = None;
+                            this.focused_pane = 0;
+                            this.tab_context_menu = None;
+                            this.save_state();
+                            cx.notify();
+                        })),
+                );
+            }
+            root = root.child(menu_layer.child(panel));
         }
 
         if let Some(modal) = &self.space_modal {
@@ -2709,6 +3237,8 @@ mod tests {
             engine: engine::Engine::new(),
             space_modal: None,
             space_context_menu: None,
+            tab_context_menu: None,
+            split_group_expanded: false,
             recently_closed_tabs: Vec::new(),
             browser_focused: false,
             #[cfg(not(test))]
@@ -2782,6 +3312,77 @@ mod tests {
         view.read_with(cx, |app, _| {
             assert_eq!(app.focused_pane, 0);
             assert!(app.current_split_pair().is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn closing_a_non_active_tab_by_id_preserves_the_active_tab(cx: &mut gpui::TestAppContext) {
+        let (_, view) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| test_app(window, cx))
+            })
+            .expect("open test window")
+        });
+        view.update(cx, |app, _| {
+            app.add_tab();
+            app.active_space_mut().active = Some("tab-1".into());
+            assert!(app.close_tab_by_id("tab-2"));
+        });
+        view.read_with(cx, |app, _| {
+            assert_eq!(app.active_tab_id(), "tab-1");
+            assert_eq!(app.active_space().tabs.len(), 1);
+        });
+    }
+
+    #[gpui::test]
+    fn closing_a_split_member_exits_split_and_selects_its_partner(cx: &mut gpui::TestAppContext) {
+        let (_, view) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| test_app(window, cx))
+            })
+            .expect("open test window")
+        });
+        view.update(cx, |app, _| {
+            app.add_tab();
+            assert!(app.split_tabs("tab-1", "tab-2"));
+            assert!(app.close_tab_by_id("tab-1"));
+        });
+        view.read_with(cx, |app, _| {
+            assert!(app.current_split_pair().is_none());
+            assert_eq!(app.active_tab_id(), "tab-2");
+        });
+    }
+
+    #[gpui::test]
+    fn split_with_context_flow_uses_the_clicked_tab_and_selected_target(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_, view) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| test_app(window, cx))
+            })
+            .expect("open test window")
+        });
+        view.update(cx, |app, _| {
+            app.add_tab();
+            app.tab_context_menu = Some(TabContextMenu {
+                tab_id: "tab-1".into(),
+                showing_split_targets: true,
+            });
+            assert!(app.choose_split_target("tab-2"));
+            assert!(app.tab_context_menu.is_none());
+        });
+        view.read_with(cx, |app, _| {
+            assert_eq!(
+                app.current_split_pair(),
+                Some(SplitPair {
+                    first: "tab-1".into(),
+                    second: "tab-2".into(),
+                })
+            );
         });
     }
 

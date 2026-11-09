@@ -64,5 +64,22 @@
     "symbols": [],
     "guidance": "Implemented Phase 2 shield: adblock-backed CEF request filtering with persisted per-site exceptions and per-tab stats; HTTPS-first GET navigation with one-time per-host fallback. Verified 34 tests, release build, benchmark, and isolated live blocking run. Parent owns commit; live HTTPS failure fallback remains unverified.",
     "updated_at": "2026-11-09T12:58:15.092506507+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/lifecycle.rs",
+      "src/main.rs",
+      "src/model/mod.rs",
+      "src/model/space.rs",
+      "src/ui/mod.rs",
+      "src/ui/split_view.rs",
+      "src/ui/tab_list.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Implemented grouped split tabs, favicon rendering, per-tab hover close, and tab context actions in the tabs worktree; tests/build had completed before the parent stop instruction, and the final occlude adjustment remains unverified.",
+    "updated_at": "2026-11-09T13:46:58.941813811+00:00"
   }
 ]

@@ -22,3 +22,7 @@ Round 3 fixed CEF cache nesting: root_cache_path uses LUMEN_DATA_DIR/cef and per
 ## Session 2026-11-09T12:58:15.089199794+00:00
 
 Implemented Phase 2 shield: adblock-backed CEF request filtering with persisted per-site exceptions and per-tab stats; HTTPS-first GET navigation with one-time per-host fallback. Verified 34 tests, release build, benchmark, and isolated live blocking run. Parent owns commit; live HTTPS failure fallback remains unverified.
+
+## Session 2026-11-09T13:46:58.935580177+00:00
+
+Implemented grouped split tabs, favicon rendering, per-tab hover close, and tab context actions in the tabs worktree; tests/build had completed before the parent stop instruction, and the final occlude adjustment remains unverified.
