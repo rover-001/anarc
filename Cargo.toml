@@ -14,6 +14,7 @@ image = "=0.25.10"
 smallvec = "=1.16.5"
 async-channel = "=2.5.0"
 futures-lite = "=2.6.1"
+adblock = "=0.13.5"
 
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }

@@ -140,6 +140,7 @@ pub struct BrowserSharedState {
 cef::wrap_load_handler! {
     struct LumenLoadHandler {
         shared: Arc<Mutex<BrowserSharedState>>,
+        https_state: Arc<Mutex<HttpsFirstState>>,
     }
 
     impl LoadHandler {
@@ -156,6 +157,165 @@ cef::wrap_load_handler! {
                 state.can_go_forward = can_go_forward != 0;
                 state.dirty = true;
             }
+        }
+
+        fn on_load_end(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            _http_status_code: i32,
+        ) {
+            let Some(frame) = frame else { return; };
+            if frame.is_main() == 0 { return; }
+            let url = CefStringUtf16::from(&frame.url()).to_string();
+            if let Ok(mut state) = self.https_state.lock() {
+                clear_https_upgrade(&mut state, &url);
+            }
+        }
+
+        fn on_load_error(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            error_code: Errorcode,
+            _error_text: Option<&CefString>,
+            failed_url: Option<&CefString>,
+        ) {
+            if error_code == Errorcode::ABORTED { return; }
+            if frame.as_ref().is_some_and(|frame| frame.is_main() == 0) { return; }
+            let Some(failed_url) = failed_url.map(ToString::to_string) else { return; };
+            let http_url = self.https_state.lock().ok().and_then(|mut state| {
+                fallback_http_after_upgrade_failure(&mut state, &failed_url)
+            });
+            if let Some(http_url) = http_url {
+                if frame.as_ref().is_some_and(|frame| frame.is_main() != 0) {
+                    if let Some(frame) = frame {
+                        frame.load_url(Some(&CefString::from(http_url.as_str())));
+                    }
+                } else if let Some(frame) = browser.and_then(|browser| browser.main_frame()) {
+                    frame.load_url(Some(&CefString::from(http_url.as_str())));
+                }
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct HttpsFirstState {
+    upgraded_hosts: std::collections::HashSet<String>,
+    fallback_hosts: std::collections::HashSet<String>,
+}
+
+fn remember_https_upgrade(state: &mut HttpsFirstState, https_url: &str) {
+    if let Some(host) = crate::shield::url_host(https_url) {
+        state.upgraded_hosts.insert(host);
+    }
+}
+
+fn clear_https_upgrade(state: &mut HttpsFirstState, https_url: &str) {
+    if let Some(host) = crate::shield::url_host(https_url) {
+        state.upgraded_hosts.remove(&host);
+    }
+}
+
+fn fallback_http_after_upgrade_failure(
+    state: &mut HttpsFirstState,
+    failed_url: &str,
+) -> Option<String> {
+    let tail = failed_url.strip_prefix("https://")?;
+    let host = crate::shield::url_host(failed_url)?;
+    if !state.upgraded_hosts.remove(&host) {
+        return None;
+    }
+    state.fallback_hosts.insert(host);
+    Some(format!("http://{tail}"))
+}
+
+cef::wrap_resource_request_handler! {
+    struct LumenResourceRequestHandler {
+        shield: Arc<crate::shield::ShieldState>,
+        tab_id: String,
+    }
+
+    impl ResourceRequestHandler {
+        fn on_before_resource_load(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            _callback: Option<&mut Callback>,
+        ) -> ReturnValue {
+            let (Some(frame), Some(request)) = (frame, request) else { return ReturnValue::CONTINUE; };
+            let source = CefStringUtf16::from(&frame.url()).to_string();
+            let url = CefStringUtf16::from(&request.url()).to_string();
+            let method = CefStringUtf16::from(&request.method()).to_string();
+            let resource_type = match request.resource_type() {
+                ResourceType::MAIN_FRAME => "document",
+                ResourceType::SUB_FRAME => "subdocument",
+                ResourceType::STYLESHEET => "stylesheet",
+                ResourceType::SCRIPT => "script",
+                ResourceType::IMAGE => "image",
+                ResourceType::FONT_RESOURCE => "font",
+                ResourceType::MEDIA => "media",
+                ResourceType::OBJECT | ResourceType::PLUGIN_RESOURCE => "object",
+                ResourceType::XHR => "xmlhttprequest",
+                ResourceType::PING => "ping",
+                _ => "other",
+            };
+            if self.shield.should_block(&url, &source, resource_type, &method, &self.tab_id) {
+                ReturnValue::CANCEL
+            } else {
+                ReturnValue::CONTINUE
+            }
+        }
+    }
+}
+
+cef::wrap_request_handler! {
+    struct LumenRequestHandler {
+        shield: Arc<crate::shield::ShieldState>,
+        tab_id: String,
+        https_state: Arc<Mutex<HttpsFirstState>>,
+    }
+
+    impl RequestHandler {
+        fn on_before_browse(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            _user_gesture: i32,
+            _is_redirect: i32,
+        ) -> i32 {
+            let (Some(frame), Some(request)) = (frame, request) else { return 0; };
+            if frame.is_main() == 0 { return 0; }
+            let url = CefStringUtf16::from(&request.url()).to_string();
+            if let Some(upgraded) = crate::shield::upgrade_http_url(&url) {
+                let host = crate::shield::url_host(&url).unwrap_or_default();
+                let skip = self.https_state.lock().is_ok_and(|state| state.fallback_hosts.contains(&host));
+                // CEF documents this request as immutable in OnBeforeBrowse. Reload GET
+                // navigations through the main frame; leave other methods untouched.
+                let method = CefStringUtf16::from(&request.method()).to_string();
+                if !skip && method.eq_ignore_ascii_case("GET") {
+                    if let Ok(mut state) = self.https_state.lock() { remember_https_upgrade(&mut state, &upgraded); }
+                    frame.load_url(Some(&CefString::from(upgraded.as_str())));
+                    return 1;
+                }
+            }
+            0
+        }
+
+        fn resource_request_handler(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _request: Option<&mut Request>,
+            _is_navigation: i32,
+            _is_download: i32,
+            _request_initiator: Option<&CefString>,
+            _disable_default_handling: Option<&mut i32>,
+        ) -> Option<ResourceRequestHandler> {
+            Some(LumenResourceRequestHandler::new(self.shield.clone(), self.tab_id.clone()))
         }
     }
 }
@@ -631,6 +791,7 @@ cef::wrap_client! {
         permission_handler: PermissionHandler,
         load_handler: LoadHandler,
         context_menu_handler: ContextMenuHandler,
+        request_handler: RequestHandler,
     }
 
     impl Client {
@@ -652,6 +813,8 @@ cef::wrap_client! {
         fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
             Some(self.context_menu_handler.clone())
         }
+
+        fn request_handler(&self) -> Option<RequestHandler> { Some(self.request_handler.clone()) }
     }
 }
 
@@ -677,6 +840,8 @@ pub struct Engine {
     windowless_frame_rate: i32,
     close_state: Arc<(Mutex<usize>, Condvar)>,
     shutdown_requested: Arc<std::sync::atomic::AtomicBool>,
+    shield: Arc<crate::shield::ShieldState>,
+    https_state: Arc<Mutex<HttpsFirstState>>,
 }
 
 impl Engine {
@@ -699,6 +864,8 @@ impl Engine {
             windowless_frame_rate: 60,
             close_state: Arc::new((Mutex::new(0), Condvar::new())),
             shutdown_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            shield: crate::shield::ShieldState::start(),
+            https_state: Arc::new(Mutex::new(HttpsFirstState::default())),
         }
     }
 
@@ -854,8 +1021,13 @@ impl Engine {
             );
             let download_handler = LumenDownloadHandler::new(self.events.clone());
             let permission_handler = LumenPermissionHandler::new();
-            let load_handler = LumenLoadHandler::new(shared.clone());
+            let load_handler = LumenLoadHandler::new(shared.clone(), self.https_state.clone());
             let context_menu_handler = LumenContextMenuHandler::new();
+            let request_handler = LumenRequestHandler::new(
+                self.shield.clone(),
+                id.to_owned(),
+                self.https_state.clone(),
+            );
             let mut client = LumenClient::new(
                 render_handler,
                 display_handler,
@@ -864,6 +1036,7 @@ impl Engine {
                 permission_handler,
                 load_handler,
                 context_menu_handler,
+                request_handler,
             );
 
             let window_info = WindowInfo::default().set_as_windowless(0);
@@ -1242,6 +1415,26 @@ impl Engine {
         }
     }
 
+    pub fn navigate_http_first(&mut self, id: &str, https_url: &str) {
+        if let Ok(mut state) = self.https_state.lock() {
+            remember_https_upgrade(&mut state, https_url);
+        }
+        self.navigate(id, https_url);
+    }
+
+    pub fn toggle_shield_for_tab(&mut self, id: &str, url: &str) -> bool {
+        let Some(host) = crate::shield::url_host(url) else {
+            return false;
+        };
+        let allowed = self.shield.toggle_site(&host);
+        self.reload(id, false);
+        !allowed
+    }
+
+    pub fn blocked_request_counts(&self) -> HashMap<String, u64> {
+        self.shield.blocked_counts()
+    }
+
     pub fn reload(&self, id: &str, ignore_cache: bool) {
         if let Some(entry) = self.browsers.get(id) {
             if ignore_cache {
@@ -1493,6 +1686,21 @@ mod tests {
         assert_eq!(
             frame_rate_for_refresh(Some(std::time::Duration::from_millis(4))),
             120
+        );
+    }
+
+    #[test]
+    fn https_first_falls_back_once_per_failed_upgraded_host() {
+        let mut state = HttpsFirstState::default();
+        remember_https_upgrade(&mut state, "https://example.test/path");
+        assert_eq!(
+            fallback_http_after_upgrade_failure(&mut state, "https://example.test/path"),
+            Some("http://example.test/path".to_owned())
+        );
+        assert!(state.fallback_hosts.contains("example.test"));
+        assert_eq!(
+            fallback_http_after_upgrade_failure(&mut state, "https://example.test/other"),
+            None
         );
     }
 }
