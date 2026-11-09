@@ -24,7 +24,7 @@ use gpui_kit::{
 };
 use model::{Space, SplitPair, Tab, TabState};
 use ui::command_palette::{self, PaletteAction, PaletteItem, PaletteTab, PaletteTarget};
-use ui::split_view::{self, DIVIDER_WIDTH};
+use ui::split_view::{self, DIVIDER_HIT_WIDTH, DIVIDER_WIDTH};
 use ui::visual::{self, ADDRESS_BAR_HEIGHT, TOPBAR_HEIGHT, UI_SCALE};
 use ui::web_view::WebViewport;
 use ui::{sidebar, space_switcher, tab_list};
@@ -2091,7 +2091,33 @@ impl Render for Lumen {
             )
             .on_mouse_up(
                 gpui_kit::MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
+                cx.listener(|this, _, window, cx| {
+                    let finish_split_resize = this.split_resizing;
+                    if finish_split_resize {
+                        if let Some(pair) = this.current_split_pair() {
+                            let scale = window.scale_factor();
+                            let bounds = window.bounds();
+                            let sidebar = this.effective_sidebar_width();
+                            let total_width =
+                                f32::from(bounds.size.width) - sidebar - 2.0 * CONTENT_BEZEL_X;
+                            let (left_width, right_width) =
+                                split_view::pane_widths(total_width, this.split_ratio);
+                            let height = ((f32::from(bounds.size.height)
+                                - TOPBAR_HEIGHT
+                                - CONTENT_BEZEL_BOTTOM)
+                                * scale) as i32;
+                            this.engine.flush_resize_browser(
+                                &pair.first,
+                                (left_width * scale) as i32,
+                                height,
+                            );
+                            this.engine.flush_resize_browser(
+                                &pair.second,
+                                (right_width * scale) as i32,
+                                height,
+                            );
+                        }
+                    }
                     if this.sidebar_resizing || this.split_resizing {
                         this.sidebar_resizing = false;
                         this.split_resizing = false;
@@ -2286,10 +2312,9 @@ impl Render for Lumen {
                                     .child(
                                         div()
                                             .id("split-divider")
-                                            .w(px(DIVIDER_WIDTH))
+                                            .w(px(DIVIDER_HIT_WIDTH))
+                                            .mx(px((DIVIDER_WIDTH - DIVIDER_HIT_WIDTH) / 2.0))
                                             .h_full()
-                                            .bg(rgb(0x15161a))
-                                            .hover(|style| style.bg(rgb(0x3e424d)))
                                             .cursor_col_resize()
                                             .on_mouse_down(
                                                 gpui_kit::MouseButton::Left,
