@@ -1,4 +1,5 @@
 pub mod command_palette;
+pub mod motion;
 pub mod sidebar;
 pub mod space_switcher;
 pub mod split_view;
