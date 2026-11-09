@@ -19,8 +19,13 @@ pub struct ResizeDrag {
 }
 
 impl ResizeDrag {
+    /// Starts a divider/sidebar drag. Browsers keep resizing live (coalesced in the
+    /// engine) so centred pages track the pane continuously instead of jumping once on
+    /// release; the captured edge colours only fill pixels a lagging frame hasn't
+    /// reached yet. `current_sizes` is kept for the debug log only.
     pub fn start(&mut self, current_sizes: Vec<BrowserSize>, edge_colors: Vec<(String, u32)>) {
-        self.frozen = Some(current_sizes);
+        let _ = current_sizes;
+        self.frozen = None;
         self.edge_colors = edge_colors.into_iter().collect();
         self.pending_targets.clear();
     }
@@ -123,7 +128,7 @@ mod tests {
     }
 
     #[test]
-    fn drag_keeps_current_sizes_until_release() {
+    fn drag_resizes_live_and_clears_edge_fill_on_final_frame() {
         let mut drag = ResizeDrag::default();
         let start = vec![BrowserSize {
             tab_id: "tab-a".into(),
@@ -131,8 +136,8 @@ mod tests {
             height: 700,
         }];
         drag.start(start, vec![("tab-a".into(), 0x123456)]);
-        // Pointer moves update layout only; browser sizing stays at its start value.
-        assert_eq!(drag.frozen_size("tab-a"), Some((410, 700)));
+        // Browsers resize live during the drag; nothing is frozen.
+        assert_eq!(drag.frozen_size("tab-a"), None);
         assert_eq!(drag.edge_color_until_frame("tab-a", false), Some(0x123456));
         let end = vec![BrowserSize {
             tab_id: "tab-a".into(),

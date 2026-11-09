@@ -165,6 +165,10 @@ pub(crate) struct Lumen {
     space_context_menu: Option<SpaceContextMenu>,
     tab_context_menu: Option<TabContextMenu>,
     split_group_expanded: bool,
+    /// (space id, tab id, when) of the tab just created via add_tab; only it plays the row entrance.
+    added_tab: Option<(String, String, Instant)>,
+    /// When the split group was last expanded; member rows only animate right after that.
+    split_expanded_at: Option<Instant>,
     recently_closed_tabs: Vec<(String, Tab)>,
     closing_tab: Option<(String, Tab, usize, Instant, u64)>,
     closing_tab_serial: u64,
@@ -438,6 +442,8 @@ impl Lumen {
             space_context_menu: None,
             tab_context_menu: None,
             split_group_expanded: false,
+            added_tab: None,
+            split_expanded_at: None,
             recently_closed_tabs: Vec::new(),
             closing_tab: None,
             closing_tab_serial: 0,
@@ -659,7 +665,8 @@ impl Lumen {
         let id = next_tab_id(space);
         let tab = Tab::new(&id, "New tab", "about:blank");
         space.tabs.push(tab);
-        space.active = Some(id);
+        space.active = Some(id.clone());
+        self.added_tab = Some((self.active_space.clone(), id, Instant::now()));
         self.save_state();
     }
 
@@ -1180,7 +1187,7 @@ impl Lumen {
             self.suggestions
                 .extend(self.recent_searches.iter().map(|query| SuggestionItem {
                     icon_type: "search".to_string(),
-                    title: format!("Recent search: {query}"),
+                    title: query.clone(),
                     target: query.clone(),
                 }));
             self.suggestions.truncate(6);
@@ -2207,6 +2214,9 @@ impl Render for Lumen {
                                         .child(chevron)
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.split_group_expanded = !this.split_group_expanded;
+                                            this.split_expanded_at = this
+                                                .split_group_expanded
+                                                .then(Instant::now);
                                             cx.stop_propagation();
                                             cx.notify();
                                         })),
@@ -2236,6 +2246,11 @@ impl Render for Lumen {
                             ),
                         );
                     if expanded {
+                        let animate_members = space_switch_transition.is_none()
+                            && !ui::motion::reduced_motion()
+                            && self
+                                .split_expanded_at
+                                .is_some_and(|at| at.elapsed() < ui::motion::MOTION_BASE * 2);
                         let mut member_rows = Vec::new();
                         for (pane_index, member) in [first, second].into_iter().enumerate() {
                             let member_id = member.0.clone();
@@ -2332,11 +2347,15 @@ impl Render for Lumen {
                                         },
                                     ),
                                 )
-                                .with_animation(
+                                .map(|row| {
+                                    if !animate_members {
+                                        return row.into_any_element();
+                                    }
+                                    row.with_animation(
                                     format!("split-member-entry-{member_animation_id}"),
                                     Animation::new(ui::motion::duration(total_duration))
                                         .with_easing(move |progress| {
-                                            ui::motion::spring_out(
+                                            ui::motion::ease_out_quint(
                                                 ((progress * total_seconds - delay_seconds)
                                                     / base_seconds)
                                                     .clamp(0.0, 1.0),
@@ -2347,7 +2366,9 @@ impl Render for Lumen {
                                         row.h(px(visual::TAB_ROW_HEIGHT * progress))
                                             .opacity(progress)
                                     },
-                                );
+                                    )
+                                    .into_any_element()
+                                });
                             member_rows.push(member_row);
                         }
                         sidebar_content = sidebar_content.child(group_row);
@@ -2372,6 +2393,13 @@ impl Render for Lumen {
                 let close_id = tab_id.clone();
                 let current_space_id = active_space_id.clone();
                 let selected = active_tab_id.as_ref() == Some(id);
+                let animate_entry = space_switch_transition.is_none()
+                    && !ui::motion::reduced_motion()
+                    && self.added_tab.as_ref().is_some_and(|(space, tab, at)| {
+                        space == &active_space_id
+                            && tab == id
+                            && at.elapsed() < ui::motion::MOTION_BASE * 2
+                    });
                 let row_group = format!("tab-row-{id}");
                 let context_tab = id.clone();
                 sidebar_content = sidebar_content.child(
@@ -2455,16 +2483,23 @@ impl Render for Lumen {
                                 },
                             ),
                         )
-                        .with_animation(
-                            format!("tab-row-entry-{id}"),
-                            Animation::new(ui::motion::duration(ui::motion::MOTION_BASE))
-                                .with_easing(ui::motion::spring_out),
-                            move |row, progress| {
-                                let progress = ui::motion::clamp_percentage(progress);
-                                row.h(px(visual::TAB_ROW_HEIGHT * progress))
-                                    .opacity(progress)
-                            },
-                        ),
+                        .map(|row| {
+                            if animate_entry {
+                                row.with_animation(
+                                    format!("tab-row-entry-{active_space_id}-{id}"),
+                                    Animation::new(ui::motion::duration(ui::motion::MOTION_BASE))
+                                        .with_easing(ui::motion::ease_out_quint),
+                                    move |row, progress| {
+                                        let progress = ui::motion::clamp_percentage(progress);
+                                        row.h(px(visual::TAB_ROW_HEIGHT * progress))
+                                            .opacity(progress)
+                                    },
+                                )
+                                .into_any_element()
+                            } else {
+                                row.into_any_element()
+                            }
+                        }),
                 );
             }
 
@@ -4398,6 +4433,8 @@ mod tests {
             space_context_menu: None,
             tab_context_menu: None,
             split_group_expanded: false,
+            added_tab: None,
+            split_expanded_at: None,
             recently_closed_tabs: Vec::new(),
             closing_tab: None,
             closing_tab_serial: 0,
@@ -4866,7 +4903,7 @@ mod tests {
             assert_eq!(app.suggestions.len(), 1);
             assert_eq!(
                 app.suggestions[0].title,
-                "Recent search: lumen browser shortcuts"
+                "lumen browser shortcuts"
             );
         });
         dispatch_test_key(cx, handle, "down");
