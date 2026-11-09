@@ -4,6 +4,7 @@ mod lifecycle;
 mod model;
 mod paths;
 mod persist;
+mod shield;
 mod stats;
 mod ui;
 
@@ -253,6 +254,9 @@ impl Lumen {
         };
 
         let initial_query = std::env::args().skip(1).find(|arg| !arg.starts_with("--"));
+        let initial_http_first = initial_query
+            .as_deref()
+            .and_then(crate::shield::upgrade_http_url);
         if let Some(query) = &initial_query {
             if let Some(space) = spaces.iter_mut().find(|s| s.id == active_space) {
                 let _ = submit_address(space, query);
@@ -292,6 +296,16 @@ impl Lumen {
                 _ => {}
             });
 
+        let mut engine = engine::Engine::new();
+        if let Some(url) = initial_http_first
+            && let Some(tab_id) = spaces
+                .iter()
+                .find(|space| space.id == active_space)
+                .and_then(|space| space.active.as_deref())
+        {
+            engine.navigate_http_first(tab_id, &url);
+        }
+
         Self {
             spaces,
             active_space,
@@ -315,7 +329,7 @@ impl Lumen {
             #[cfg(all(target_os = "linux", not(test)))]
             active_zoom_host: None,
             show_suggestions: false,
-            engine: engine::Engine::new(),
+            engine,
             space_modal: None,
             space_context_menu: None,
             recently_closed_tabs: Vec::new(),
@@ -585,6 +599,7 @@ impl Lumen {
     fn is_app_shortcut(key: &str, control: bool, shift: bool) -> bool {
         control
             && ((key == "l" && !shift)
+                || (key == "b" && shift)
                 || key == "f"
                 || key == "t"
                 || key == "tab"
@@ -599,6 +614,7 @@ impl Lumen {
             return false;
         }
         match (key, shift) {
+            ("b", true) => self.toggle_shield_for_active_tab(),
             ("t", true) => self.reopen_closed_tab(),
             ("t", false) => self.add_tab(),
             ("w", false) => self.close_active_tab(),
@@ -614,6 +630,24 @@ impl Lumen {
             _ => return false,
         }
         true
+    }
+
+    fn toggle_shield_for_active_tab(&mut self) {
+        let id = self.active_tab_id().to_owned();
+        let url = self
+            .active_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == id)
+            .map(|tab| tab.url.clone());
+        if let Some(url) = url {
+            let enabled = self.engine.toggle_shield_for_tab(&id, &url);
+            eprintln!(
+                "Lumen shield {} for {}",
+                if enabled { "enabled" } else { "disabled" },
+                crate::shield::url_host(&url).as_deref().unwrap_or(&url)
+            );
+        }
     }
 
     fn reload_active(&self, ignore_cache: bool) {
@@ -686,11 +720,15 @@ impl Lumen {
         self.selected_suggestion = None;
         let input = self.address.read(cx).value().to_string();
         let space = self.active_space_mut();
-        let Some((id, url)) = submit_address(space, &input) else {
+        let Some((id, url, http_first)) = submit_address(space, &input) else {
             return;
         };
         self.remember_search(&input, &url);
-        self.engine.navigate(&id, &url);
+        if http_first {
+            self.engine.navigate_http_first(&id, &url);
+        } else {
+            self.engine.navigate(&id, &url);
+        }
         self.save_state();
     }
 
@@ -701,11 +739,15 @@ impl Lumen {
             input.set_value(target, window, cx);
         });
         let space = self.active_space_mut();
-        let Some((id, url)) = submit_address(space, target) else {
+        let Some((id, url, http_first)) = submit_address(space, target) else {
             return;
         };
         self.remember_search(target, &url);
-        self.engine.navigate(&id, &url);
+        if http_first {
+            self.engine.navigate_http_first(&id, &url);
+        } else {
+            self.engine.navigate(&id, &url);
+        }
         self.save_state();
     }
 
@@ -880,6 +922,9 @@ fn normalize_address(input: &str) -> String {
     if input.is_empty() {
         return String::new();
     }
+    if input.starts_with("http://") {
+        return crate::shield::upgrade_http_url(input).unwrap_or_else(|| input.to_owned());
+    }
     if input.contains("://") || input.starts_with("about:") {
         return input.to_owned();
     }
@@ -909,7 +954,9 @@ fn normalize_address(input: &str) -> String {
     }
 }
 
-fn submit_address(space: &mut Space, input: &str) -> Option<(String, String)> {
+fn submit_address(space: &mut Space, input: &str) -> Option<(String, String, bool)> {
+    let http_first = input.trim().starts_with("http://")
+        && crate::shield::upgrade_http_url(input.trim()).is_some();
     let url = normalize_address(input);
     let url = if url.is_empty() {
         "https://duckduckgo.com".to_owned()
@@ -939,7 +986,7 @@ fn submit_address(space: &mut Space, input: &str) -> Option<(String, String)> {
     tab.url = url.clone();
     tab.title = title;
     tab.state = TabState::Live;
-    Some((id, url))
+    Some((id, url, http_first))
 }
 
 impl Render for Lumen {
@@ -2290,7 +2337,7 @@ mod tests {
         space.tabs.push(tab);
 
         // Smart domain navigation for top keywords
-        let (id, url) = submit_address(&mut space, "youtube").unwrap();
+        let (id, url, _) = submit_address(&mut space, "youtube").unwrap();
         assert_eq!(id, "existing");
         assert_eq!(url, "https://youtube.com");
         assert_eq!(space.tabs[0].url, url);
@@ -2298,7 +2345,7 @@ mod tests {
         assert_eq!(space.tabs[0].state, TabState::Live);
 
         // General search query routes to Google search with clean title
-        let (id, url) = submit_address(&mut space, "rust compiler docs").unwrap();
+        let (id, url, _) = submit_address(&mut space, "rust compiler docs").unwrap();
         assert_eq!(id, "existing");
         assert_eq!(url, "https://duckduckgo.com/?q=rust+compiler+docs");
         assert_eq!(space.tabs[0].title, "Search: rust compiler docs");
@@ -2307,7 +2354,7 @@ mod tests {
     #[test]
     fn empty_address_opens_search_home_and_creates_a_tab_if_needed() {
         let mut space = Space::new("test", "Test", "compass", 0x123456);
-        let (id, url) = submit_address(&mut space, "").unwrap();
+        let (id, url, _) = submit_address(&mut space, "").unwrap();
         assert_eq!(id, "tab-1");
         assert_eq!(url, "https://duckduckgo.com");
         assert_eq!(space.active.as_deref(), Some("tab-1"));
@@ -2355,6 +2402,14 @@ mod tests {
         );
         assert_eq!(normalize_address("about:blank"), "about:blank");
         assert_eq!(normalize_address("github.com"), "https://github.com");
+        assert_eq!(
+            normalize_address("http://example.com/x"),
+            "https://example.com/x"
+        );
+        assert_eq!(
+            normalize_address("http://localhost:8080/x"),
+            "http://localhost:8080/x"
+        );
         assert_eq!(
             normalize_address("localhost:8080"),
             "https://localhost:8080"
