@@ -14,6 +14,7 @@ static ENABLED: OnceLock<bool> = OnceLock::new();
 static REPORTER: OnceLock<()> = OnceLock::new();
 static OSR_PAINTS: AtomicU64 = AtomicU64::new(0);
 static UI_RENDERS: AtomicU64 = AtomicU64::new(0);
+static ROOT_METADATA_UPDATES: AtomicU64 = AtomicU64::new(0);
 static FRAME_COPY_NANOS: AtomicU64 = AtomicU64::new(0);
 static FRAME_COPIES: AtomicU64 = AtomicU64::new(0);
 
@@ -29,6 +30,7 @@ fn start_reporter() {
                 thread::sleep(Duration::from_secs(1));
                 let paints = OSR_PAINTS.swap(0, Ordering::Relaxed);
                 let renders = UI_RENDERS.swap(0, Ordering::Relaxed);
+                let metadata = ROOT_METADATA_UPDATES.swap(0, Ordering::Relaxed);
                 let copy_nanos = FRAME_COPY_NANOS.swap(0, Ordering::Relaxed);
                 let copies = FRAME_COPIES.swap(0, Ordering::Relaxed);
                 let avg_copy_ms = if copies == 0 {
@@ -37,7 +39,7 @@ fn start_reporter() {
                     copy_nanos as f64 / copies as f64 / 1_000_000.0
                 };
                 eprintln!(
-                    "Lumen stats: OSR paints/s={paints} root UI renders/s={renders} avg frame-copy={avg_copy_ms:.3} ms RSS={}",
+                    "Lumen stats: OSR paints/s={paints} root UI renders/s={renders} root metadata updates/s={metadata} avg frame-copy={avg_copy_ms:.3} ms RSS={}",
                     process_rss()
                 );
             })
@@ -71,6 +73,13 @@ pub fn record_ui_render() {
     }
     start_reporter();
     UI_RENDERS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(not(test))]
+pub fn record_root_metadata_update() {
+    if enabled() {
+        ROOT_METADATA_UPDATES.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 fn process_rss() -> String {

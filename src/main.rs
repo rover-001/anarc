@@ -72,7 +72,6 @@ struct SpaceContextMenu {
 
 pub const SIDEBAR_MIN_WIDTH: f32 = 160.0;
 pub const SIDEBAR_MAX_WIDTH: f32 = 320.0;
-pub const SIDEBAR_NARROW_THRESHOLD: f32 = 1100.0;
 pub const SIDEBAR_COLLAPSED_WIDTH: f32 = 64.0;
 pub const CONTENT_BEZEL_X: f32 = 4.0;
 pub const CONTENT_BEZEL_BOTTOM: f32 = 4.0;
@@ -91,8 +90,6 @@ pub(crate) struct Lumen {
     sidebar_collapsed: bool,
     sidebar_width: f32,
     sidebar_resizing: bool,
-    sidebar_was_narrow: bool,
-    sidebar_restore_collapsed: bool,
     started_at: Instant,
     first_frame_logged: bool,
     address: gpui_kit::Entity<InputState>,
@@ -198,23 +195,12 @@ fn url_host(url: &str) -> String {
     host.to_ascii_lowercase()
 }
 
-fn apply_sidebar_threshold(
-    width: f32,
-    collapsed: &mut bool,
-    was_narrow: &mut bool,
-    restore: &mut bool,
-) {
-    let is_narrow = width < SIDEBAR_NARROW_THRESHOLD;
-    if is_narrow == *was_narrow {
-        return;
-    }
-    if is_narrow {
-        *restore = *collapsed;
-        *collapsed = true;
+fn sidebar_width_for(collapsed: bool, width: f32) -> f32 {
+    if collapsed {
+        SIDEBAR_COLLAPSED_WIDTH
     } else {
-        *collapsed = *restore;
+        width
     }
-    *was_narrow = is_narrow;
 }
 
 fn move_suggestion_selection(current: Option<usize>, count: usize, down: bool) -> Option<usize> {
@@ -298,8 +284,6 @@ impl Lumen {
             sidebar_collapsed: false,
             sidebar_width: 240.0,
             sidebar_resizing: false,
-            sidebar_was_narrow: false,
-            sidebar_restore_collapsed: false,
             started_at: Instant::now(),
             first_frame_logged: false,
             address,
@@ -654,20 +638,7 @@ impl Lumen {
     }
 
     fn effective_sidebar_width(&self) -> f32 {
-        if self.sidebar_collapsed {
-            SIDEBAR_COLLAPSED_WIDTH
-        } else {
-            self.sidebar_width
-        }
-    }
-
-    fn update_sidebar_threshold(&mut self, width: f32) {
-        apply_sidebar_threshold(
-            width,
-            &mut self.sidebar_collapsed,
-            &mut self.sidebar_was_narrow,
-            &mut self.sidebar_restore_collapsed,
-        );
+        sidebar_width_for(self.sidebar_collapsed, self.sidebar_width)
     }
 
     fn active_tab_id(&self) -> &str {
@@ -945,7 +916,6 @@ fn submit_address(space: &mut Space, input: &str) -> Option<(String, String)> {
 impl Render for Lumen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         stats::record_ui_render();
-        self.update_sidebar_threshold(f32::from(_window.bounds().size.width));
         if !self.first_frame_logged {
             self.first_frame_logged = true;
             eprintln!(
@@ -958,12 +928,53 @@ impl Render for Lumen {
         if !self.cef_task_started {
             self.cef_task_started = true;
             let refresh_rate = engine::frame_rate_for_refresh(_window.refresh_interval(cx));
+            if std::env::var_os("LUMEN_STATS").is_some_and(|value| value == "1") {
+                eprintln!("Lumen OSR requested frame rate: {refresh_rate} fps");
+            }
             self.engine.set_windowless_frame_rate(refresh_rate);
+            // Synthetic input for repeatable OSR benchmarks on Wayland, where X11
+            // window automation cannot target this GPUI window.
+            if std::env::var_os("LUMEN_AUTOSCROLL").is_some_and(|value| value == "1") {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(5))
+                        .await;
+                    let mut direction = -1;
+                    let mut direction_started = Instant::now();
+                    loop {
+                        if direction_started.elapsed() >= std::time::Duration::from_secs(2) {
+                            direction = -direction;
+                            direction_started = Instant::now();
+                        }
+                        if this
+                            .update(cx, |this, _| {
+                                this.engine.send_mouse_wheel(
+                                    this.active_tab_id(),
+                                    300,
+                                    300,
+                                    0,
+                                    50 * direction,
+                                    &Default::default(),
+                                );
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(16))
+                            .await;
+                    }
+                })
+                .detach();
+            }
+            let immediate_pump_receiver = self.engine.immediate_pump_receiver();
             cx.spawn(async move |this, cx| {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(180))
                     .await;
                 loop {
+                    while immediate_pump_receiver.try_recv().is_ok() {}
                     let updated = this.update(cx, |this, cx| {
                         let was_initialized = this.engine.is_initialized();
                         if let Err(error) = this.engine.initialize() {
@@ -982,6 +993,7 @@ impl Render for Lumen {
                         let (has_updates, has_root_updates) =
                             this.engine.take_dirty(&active_tab_id);
                         if has_root_updates {
+                            stats::record_root_metadata_update();
                             if let Some((title, url)) = this.engine.take_updates(&active_tab_id) {
                                 if let Some(tab) = this
                                     .active_space_mut()
@@ -1005,22 +1017,46 @@ impl Render for Lumen {
                             let tab_id = this.active_tab_id().to_string();
                             let image = this.engine.get_image(&tab_id);
                             let cursor = this.engine.get_cursor(&tab_id);
+                            let retired_images = this.engine.take_retired_images();
                             let sidebar_width = this.effective_sidebar_width();
                             this.web_viewport.update(cx, |viewport, cx| {
-                                viewport.set_frame(tab_id, sidebar_width, image, cursor);
+                                viewport.set_frame(
+                                    tab_id,
+                                    sidebar_width,
+                                    image,
+                                    cursor,
+                                    retired_images,
+                                );
                                 cx.notify();
                             });
                         }
-                        let delay =
-                            engine::pump_sleep_ms(this.engine.take_scheduled_pump_delay_ms());
-                        Some(delay)
+                        Some(())
                     });
-                    let Ok(Some(delay)) = updated else {
+                    let Ok(Some(())) = updated else {
                         break;
                     };
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_millis(delay))
+                    loop {
+                        let Ok(delay) = this.update(cx, |this, _| this.engine.next_pump_sleep_ms())
+                        else {
+                            return;
+                        };
+                        let due = futures_lite::future::or(
+                            async {
+                                cx.background_executor()
+                                    .timer(std::time::Duration::from_millis(delay))
+                                    .await;
+                                true
+                            },
+                            async {
+                                let _ = immediate_pump_receiver.recv().await;
+                                false
+                            },
+                        )
                         .await;
+                        if due {
+                            break;
+                        }
+                    }
                 }
             })
             .detach();
@@ -1511,6 +1547,7 @@ impl Render for Lumen {
                                 viewport_sidebar,
                                 viewport_image,
                                 viewport_cursor,
+                                Vec::new(),
                             );
                             cx.notify();
                         });
@@ -2035,8 +2072,6 @@ mod tests {
             sidebar_collapsed: false,
             sidebar_width: 240.0,
             sidebar_resizing: false,
-            sidebar_was_narrow: false,
-            sidebar_restore_collapsed: false,
             started_at: Instant::now(),
             first_frame_logged: true,
             address,
@@ -2412,23 +2447,9 @@ mod tests {
     }
 
     #[test]
-    fn narrow_window_collapses_sidebar_and_threshold_crossing_restores_manual_state() {
-        let mut collapsed = false;
-        let mut was_narrow = false;
-        let mut restore = false;
-        apply_sidebar_threshold(1099.0, &mut collapsed, &mut was_narrow, &mut restore);
-        assert!(collapsed);
-        apply_sidebar_threshold(1050.0, &mut collapsed, &mut was_narrow, &mut restore);
-        assert!(collapsed);
-        collapsed = false; // The user expands the rail while the window remains narrow.
-        apply_sidebar_threshold(1050.0, &mut collapsed, &mut was_narrow, &mut restore);
-        assert!(!collapsed);
-        apply_sidebar_threshold(1100.0, &mut collapsed, &mut was_narrow, &mut restore);
-        assert!(!collapsed);
-        collapsed = true;
-        apply_sidebar_threshold(1099.0, &mut collapsed, &mut was_narrow, &mut restore);
-        apply_sidebar_threshold(1100.0, &mut collapsed, &mut was_narrow, &mut restore);
-        assert!(collapsed);
+    fn sidebar_width_depends_only_on_manual_collapse_state() {
+        assert_eq!(sidebar_width_for(false, 240.0), 240.0);
+        assert_eq!(sidebar_width_for(true, 240.0), 64.0);
     }
 
     #[test]
