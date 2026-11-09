@@ -16,6 +16,7 @@ pub struct WebViewport {
     pane_offset: f32,
     pane_index: usize,
     split_layout: bool,
+    drag_edge_color: Option<u32>,
     image: Option<Arc<gpui_kit::RenderImage>>,
     previous_image: Option<Arc<gpui_kit::RenderImage>>,
     transition_id: u64,
@@ -36,6 +37,7 @@ impl WebViewport {
             pane_offset: 0.0,
             pane_index: 0,
             split_layout: false,
+            drag_edge_color: None,
             image: None,
             previous_image: None,
             transition_id: 0,
@@ -57,6 +59,7 @@ impl WebViewport {
         pane_offset: f32,
         pane_index: usize,
         split_layout: bool,
+        drag_edge_color: Option<u32>,
     ) {
         if self.tab_id != tab_id {
             self.previous_image = self.image.clone();
@@ -72,6 +75,7 @@ impl WebViewport {
         self.pane_offset = pane_offset;
         self.pane_index = pane_index;
         self.split_layout = split_layout;
+        self.drag_edge_color = drag_edge_color;
     }
 
     pub fn set_content(
@@ -161,7 +165,7 @@ impl Render for WebViewport {
             .relative()
             .track_focus(&self.focus_handle)
             .size_full()
-            .bg(rgb(self.theme.surface))
+            .bg(rgb(self.drag_edge_color.unwrap_or(self.theme.surface)))
             .rounded(px(crate::CARD_RADIUS))
             .overflow_hidden()
             .cursor(match self.cursor {
