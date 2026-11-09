@@ -3,10 +3,10 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_ulong;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use cef::args::Args;
@@ -31,6 +31,7 @@ pub struct DownloadRecord {
 struct EngineEvents {
     popups: Vec<(String, String)>,
     downloads: Vec<DownloadRecord>,
+    created: Vec<(String, Browser)>,
 }
 
 fn origin_favicon_url(page_url: &str) -> Option<String> {
@@ -47,14 +48,6 @@ fn origin_favicon_url(page_url: &str) -> Option<String> {
     Some(format!("{scheme}://{authority}/favicon.ico"))
 }
 
-const PUMP_SAFETY_TICK_MS: u64 = 33;
-
-pub fn pump_sleep_ms(requested_delay: Option<u64>) -> u64 {
-    requested_delay
-        .unwrap_or(PUMP_SAFETY_TICK_MS)
-        .min(PUMP_SAFETY_TICK_MS)
-}
-
 pub fn frame_rate_for_refresh(refresh_interval: Option<std::time::Duration>) -> i32 {
     refresh_interval
         .filter(|interval| !interval.is_zero())
@@ -63,37 +56,10 @@ pub fn frame_rate_for_refresh(refresh_interval: Option<std::time::Duration>) -> 
         .clamp(1, 120)
 }
 
-cef::wrap_browser_process_handler! {
-    struct LumenBrowserProcessHandler {
-        scheduled_deadline: Arc<Mutex<Option<Instant>>>,
-        immediate_pump_wake: async_channel::Sender<()>,
-    }
-
-    impl BrowserProcessHandler {
-        fn on_schedule_message_pump_work(&self, delay_ms: i64) {
-            let deadline = Instant::now() + Duration::from_millis(delay_ms.max(0) as u64);
-            if let Ok(mut scheduled) = self.scheduled_deadline.lock() {
-                *scheduled = Some(scheduled.map_or(deadline, |current| current.min(deadline)));
-            }
-            let _ = self.immediate_pump_wake.try_send(());
-        }
-    }
-}
-
 cef::wrap_app! {
-    struct LumenCefApp {
-        scheduled_deadline: Arc<Mutex<Option<Instant>>>,
-        immediate_pump_wake: async_channel::Sender<()>,
-    }
+    struct LumenCefApp;
 
     impl App {
-        fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
-            Some(LumenBrowserProcessHandler::new(
-                self.scheduled_deadline.clone(),
-                self.immediate_pump_wake.clone(),
-            ))
-        }
-
         fn on_before_command_line_processing(
             &self,
             _process_type: Option<&CefString>,
@@ -258,6 +224,7 @@ cef::wrap_download_image_callback! {
 cef::wrap_render_handler! {
     struct LumenRenderHandler {
         shared: Arc<Mutex<BrowserSharedState>>,
+        paint_wake: async_channel::Sender<()>,
     }
 
     impl RenderHandler {
@@ -342,6 +309,7 @@ cef::wrap_render_handler! {
                 }
                 state.dirty = true;
             }
+            let _ = self.paint_wake.try_send(());
         }
     }
 }
@@ -454,9 +422,44 @@ cef::wrap_life_span_handler! {
     struct LumenLifeSpanHandler {
         events: Arc<Mutex<EngineEvents>>,
         space_id: String,
+        tab_id: String,
+        paint_wake: async_channel::Sender<()>,
+        close_state: Arc<(Mutex<usize>, Condvar)>,
+        shutdown_requested: Arc<std::sync::atomic::AtomicBool>,
+        frame_rate: i32,
     }
 
     impl LifeSpanHandler {
+        fn on_after_created(&self, browser: Option<&mut Browser>) {
+            let Some(browser) = browser else { return; };
+            if let Some(host) = browser.host() {
+                host.set_windowless_frame_rate(self.frame_rate);
+                if std::env::var_os("LUMEN_STATS").is_some_and(|value| value == "1") {
+                    eprintln!("Lumen CEF OSR frame rate: {} fps", host.windowless_frame_rate());
+                }
+            }
+            if self.shutdown_requested.load(std::sync::atomic::Ordering::Acquire) {
+                if let Some(host) = browser.host() {
+                    host.close_browser(1);
+                }
+            } else if let Ok(mut events) = self.events.lock() {
+                if self.shutdown_requested.load(std::sync::atomic::Ordering::Acquire) {
+                    if let Some(host) = browser.host() { host.close_browser(1); }
+                } else {
+                    events.created.push((self.tab_id.clone(), browser.clone()));
+                    let _ = self.paint_wake.try_send(());
+                }
+            }
+        }
+
+        fn on_before_close(&self, _browser: Option<&mut Browser>) {
+            let (count, wake) = &*self.close_state;
+            if let Ok(mut count) = count.lock() {
+                *count = count.saturating_sub(1);
+                wake.notify_all();
+            }
+        }
+
         fn on_before_popup(
             &self,
             _browser: Option<&mut Browser>,
@@ -659,6 +662,8 @@ pub struct BrowserEntry {
 
 pub struct Engine {
     browsers: HashMap<String, BrowserEntry>,
+    pending_browsers: HashMap<String, Arc<Mutex<BrowserSharedState>>>,
+    canceled_browsers: HashSet<String>,
     contexts: HashMap<String, RequestContext>,
     initialized: bool,
     args: Args,
@@ -667,17 +672,20 @@ pub struct Engine {
     lifecycle: TabLifecycle,
     events: Arc<Mutex<EngineEvents>>,
     retired_images: Vec<Arc<RenderImage>>,
-    scheduled_deadline: Arc<Mutex<Option<Instant>>>,
-    immediate_pump_wake: async_channel::Sender<()>,
-    immediate_pump_receiver: async_channel::Receiver<()>,
+    ui_update_wake: async_channel::Sender<()>,
+    ui_update_receiver: async_channel::Receiver<()>,
     windowless_frame_rate: i32,
+    close_state: Arc<(Mutex<usize>, Condvar)>,
+    shutdown_requested: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Engine {
     pub fn new() -> Self {
-        let (immediate_pump_wake, immediate_pump_receiver) = async_channel::bounded(1);
+        let (ui_update_wake, ui_update_receiver) = async_channel::bounded(1);
         Self {
             browsers: HashMap::new(),
+            pending_browsers: HashMap::new(),
+            canceled_browsers: HashSet::new(),
             contexts: HashMap::new(),
             initialized: false,
             args: Args::new(),
@@ -686,10 +694,11 @@ impl Engine {
             lifecycle: TabLifecycle::default(),
             events: Arc::new(Mutex::new(EngineEvents::default())),
             retired_images: Vec::new(),
-            scheduled_deadline: Arc::new(Mutex::new(None)),
-            immediate_pump_wake,
-            immediate_pump_receiver,
+            ui_update_wake,
+            ui_update_receiver,
             windowless_frame_rate: 60,
+            close_state: Arc::new((Mutex::new(0), Condvar::new())),
+            shutdown_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -698,10 +707,7 @@ impl Engine {
         if self.initialized {
             return Ok(());
         }
-        let mut app = LumenCefApp::new(
-            self.scheduled_deadline.clone(),
-            self.immediate_pump_wake.clone(),
-        );
+        let mut app = LumenCefApp::new();
         let subprocess = cef::execute_process(
             Some(self.args.as_main_args()),
             Some(&mut app),
@@ -713,8 +719,8 @@ impl Engine {
 
         let mut settings = Settings::default();
         settings.no_sandbox = 1;
-        settings.external_message_pump = 1;
-        settings.multi_threaded_message_loop = 0;
+        settings.external_message_pump = 0;
+        settings.multi_threaded_message_loop = 1;
         settings.windowless_rendering_enabled = 1;
         settings.locale = CefString::from("en-US");
         settings.user_agent = CefString::from(
@@ -740,15 +746,6 @@ impl Engine {
         Ok(())
     }
 
-    pub fn pump(&self) {
-        if self.initialized {
-            if let Ok(mut scheduled) = self.scheduled_deadline.lock() {
-                *scheduled = None;
-            }
-            cef::do_message_loop_work();
-        }
-    }
-
     pub fn set_windowless_frame_rate(&mut self, frame_rate: i32) {
         self.windowless_frame_rate = frame_rate.clamp(1, 120);
         for entry in self.browsers.values() {
@@ -758,22 +755,35 @@ impl Engine {
         }
     }
 
-    pub fn immediate_pump_receiver(&self) -> async_channel::Receiver<()> {
-        self.immediate_pump_receiver.clone()
-    }
-
-    pub fn next_pump_sleep_ms(&self) -> u64 {
-        let requested_delay = self
-            .scheduled_deadline
+    pub fn take_created_browsers(&mut self) -> bool {
+        let created = self
+            .events
             .lock()
             .ok()
-            .and_then(|deadline| *deadline)
-            .map(|deadline| {
-                deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_millis() as u64
-            });
-        pump_sleep_ms(requested_delay)
+            .map(|mut events| std::mem::take(&mut events.created))
+            .unwrap_or_default();
+        let mut changed = false;
+        for (id, browser) in created {
+            if self.canceled_browsers.remove(&id) {
+                if let Some(host) = browser.host() {
+                    host.close_browser(1);
+                }
+                self.pending_browsers.remove(&id);
+                changed = true;
+                continue;
+            }
+            if let Some(state) = self.pending_browsers.remove(&id) {
+                self.browsers
+                    .insert(id.clone(), BrowserEntry { browser, state });
+                self.lifecycle.opened(&id, Instant::now());
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    pub fn ui_update_receiver(&self) -> async_channel::Receiver<()> {
+        self.ui_update_receiver.clone()
     }
 
     pub fn take_dirty(&self, active_tab_id: &str) -> (bool, bool) {
@@ -809,7 +819,7 @@ impl Engine {
         if !self.initialized {
             return Ok(());
         }
-        if !self.browsers.contains_key(id) {
+        if !self.browsers.contains_key(id) && !self.pending_browsers.contains_key(id) {
             let shared = Arc::new(Mutex::new(BrowserSharedState {
                 width: width.max(1),
                 height: height.max(1),
@@ -830,10 +840,18 @@ impl Engine {
                 screen_origin_y: 0,
                 cursor: 0,
             }));
-            let render_handler = LumenRenderHandler::new(shared.clone());
+            let render_handler =
+                LumenRenderHandler::new(shared.clone(), self.ui_update_wake.clone());
             let display_handler = LumenDisplayHandler::new(shared.clone());
-            let life_span_handler =
-                LumenLifeSpanHandler::new(self.events.clone(), space_id.to_owned());
+            let life_span_handler = LumenLifeSpanHandler::new(
+                self.events.clone(),
+                space_id.to_owned(),
+                id.to_owned(),
+                self.ui_update_wake.clone(),
+                self.close_state.clone(),
+                self.shutdown_requested.clone(),
+                self.windowless_frame_rate,
+            );
             let download_handler = LumenDownloadHandler::new(self.events.clone());
             let permission_handler = LumenPermissionHandler::new();
             let load_handler = LumenLoadHandler::new(shared.clone());
@@ -871,40 +889,21 @@ impl Engine {
             // CEF's OSR default is 30 fps, which makes scrolling and animations visibly choppy.
             browser_settings.windowless_frame_rate = self.windowless_frame_rate;
 
-            let browser = cef::browser_host_create_browser_sync(
+            let (count, _) = &*self.close_state;
+            *count.lock().unwrap() += 1;
+            let started = cef::browser_host_create_browser(
                 Some(&window_info),
                 Some(&mut client),
                 Some(&start_url),
                 Some(&browser_settings),
                 None,
                 request_ctx.as_deref_mut(),
-            )
-            .ok_or_else(|| "CEF failed to create a windowless browser window".to_string())?;
-
-            if let Some(host) = browser.host() {
-                if std::env::var_os("LUMEN_STATS").is_some_and(|value| value == "1") {
-                    eprintln!(
-                        "Lumen CEF OSR frame rate before host update: {} fps",
-                        host.windowless_frame_rate()
-                    );
-                }
-                host.set_windowless_frame_rate(self.windowless_frame_rate);
-                if std::env::var_os("LUMEN_STATS").is_some_and(|value| value == "1") {
-                    eprintln!(
-                        "Lumen CEF OSR frame rate after host update: {} fps",
-                        host.windowless_frame_rate()
-                    );
-                }
-            }
-
-            self.browsers.insert(
-                id.to_owned(),
-                BrowserEntry {
-                    browser,
-                    state: shared,
-                },
             );
-            self.lifecycle.opened(id, Instant::now());
+            if started == 0 {
+                *count.lock().unwrap() -= 1;
+                return Err("CEF failed to start asynchronous browser creation".into());
+            }
+            self.pending_browsers.insert(id.to_owned(), shared);
         } else {
             self.resize_browser(id, width, height);
         }
@@ -952,6 +951,9 @@ impl Engine {
     }
 
     fn close_browser_entry(&mut self, tab_id: &str) {
+        if self.pending_browsers.contains_key(tab_id) {
+            self.canceled_browsers.insert(tab_id.to_owned());
+        }
         if let Some(entry) = self.browsers.remove(tab_id) {
             if let Some(host) = entry.browser.host() {
                 host.close_browser(1);
@@ -1227,10 +1229,7 @@ impl Engine {
                     modifiers: cef_mouse_modifiers(modifiers),
                 };
                 host.send_mouse_wheel_event(Some(&event), delta_x, delta_y);
-                if let Ok(mut scheduled) = self.scheduled_deadline.lock() {
-                    *scheduled = Some(Instant::now());
-                }
-                let _ = self.immediate_pump_wake.try_send(());
+                let _ = self.ui_update_wake.try_send(());
             }
         }
     }
@@ -1423,8 +1422,7 @@ fn native_key_code(key: &str, fallback: i32) -> i32 {
 pub fn execute_subprocess() -> Option<i32> {
     let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
     let args = Args::new();
-    let (immediate_pump_wake, _) = async_channel::bounded(1);
-    let mut app = LumenCefApp::new(Arc::new(Mutex::new(None)), immediate_pump_wake);
+    let mut app = LumenCefApp::new();
     let result = cef::execute_process(
         Some(args.as_main_args()),
         Some(&mut app),
@@ -1435,12 +1433,31 @@ pub fn execute_subprocess() -> Option<i32> {
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        self.shutdown_requested
+            .store(true, std::sync::atomic::Ordering::Release);
         for entry in self.browsers.values() {
             if let Some(host) = entry.browser.host() {
                 host.close_browser(1);
             }
         }
+        if let Ok(mut events) = self.events.lock() {
+            for (_, browser) in events.created.drain(..) {
+                if let Some(host) = browser.host() {
+                    host.close_browser(1);
+                }
+            }
+        }
         if self.initialized {
+            let (count, wake) = &*self.close_state;
+            if let Ok(count) = count.lock() {
+                let (count, result) = wake
+                    .wait_timeout_while(count, Duration::from_secs(10), |count| *count != 0)
+                    .unwrap();
+                if result.timed_out() && *count != 0 {
+                    eprintln!("Lumen CEF shutdown deferred: {count} browsers still closing");
+                    return;
+                }
+            }
             cef::shutdown();
         }
     }
@@ -1449,24 +1466,6 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pump_delay_honors_cef_request_and_caps_safety_interval() {
-        assert_eq!(pump_sleep_ms(Some(0)), 0);
-        assert_eq!(pump_sleep_ms(Some(12)), 12);
-        assert_eq!(pump_sleep_ms(Some(80)), 33);
-        assert_eq!(pump_sleep_ms(None), 33);
-    }
-
-    #[test]
-    fn scheduled_pump_uses_deadline_and_keeps_idle_safety_tick() {
-        let engine = Engine::new();
-        assert_eq!(engine.next_pump_sleep_ms(), 33);
-        *engine.scheduled_deadline.lock().unwrap() = Some(Instant::now());
-        assert_eq!(engine.next_pump_sleep_ms(), 0);
-        *engine.scheduled_deadline.lock().unwrap() = Some(Instant::now() + Duration::from_secs(1));
-        assert_eq!(engine.next_pump_sleep_ms(), 33);
-    }
 
     #[test]
     fn mouse_modifiers_map_to_cef_flags() {

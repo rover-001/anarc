@@ -10,8 +10,8 @@ mod ui;
 use std::time::Instant;
 
 use gpui_kit::{
-    Bounds, Context, FontWeight, KeyDownEvent, KeyUpEvent, Render, Window, WindowBounds,
-    WindowOptions,
+    AnyView, Bounds, Context, FontWeight, KeyDownEvent, KeyUpEvent, Render, StyleRefinement,
+    Window, WindowBounds, WindowOptions,
     assets::IconName,
     component::Icon,
     component::input::{Input, InputEvent, InputState},
@@ -968,20 +968,24 @@ impl Render for Lumen {
                 })
                 .detach();
             }
-            let immediate_pump_receiver = self.engine.immediate_pump_receiver();
+            let ui_update_receiver = self.engine.ui_update_receiver();
             cx.spawn(async move |this, cx| {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(180))
                     .await;
                 loop {
-                    while immediate_pump_receiver.try_recv().is_ok() {}
+                    while ui_update_receiver.try_recv().is_ok() {}
                     let updated = this.update(cx, |this, cx| {
                         let was_initialized = this.engine.is_initialized();
                         if let Err(error) = this.engine.initialize() {
                             eprintln!("Lumen CEF startup failed: {error}");
                             return None;
                         }
-                        this.engine.pump();
+                        if this.engine.take_created_browsers() {
+                            let active = this.active_tab_id().to_owned();
+                            this.engine.set_visible(&active);
+                            cx.notify();
+                        }
                         let popups = this.engine.take_popups();
                         for (space_id, url) in &popups {
                             this.open_popup_tab(space_id, url.clone());
@@ -1035,28 +1039,14 @@ impl Render for Lumen {
                     let Ok(Some(())) = updated else {
                         break;
                     };
-                    loop {
-                        let Ok(delay) = this.update(cx, |this, _| this.engine.next_pump_sleep_ms())
-                        else {
-                            return;
-                        };
-                        let due = futures_lite::future::or(
-                            async {
-                                cx.background_executor()
-                                    .timer(std::time::Duration::from_millis(delay))
-                                    .await;
-                                true
-                            },
-                            async {
-                                let _ = immediate_pump_receiver.recv().await;
-                                false
-                            },
-                        )
-                        .await;
-                        if due {
-                            break;
-                        }
-                    }
+                    futures_lite::future::or(
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(33)),
+                        async {
+                            let _ = ui_update_receiver.recv().await;
+                        },
+                    )
+                    .await;
                 }
             })
             .detach();
@@ -1566,10 +1556,10 @@ impl Render for Lumen {
                                 {
                                     div().id("empty-space").size_full()
                                 } else {
-                                    div()
-                                        .id("web-viewport-entity")
-                                        .size_full()
-                                        .child(self.web_viewport.clone())
+                                    div().id("web-viewport-entity").size_full().child(
+                                        AnyView::from(self.web_viewport.clone())
+                                            .cached(StyleRefinement::default().size_full()),
+                                    )
                                 },
                             )
                     }),
