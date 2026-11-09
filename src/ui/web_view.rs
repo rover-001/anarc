@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gpui_kit::{Context, Render, Window, div, prelude::*, px, rgb};
 
-use crate::ui::visual::TOPBAR_HEIGHT;
+use crate::ui::visual::{SpaceTheme, TOPBAR_HEIGHT, space_theme};
 use crate::{CONTENT_BEZEL_X, Lumen};
 
 pub struct WebViewport {
@@ -15,6 +15,7 @@ pub struct WebViewport {
     image: Option<Arc<gpui_kit::RenderImage>>,
     retired_images: Vec<Arc<gpui_kit::RenderImage>>,
     cursor: i32,
+    theme: SpaceTheme,
 }
 
 impl WebViewport {
@@ -29,6 +30,7 @@ impl WebViewport {
             image: None,
             retired_images: Vec::new(),
             cursor: 0,
+            theme: space_theme(0x9aa6ff),
         }
     }
 
@@ -62,6 +64,10 @@ impl WebViewport {
         self.image = image;
         self.cursor = cursor;
         self.retired_images.extend(retired_images);
+    }
+
+    pub fn set_theme(&mut self, theme: SpaceTheme) {
+        self.theme = theme;
     }
 }
 
@@ -133,7 +139,7 @@ impl Render for WebViewport {
             .id("web-view-viewport")
             .track_focus(&self.focus_handle)
             .size_full()
-            .bg(rgb(0x15161a))
+            .bg(rgb(self.theme.surface))
             .rounded(px(crate::CARD_RADIUS))
             .overflow_hidden()
             .cursor(match self.cursor {

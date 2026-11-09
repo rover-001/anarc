@@ -81,5 +81,20 @@
     "symbols": [],
     "guidance": "Implemented grouped split tabs, favicon rendering, per-tab hover close, and tab context actions in the tabs worktree; tests/build had completed before the parent stop instruction, and the final occlude adjustment remains unverified.",
     "updated_at": "2026-11-09T13:46:58.941813811+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/sidebar.rs",
+      "src/ui/space_switcher.rs",
+      "src/ui/tab_list.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Implemented space-derived chrome palettes across root, sidebar, menus, address UI, viewport, and CEF browser creation; added deterministic contrast tests. Offline cargo checks passed. Git commit unavailable because shared worktree metadata is read-only.",
+    "updated_at": "2026-11-09T14:04:18.204505201+00:00"
   }
 ]
