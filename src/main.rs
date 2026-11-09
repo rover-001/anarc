@@ -20,6 +20,7 @@ use gpui_kit::{
     px, rgb, size,
 };
 use model::{Space, Tab, TabState};
+use ui::web_view::WebViewport;
 use ui::{sidebar, space_switcher, tab_list};
 
 const SPACE_ICONS: &[&str] = &[
@@ -84,7 +85,7 @@ pub struct SuggestionItem {
     pub target: String,
 }
 
-struct Lumen {
+pub(crate) struct Lumen {
     spaces: Vec<Space>,
     active_space: String,
     sidebar_collapsed: bool,
@@ -96,7 +97,7 @@ struct Lumen {
     first_frame_logged: bool,
     address: gpui_kit::Entity<InputState>,
     find_input: gpui_kit::Entity<InputState>,
-    browser_focus_handle: gpui_kit::FocusHandle,
+    pub(crate) browser_focus_handle: gpui_kit::FocusHandle,
     _address_subscription: gpui_kit::Subscription,
     show_find: bool,
     suggestions: Vec<SuggestionItem>,
@@ -106,13 +107,20 @@ struct Lumen {
     #[cfg(all(target_os = "linux", not(test)))]
     active_zoom_host: Option<String>,
     show_suggestions: bool,
-    engine: engine::Engine,
+    pub(crate) engine: engine::Engine,
+    web_viewport: gpui_kit::Entity<WebViewport>,
     space_modal: Option<SpaceModal>,
     space_context_menu: Option<SpaceContextMenu>,
     recently_closed_tabs: Vec<(String, Tab)>,
     browser_focused: bool,
     #[cfg(not(test))]
     cef_task_started: bool,
+}
+
+impl Lumen {
+    pub(crate) fn is_app_shortcut_for_view(key: &str, browser_modifier: bool, shift: bool) -> bool {
+        Self::is_app_shortcut(key, browser_modifier, shift)
+    }
 }
 
 fn create_default_space() -> (Vec<Space>, String) {
@@ -267,6 +275,8 @@ impl Lumen {
         });
         let browser_focus_handle = cx.focus_handle();
         let find_input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in page"));
+        let root_entity = cx.weak_entity();
+        let web_viewport = cx.new(|_| WebViewport::new(root_entity, browser_focus_handle.clone()));
         let address_subscription =
             cx.subscribe(&address, |this: &mut Lumen, _, event, cx| match event {
                 InputEvent::PressEnter { .. } => {
@@ -295,6 +305,7 @@ impl Lumen {
             address,
             find_input,
             browser_focus_handle,
+            web_viewport,
             _address_subscription: address_subscription,
             show_find: false,
             suggestions: Vec::new(),
@@ -733,7 +744,7 @@ impl Lumen {
             move_suggestion_selection(self.selected_suggestion, self.suggestions.len(), down);
     }
 
-    fn focus_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn focus_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.browser_focused = true;
         self.show_suggestions = false;
         self.selected_suggestion = None;
@@ -946,6 +957,8 @@ impl Render for Lumen {
         #[cfg(not(test))]
         if !self.cef_task_started {
             self.cef_task_started = true;
+            let refresh_rate = engine::frame_rate_for_refresh(_window.refresh_interval(cx));
+            self.engine.set_windowless_frame_rate(refresh_rate);
             cx.spawn(async move |this, cx| {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(180))
@@ -955,20 +968,58 @@ impl Render for Lumen {
                         let was_initialized = this.engine.is_initialized();
                         if let Err(error) = this.engine.initialize() {
                             eprintln!("Lumen CEF startup failed: {error}");
-                            return false;
+                            return None;
                         }
                         this.engine.pump();
-                        let has_updates = this.engine.take_dirty();
-                        if !was_initialized || has_updates {
+                        let popups = this.engine.take_popups();
+                        for (space_id, url) in &popups {
+                            this.open_popup_tab(space_id, url.clone());
+                        }
+                        if !popups.is_empty() {
                             cx.notify();
                         }
-                        true
+                        let active_tab_id = this.active_tab_id().to_string();
+                        let (has_updates, has_root_updates) =
+                            this.engine.take_dirty(&active_tab_id);
+                        if has_root_updates {
+                            if let Some((title, url)) = this.engine.take_updates(&active_tab_id) {
+                                if let Some(tab) = this
+                                    .active_space_mut()
+                                    .tabs
+                                    .iter_mut()
+                                    .find(|tab| tab.id == active_tab_id)
+                                {
+                                    if let Some(title) = title.filter(|title| !title.is_empty()) {
+                                        tab.title = title;
+                                    }
+                                    if let Some(url) = url.filter(|url| !url.is_empty()) {
+                                        tab.url = url;
+                                    }
+                                }
+                            }
+                            cx.notify();
+                        }
+                        if !was_initialized {
+                            cx.notify();
+                        } else if has_updates {
+                            let tab_id = this.active_tab_id().to_string();
+                            let image = this.engine.get_image(&tab_id);
+                            let cursor = this.engine.get_cursor(&tab_id);
+                            let sidebar_width = this.effective_sidebar_width();
+                            this.web_viewport.update(cx, |viewport, cx| {
+                                viewport.set_frame(tab_id, sidebar_width, image, cursor);
+                                cx.notify();
+                            });
+                        }
+                        let delay =
+                            engine::pump_sleep_ms(this.engine.take_scheduled_pump_delay_ms());
+                        Some(delay)
                     });
-                    if !matches!(updated, Ok(true)) {
+                    let Ok(Some(delay)) = updated else {
                         break;
-                    }
+                    };
                     cx.background_executor()
-                        .timer(std::time::Duration::from_millis(16))
+                        .timer(std::time::Duration::from_millis(delay))
                         .await;
                 }
             })
@@ -1010,6 +1061,10 @@ impl Render for Lumen {
 
         for (space_id, url) in self.engine.take_popups() {
             self.open_popup_tab(&space_id, url);
+
+            for retired in self.engine.take_retired_images() {
+                let _ = _window.drop_image(retired);
+            }
         }
 
         let active_space_id = self.active_space.clone();
@@ -1438,7 +1493,27 @@ impl Render for Lumen {
                             this.child(list)
                         },
                     )
-                    .child(
+                    .child({
+                        #[cfg(all(target_os = "linux", not(test)))]
+                        let viewport_image = self.engine.get_image(&active_tab_id_string);
+                        #[cfg(all(target_os = "linux", not(test)))]
+                        let viewport_cursor = self.engine.get_cursor(&active_tab_id_string);
+                        #[cfg(any(not(target_os = "linux"), test))]
+                        let viewport_image: Option<
+                            std::sync::Arc<gpui_kit::RenderImage>,
+                        > = None;
+                        #[cfg(any(not(target_os = "linux"), test))]
+                        let viewport_cursor = 0;
+                        let viewport_sidebar = self.effective_sidebar_width();
+                        self.web_viewport.update(cx, |viewport, cx| {
+                            viewport.set_frame(
+                                active_tab_id_string.clone(),
+                                viewport_sidebar,
+                                viewport_image,
+                                viewport_cursor,
+                            );
+                            cx.notify();
+                        });
                         div()
                             .id("web-content-card")
                             .flex_1()
@@ -1454,173 +1529,13 @@ impl Render for Lumen {
                                 {
                                     div().id("empty-space").size_full()
                                 } else {
-                                    #[cfg(all(target_os = "linux", not(test)))]
-                                    let maybe_image = self.engine.get_image(&active_tab_id_string);
-                                    #[cfg(any(not(target_os = "linux"), test))]
-                                    let maybe_image: Option<
-                                        std::sync::Arc<gpui_kit::RenderImage>,
-                                    > = None;
-
-                                    if let Some(render_image) = maybe_image {
-                                        let tab_id_down = active_tab_id_string.clone();
-                                        let tab_id_up = active_tab_id_string.clone();
-                                        let tab_id_right_down = active_tab_id_string.clone();
-                                        let tab_id_right_up = active_tab_id_string.clone();
-                                        let tab_id_move = active_tab_id_string.clone();
-                                        let tab_id_scroll = active_tab_id_string.clone();
-
-                                        div()
-                                            .id("web-view-viewport")
-                                            .track_focus(&self.browser_focus_handle)
-                                            .size_full()
-                                            .bg(rgb(0x15161a))
-                                            .rounded(px(CARD_RADIUS))
-                                            .overflow_hidden()
-                                            .on_mouse_down(
-                                                gpui_kit::MouseButton::Left,
-                                                cx.listener(
-                                                    move |this,
-                                                          event: &gpui_kit::MouseDownEvent,
-                                                          window,
-                                                          cx| {
-                                                        this.focus_browser(window, cx);
-                                                        let scale = window.scale_factor();
-                                                        let sidebar_num = this.effective_sidebar_width();
-                                                        let origin_x = sidebar_num + CONTENT_BEZEL_X;
-                                                        let x = ((f32::from(event.position.x)
-                                                            - origin_x)
-                                                            .max(0.0)
-                                                            * scale)
-                                                            as i32;
-                                                        let y = ((f32::from(event.position.y) - 52.0)
-                                                            .max(0.0)
-                                                            * scale)
-                                                            as i32;
-                                                        this.engine.send_mouse_click(
-                                                            &tab_id_down,
-                                                            x,
-                                                            y,
-                                                            cef::MouseButtonType::LEFT,
-                                                            false,
-                                                            event.click_count as i32,
-                                                        );
-                                                    },
-                                                ),
-                                            )
-                                            .on_mouse_up(
-                                                gpui_kit::MouseButton::Left,
-                                                cx.listener(
-                                                    move |this,
-                                                          event: &gpui_kit::MouseUpEvent,
-                                                          window,
-                                                          _cx| {
-                                                        let scale = window.scale_factor();
-                                                        let sidebar_num = this.effective_sidebar_width();
-                                                        let origin_x = sidebar_num + CONTENT_BEZEL_X;
-                                                        let x = ((f32::from(event.position.x)
-                                                            - origin_x)
-                                                            .max(0.0)
-                                                            * scale)
-                                                            as i32;
-                                                        let y = ((f32::from(event.position.y) - 52.0)
-                                                            .max(0.0)
-                                                            * scale)
-                                                            as i32;
-                                                        this.engine.send_mouse_click(
-                                                            &tab_id_up,
-                                                            x,
-                                                            y,
-                                                            cef::MouseButtonType::LEFT,
-                                                            true,
-                                                            event.click_count as i32,
-                                                        );
-                                                    },
-                                                ),
-                                            )
-                                            .on_mouse_down(
-                                                gpui_kit::MouseButton::Right,
-                                                cx.listener(move |this, event: &gpui_kit::MouseDownEvent, window, _cx| {
-                                                    let scale = window.scale_factor();
-                                                    let x = ((f32::from(event.position.x) - this.effective_sidebar_width() - CONTENT_BEZEL_X).max(0.0) * scale) as i32;
-                                                    let y = ((f32::from(event.position.y) - 52.0).max(0.0) * scale) as i32;
-                                                    this.engine.send_mouse_click(&tab_id_right_down, x, y, cef::MouseButtonType::RIGHT, false, event.click_count as i32);
-                                                }),
-                                            )
-                                            .on_mouse_up(
-                                                gpui_kit::MouseButton::Right,
-                                                cx.listener(move |this, event: &gpui_kit::MouseUpEvent, window, _cx| {
-                                                    let scale = window.scale_factor();
-                                                    let x = ((f32::from(event.position.x) - this.effective_sidebar_width() - CONTENT_BEZEL_X).max(0.0) * scale) as i32;
-                                                    let y = ((f32::from(event.position.y) - 52.0).max(0.0) * scale) as i32;
-                                                    this.engine.send_mouse_click(&tab_id_right_up, x, y, cef::MouseButtonType::RIGHT, true, event.click_count as i32);
-                                                }),
-                                            )
-                                            .on_mouse_down(
-                                                gpui_kit::MouseButton::Navigate(gpui_kit::NavigationDirection::Back),
-                                                cx.listener(|this, _, _, _| this.engine.go_back(this.active_tab_id())),
-                                            )
-                                            .on_mouse_down(
-                                                gpui_kit::MouseButton::Navigate(gpui_kit::NavigationDirection::Forward),
-                                                cx.listener(|this, _, _, _| this.engine.go_forward(this.active_tab_id())),
-                                            )
-                                            .on_mouse_move(cx.listener(
-                                                move |this,
-                                                      event: &gpui_kit::MouseMoveEvent,
-                                                      window,
-                                                      _cx| {
-                                                    let scale = window.scale_factor();
-                                                    let sidebar_num = this.effective_sidebar_width();
-                                                    let origin_x = sidebar_num + CONTENT_BEZEL_X;
-                                                    let x = ((f32::from(event.position.x) - origin_x)
-                                                        .max(0.0)
-                                                        * scale)
-                                                        as i32;
-                                                    let y = ((f32::from(event.position.y) - 52.0).max(0.0)
-                                                        * scale)
-                                                        as i32;
-                                                    this.engine.send_mouse_move(&tab_id_move, x, y, false);
-                                                },
-                                            ))
-                                            .on_scroll(cx.listener(
-                                                move |this, event: &gpui_kit::ScrollEvent, window, _cx| {
-                                                    let scale = window.scale_factor();
-                                                    let sidebar_num = this.effective_sidebar_width();
-                                                    let origin_x = sidebar_num + CONTENT_BEZEL_X;
-                                                    let x = ((f32::from(event.position.x) - origin_x)
-                                                        .max(0.0)
-                                                        * scale)
-                                                        as i32;
-                                                    let y = ((f32::from(event.position.y) - 52.0).max(0.0)
-                                                        * scale)
-                                                        as i32;
-                                                    let (dx, dy) = match event.delta {
-                                                        gpui_kit::ScrollDelta::Pixels(p) => {
-                                                            (f32::from(p.x) * scale, f32::from(p.y) * scale)
-                                                        }
-                                                        gpui_kit::ScrollDelta::Lines(l) => {
-                                                            (l.x * 40.0 * scale, l.y * 40.0 * scale)
-                                                        }
-                                                    };
-                                                    this.engine.send_mouse_wheel(
-                                                        &tab_id_scroll,
-                                                        x,
-                                                        y,
-                                                        dx as i32,
-                                                        dy as i32,
-                                                    );
-                                                },
-                                            ))
-                                            .child(
-                                                gpui_kit::img(render_image)
-                                                    .size_full()
-                                                    .rounded(px(CARD_RADIUS)),
-                                            )
-                                    } else {
-                                        div().id("web-view-loading").size_full().bg(rgb(0x15161a))
-                                    }
-                                }
-                            ),
-                    ),
+                                    div()
+                                        .id("web-viewport-entity")
+                                        .size_full()
+                                        .child(self.web_viewport.clone())
+                                },
+                            )
+                    }),
             );
 
         root = root.when(self.show_find, |root| {
@@ -1741,10 +1656,6 @@ impl Render for Lumen {
                     window.prevent_default();
                     cx.stop_propagation();
                     cx.notify();
-                } else if this.browser_focused {
-                    this.engine.send_key_down(this.active_tab_id(), event);
-                    window.prevent_default();
-                    cx.stop_propagation();
                 }
             }))
             .capture_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
@@ -1756,7 +1667,6 @@ impl Render for Lumen {
                     && !(modifiers.alt
                         && matches!(key.as_str(), "left" | "arrowleft" | "right" | "arrowright"))
                 {
-                    this.engine.send_key_up(this.active_tab_id(), event);
                     window.prevent_default();
                     cx.stop_propagation();
                 }
@@ -2132,6 +2042,11 @@ mod tests {
             address,
             find_input,
             browser_focus_handle: cx.focus_handle(),
+            web_viewport: {
+                let root_entity = cx.weak_entity();
+                let focus_handle = cx.focus_handle();
+                cx.new(|_| WebViewport::new(root_entity, focus_handle))
+            },
             _address_subscription: address_subscription,
             show_find: false,
             suggestions: Vec::new(),
