@@ -194,7 +194,12 @@ impl Render for Lumen {
         #[cfg(target_os = "linux")]
         if self.engine.is_initialized() && active_tab_url != "lumen://welcome" {
             if let Ok(handle) = _window.window_handle() {
-                if let RawWindowHandle::Xlib(xlib) = handle.as_raw() {
+                let parent = match handle.as_raw() {
+                    RawWindowHandle::Xlib(xlib) => Some(xlib.window as u64),
+                    RawWindowHandle::Xcb(xcb) => Some(u64::from(xcb.window.get())),
+                    _ => None,
+                };
+                if let Some(parent) = parent {
                     let scale = _window.scale_factor();
                     let sidebar = if self.sidebar_collapsed { 64.0 } else { 240.0 };
                     let bounds = _window.bounds();
@@ -210,7 +215,7 @@ impl Render for Lumen {
                         ];
                         if let Err(error) =
                             self.engine
-                                .ensure_browser(&tab_id, &active_tab_url, xlib.window, rect)
+                                .ensure_browser(&tab_id, &active_tab_url, parent, rect)
                         {
                             eprintln!("Lumen CEF browser creation failed: {error}");
                         }
@@ -426,6 +431,15 @@ impl Render for Lumen {
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("DISPLAY").is_some() {
+        // GPUI prefers Wayland when both display variables are set. CEF's
+        // windowed Linux child browser needs an X11/XWayland parent instead.
+        unsafe {
+            std::env::remove_var("WAYLAND_DISPLAY");
+            std::env::remove_var("WAYLAND_SOCKET");
+        }
+    }
     if let Some(code) = engine::execute_subprocess() {
         std::process::exit(code);
     }

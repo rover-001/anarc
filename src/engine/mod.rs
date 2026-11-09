@@ -42,6 +42,9 @@ cef::wrap_app! {
                 let name = CefString::from("disk-cache-size");
                 let value = CefString::from("104857600");
                 command_line.append_switch_with_value(Some(&name), Some(&value));
+                let name = CefString::from("ozone-platform");
+                let value = CefString::from("x11");
+                command_line.append_switch_with_value(Some(&name), Some(&value));
             }
         }
     }
@@ -91,6 +94,17 @@ impl Engine {
         settings.multi_threaded_message_loop = 0;
         settings.windowless_rendering_enabled = 0;
         settings.locale = CefString::from("en-US");
+        let cache_root = std::env::var_os("XDG_CACHE_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cache"))
+            })
+            .unwrap_or_else(std::env::temp_dir)
+            .join("lumen")
+            .join("cef");
+        std::fs::create_dir_all(&cache_root)
+            .map_err(|error| format!("cannot create CEF cache directory: {error}"))?;
+        settings.root_cache_path = CefString::from(cache_root.to_string_lossy().as_ref());
         let initialized = cef::initialize(
             Some(self.args.as_main_args()),
             Some(&settings),
