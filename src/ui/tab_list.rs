@@ -16,7 +16,7 @@ pub fn favicon(favicon: Option<Arc<gpui_kit::RenderImage>>) -> gpui_kit::AnyElem
             .into_any_element()
     } else {
         div()
-            .w(px(14.0 * UI_SCALE))
+            .size(px(16.0 * UI_SCALE))
             .flex()
             .items_center()
             .justify_center()
@@ -24,17 +24,6 @@ pub fn favicon(favicon: Option<Arc<gpui_kit::RenderImage>>) -> gpui_kit::AnyElem
             .child(Icon::new(IconName::Globe).size(px(14.0 * UI_SCALE)))
             .into_any_element()
     }
-}
-
-pub fn trailing_icon(icon: IconName, color: u32) -> impl IntoElement {
-    div()
-        .w(px(20.0 * UI_SCALE))
-        .h(px(20.0 * UI_SCALE))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(rgb(color))
-        .child(Icon::new(icon).size(px(14.0 * UI_SCALE)))
 }
 
 #[cfg(test)]
