@@ -1,4 +1,4 @@
-use crate::ui::visual::{UI_SCALE, tint_rgb};
+use crate::ui::visual::{SpaceTheme, UI_SCALE};
 use gpui_kit::{assets::IconName, component::Icon, div, prelude::*, px, rgb};
 
 pub fn render_space_icon(name: &str) -> Icon {
@@ -30,18 +30,14 @@ pub fn render_space_icon(name: &str) -> Icon {
     Icon::new(icon_name)
 }
 
-pub fn space_icon_button(icon: &str, is_active: bool, accent: u32) -> impl IntoElement {
-    let bg_color = if is_active {
-        tint_rgb(0x191a1f, accent, 0.18)
-    } else {
-        0x1f2127
-    };
+pub fn space_icon_button(icon: &str, is_active: bool, theme: SpaceTheme) -> impl IntoElement {
+    let bg_color = if is_active { theme.surface } else { theme.base };
     let border_color = if is_active {
-        tint_rgb(0x282b33, accent, 0.55)
+        theme.border_hover
     } else {
-        0x282b33
+        theme.border
     };
-    let text_color = if is_active { 0xf0f1f4 } else { 0x8b8f9a };
+    let text_color = if is_active { theme.text } else { theme.muted };
     div()
         .size(px(28.0 * UI_SCALE))
         .rounded_lg()
@@ -52,47 +48,63 @@ pub fn space_icon_button(icon: &str, is_active: bool, accent: u32) -> impl IntoE
         .border_1()
         .border_color(rgb(border_color))
         .text_color(rgb(text_color))
-        .hover(|style| style.bg(rgb(0x3a3e4a)).text_color(rgb(0xffffff)))
+        .hover(move |style| {
+            style
+                .bg(rgb(theme.surface_hover))
+                .text_color(rgb(theme.text))
+        })
         .cursor_pointer()
         .child(render_space_icon(icon))
 }
 
-pub fn add_space_button() -> impl IntoElement {
+pub fn add_space_button(theme: SpaceTheme) -> impl IntoElement {
     div()
         .size(px(28.0 * UI_SCALE))
         .rounded_lg()
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgb(0x1c1e23))
-        .text_color(rgb(0x7e828d))
-        .hover(|style| style.bg(rgb(0x282b33)).text_color(rgb(0xe6e7eb)))
+        .bg(rgb(theme.surface))
+        .text_color(rgb(theme.muted))
+        .hover(move |style| {
+            style
+                .bg(rgb(theme.surface_hover))
+                .text_color(rgb(theme.text))
+        })
         .cursor_pointer()
         .child(Icon::new(IconName::Plus))
 }
 
-pub fn settings_button() -> impl IntoElement {
+pub fn settings_button(theme: SpaceTheme) -> impl IntoElement {
     div()
         .size(px(28.0 * UI_SCALE))
         .rounded_lg()
         .flex()
         .items_center()
         .justify_center()
-        .text_color(rgb(0x7e828d))
-        .hover(|style| style.bg(rgb(0x282b33)).text_color(rgb(0xe6e7eb)))
+        .text_color(rgb(theme.muted))
+        .hover(move |style| {
+            style
+                .bg(rgb(theme.surface_hover))
+                .text_color(rgb(theme.text))
+        })
         .cursor_pointer()
         .child(Icon::new(IconName::Settings))
 }
 
-pub fn downloads_button() -> impl IntoElement {
+pub fn downloads_button(theme: SpaceTheme) -> impl IntoElement {
     div()
         .size(px(28.0 * UI_SCALE))
         .rounded_lg()
         .flex()
         .items_center()
         .justify_center()
-        .text_color(rgb(0x7e828d))
-        .hover(|style| style.bg(rgb(0x282b33)).text_color(rgb(0xe6e7eb)))
+        .text_color(rgb(theme.muted))
+        .hover(move |style| {
+            style
+                .bg(rgb(theme.surface_hover))
+                .text_color(rgb(theme.text))
+        })
         .cursor_pointer()
         .child(Icon::new(IconName::Download))
 }

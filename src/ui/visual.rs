@@ -12,6 +12,34 @@ pub const SIDEBAR_ROW_GAP: f32 = 8.0;
 
 pub const DEFAULT_PAGE_ZOOM_FACTOR: f64 = 1.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpaceTheme {
+    pub base: u32,
+    pub surface: u32,
+    pub surface_hover: u32,
+    pub border: u32,
+    pub border_hover: u32,
+    pub accent: u32,
+    pub text: u32,
+    pub muted: u32,
+}
+
+/// Derives every chrome color from the active space's accent.
+pub fn space_theme(accent: u32) -> SpaceTheme {
+    let surface = tint_rgb(0x191a1f, accent, 0.18);
+    let border = tint_rgb(0x282b33, accent, 0.30);
+    SpaceTheme {
+        base: tint_rgb(0x111216, accent, 0.24),
+        surface,
+        surface_hover: tint_rgb(surface, 0xffffff, 0.12),
+        border,
+        border_hover: tint_rgb(border, 0xffffff, 0.16),
+        accent,
+        text: 0xe6e7eb,
+        muted: 0x9fa3ae,
+    }
+}
+
 pub fn zoom_level_for_factor(factor: f64) -> f64 {
     factor.ln() / 1.2_f64.ln()
 }
@@ -62,6 +90,46 @@ mod tests {
             tint_rgb(0x191a1f, 0x76d7b2, 0.18)
         );
         assert_eq!(tint_rgb(0x191a1f, 0x9aa6ff, 0.0), 0x191a1f);
+    }
+
+    fn luminance(color: u32) -> f64 {
+        let channel = |shift: u32| {
+            let value = f64::from((color >> shift) & 0xff) / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+    }
+
+    fn contrast(foreground: u32, background: u32) -> f64 {
+        let (lighter, darker) = {
+            let foreground = luminance(foreground);
+            let background = luminance(background);
+            (foreground.max(background), foreground.min(background))
+        };
+        (lighter + 0.05) / (darker + 0.05)
+    }
+
+    #[test]
+    fn offered_space_colors_have_deterministic_readable_themes() {
+        let colors = [
+            0x9aa6ff, 0x76d7b2, 0xf6ad55, 0xf687b3, 0x63b3ed, 0xb794f4, 0xfbb6ce, 0x68d391,
+        ];
+        for color in colors {
+            let theme = space_theme(color);
+            assert_eq!(theme, space_theme(color));
+            assert!(
+                contrast(theme.text, theme.base) >= 4.5,
+                "base contrast for {color:#08x}"
+            );
+            assert!(
+                contrast(theme.text, theme.surface) >= 4.5,
+                "surface contrast for {color:#08x}"
+            );
+        }
     }
 
     #[test]

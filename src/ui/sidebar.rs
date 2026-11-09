@@ -1,4 +1,4 @@
-use crate::ui::visual;
+use crate::ui::visual::{self, SpaceTheme};
 use gpui_kit::{FontWeight, assets::IconName, component::Icon, div, prelude::*, px, rgb};
 
 #[allow(dead_code)]
@@ -12,7 +12,7 @@ pub fn section_label(label: &str) -> impl IntoElement {
         .child(label.to_owned())
 }
 
-pub fn new_tab_button() -> impl IntoElement {
+pub fn new_tab_button(theme: SpaceTheme) -> impl IntoElement {
     div()
         .id("new-tab")
         .w_full()
@@ -23,8 +23,8 @@ pub fn new_tab_button() -> impl IntoElement {
         .px(px(visual::SIDEBAR_ROW_PADDING_X))
         .rounded_lg()
         .text_sm()
-        .text_color(rgb(0xb9bbc2))
-        .hover(|style| style.bg(rgb(0x282b31)))
+        .text_color(rgb(theme.text))
+        .hover(move |style| style.bg(rgb(theme.surface_hover)))
         .child(
             div()
                 .size(px(visual::SIDEBAR_ROW_ICON_SIZE))

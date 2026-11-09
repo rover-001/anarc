@@ -1052,6 +1052,7 @@ impl Engine {
         url: &str,
         width: i32,
         height: i32,
+        background_color: u32,
     ) -> Result<(), String> {
         if !self.initialized {
             return Ok(());
@@ -1132,7 +1133,7 @@ impl Engine {
             let mut request_ctx = self.contexts.get_mut(space_id);
 
             let mut browser_settings = BrowserSettings::default();
-            browser_settings.background_color = 0xff15161a;
+            browser_settings.background_color = background_color;
             // CEF's OSR default is 30 fps, which makes scrolling and animations visibly choppy.
             browser_settings.windowless_frame_rate = self.windowless_frame_rate;
 
