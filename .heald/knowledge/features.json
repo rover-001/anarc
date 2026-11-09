@@ -1,0 +1,1421 @@
+{
+  "last_scanned": "2026-11-09T12:25:31.975450208+00:00",
+  "features": [
+    {
+      "name": "Core Application Logic",
+      "description": "Architectural subsystem covering Core Application Logic",
+      "files": [
+        {
+          "path": "src/engine/mod.rs",
+          "layer": "Util",
+          "symbols": [
+            {
+              "name": "DownloadRecord",
+              "kind": "Type",
+              "line": 21,
+              "doc": null
+            },
+            {
+              "name": "EngineEvents",
+              "kind": "Type",
+              "line": 32,
+              "doc": null
+            },
+            {
+              "name": "origin_favicon_url",
+              "kind": "Function",
+              "line": 37,
+              "doc": null
+            },
+            {
+              "name": "pump_sleep_ms",
+              "kind": "Function",
+              "line": 54,
+              "doc": null
+            },
+            {
+              "name": "frame_rate_for_refresh",
+              "kind": "Function",
+              "line": 60,
+              "doc": null
+            },
+            {
+              "name": "LumenBrowserProcessHandler",
+              "kind": "Type",
+              "line": 69,
+              "doc": null
+            },
+            {
+              "name": "on_schedule_message_pump_work",
+              "kind": "Function",
+              "line": 74,
+              "doc": null
+            },
+            {
+              "name": "LumenCefApp",
+              "kind": "Type",
+              "line": 81,
+              "doc": null
+            },
+            {
+              "name": "browser_process_handler",
+              "kind": "Function",
+              "line": 86,
+              "doc": null
+            },
+            {
+              "name": "on_before_command_line_processing",
+              "kind": "Function",
+              "line": 90,
+              "doc": null
+            },
+            {
+              "name": "BrowserSharedState",
+              "kind": "Type",
+              "line": 145,
+              "doc": null
+            },
+            {
+              "name": "LumenLoadHandler",
+              "kind": "Type",
+              "line": 168,
+              "doc": null
+            },
+            {
+              "name": "on_loading_state_change",
+              "kind": "Function",
+              "line": 173,
+              "doc": null
+            },
+            {
+              "name": "LumenContextMenuHandler",
+              "kind": "Type",
+              "line": 191,
+              "doc": null
+            },
+            {
+              "name": "on_before_context_menu",
+              "kind": "Function",
+              "line": 194,
+              "doc": null
+            },
+            {
+              "name": "LumenFaviconCallback",
+              "kind": "Type",
+              "line": 210,
+              "doc": null
+            },
+            {
+              "name": "on_download_image_finished",
+              "kind": "Function",
+              "line": 216,
+              "doc": null
+            },
+            {
+              "name": "LumenRenderHandler",
+              "kind": "Type",
+              "line": 252,
+              "doc": null
+            },
+            {
+              "name": "screen_info",
+              "kind": "Function",
+              "line": 257,
+              "doc": null
+            },
+            {
+              "name": "screen_point",
+              "kind": "Function",
+              "line": 274,
+              "doc": null
+            },
+            {
+              "name": "view_rect",
+              "kind": "Function",
+              "line": 293,
+              "doc": null
+            },
+            {
+              "name": "on_paint",
+              "kind": "Function",
+              "line": 303,
+              "doc": null
+            },
+            {
+              "name": "LumenDisplayHandler",
+              "kind": "Type",
+              "line": 343,
+              "doc": null
+            },
+            {
+              "name": "on_favicon_urlchange",
+              "kind": "Function",
+              "line": 348,
+              "doc": null
+            },
+            {
+              "name": "on_title_change",
+              "kind": "Function",
+              "line": 375,
+              "doc": null
+            },
+            {
+              "name": "on_cursor_change",
+              "kind": "Function",
+              "line": 384,
+              "doc": null
+            },
+            {
+              "name": "on_address_change",
+              "kind": "Function",
+              "line": 412,
+              "doc": null
+            },
+            {
+              "name": "LumenLifeSpanHandler",
+              "kind": "Type",
+              "line": 447,
+              "doc": null
+            },
+            {
+              "name": "on_before_popup",
+              "kind": "Function",
+              "line": 453,
+              "doc": null
+            },
+            {
+              "name": "LumenDownloadHandler",
+              "kind": "Type",
+              "line": 482,
+              "doc": null
+            },
+            {
+              "name": "on_before_download",
+              "kind": "Function",
+              "line": 487,
+              "doc": null
+            },
+            {
+              "name": "on_download_updated",
+              "kind": "Function",
+              "line": 524,
+              "doc": null
+            },
+            {
+              "name": "unique_download_path",
+              "kind": "Function",
+              "line": 552,
+              "doc": null
+            },
+            {
+              "name": "LumenPermissionHandler",
+              "kind": "Type",
+              "line": 586,
+              "doc": null
+            },
+            {
+              "name": "on_request_media_access_permission",
+              "kind": "Function",
+              "line": 589,
+              "doc": null
+            },
+            {
+              "name": "on_show_permission_prompt",
+              "kind": "Function",
+              "line": 601,
+              "doc": null
+            },
+            {
+              "name": "LumenClient",
+              "kind": "Type",
+              "line": 616,
+              "doc": null
+            },
+            {
+              "name": "render_handler",
+              "kind": "Function",
+              "line": 627,
+              "doc": null
+            },
+            {
+              "name": "display_handler",
+              "kind": "Function",
+              "line": 631,
+              "doc": null
+            },
+            {
+              "name": "life_span_handler",
+              "kind": "Function",
+              "line": 635,
+              "doc": null
+            },
+            {
+              "name": "download_handler",
+              "kind": "Function",
+              "line": 636,
+              "doc": null
+            },
+            {
+              "name": "permission_handler",
+              "kind": "Function",
+              "line": 637,
+              "doc": null
+            },
+            {
+              "name": "load_handler",
+              "kind": "Function",
+              "line": 638,
+              "doc": null
+            },
+            {
+              "name": "context_menu_handler",
+              "kind": "Function",
+              "line": 642,
+              "doc": null
+            },
+            {
+              "name": "BrowserEntry",
+              "kind": "Type",
+              "line": 648,
+              "doc": null
+            },
+            {
+              "name": "Engine",
+              "kind": "Type",
+              "line": 653,
+              "doc": null
+            },
+            {
+              "name": "new",
+              "kind": "Function",
+              "line": 668,
+              "doc": null
+            },
+            {
+              "name": "initialize",
+              "kind": "Function",
+              "line": 685,
+              "doc": null
+            },
+            {
+              "name": "pump",
+              "kind": "Function",
+              "line": 728,
+              "doc": null
+            },
+            {
+              "name": "take_scheduled_pump_delay_ms",
+              "kind": "Function",
+              "line": 737,
+              "doc": null
+            },
+            {
+              "name": "set_windowless_frame_rate",
+              "kind": "Function",
+              "line": 744,
+              "doc": null
+            },
+            {
+              "name": "take_dirty",
+              "kind": "Function",
+              "line": 748,
+              "doc": null
+            },
+            {
+              "name": "is_initialized",
+              "kind": "Function",
+              "line": 766,
+              "doc": null
+            },
+            {
+              "name": "ensure_browser",
+              "kind": "Function",
+              "line": 770,
+              "doc": null
+            },
+            {
+              "name": "set_visible",
+              "kind": "Function",
+              "line": 869,
+              "doc": null
+            },
+            {
+              "name": "hide_all",
+              "kind": "Function",
+              "line": 886,
+              "doc": null
+            },
+            {
+              "name": "close_browser",
+              "kind": "Function",
+              "line": 899,
+              "doc": null
+            },
+            {
+              "name": "close_browser_entry",
+              "kind": "Function",
+              "line": 907,
+              "doc": null
+            },
+            {
+              "name": "discard_inactive",
+              "kind": "Function",
+              "line": 924,
+              "doc": null
+            },
+            {
+              "name": "tab_state",
+              "kind": "Function",
+              "line": 934,
+              "doc": null
+            },
+            {
+              "name": "set_screen_metrics",
+              "kind": "Function",
+              "line": 938,
+              "doc": null
+            },
+            {
+              "name": "take_popups",
+              "kind": "Function",
+              "line": 958,
+              "doc": null
+            },
+            {
+              "name": "downloads",
+              "kind": "Function",
+              "line": 965,
+              "doc": null
+            },
+            {
+              "name": "go_back",
+              "kind": "Function",
+              "line": 972,
+              "doc": null
+            },
+            {
+              "name": "go_forward",
+              "kind": "Function",
+              "line": 980,
+              "doc": null
+            },
+            {
+              "name": "stop_load",
+              "kind": "Function",
+              "line": 988,
+              "doc": null
+            },
+            {
+              "name": "is_loading",
+              "kind": "Function",
+              "line": 994,
+              "doc": null
+            },
+            {
+              "name": "can_go_back",
+              "kind": "Function",
+              "line": 1004,
+              "doc": null
+            },
+            {
+              "name": "find",
+              "kind": "Function",
+              "line": 1014,
+              "doc": null
+            },
+            {
+              "name": "stop_finding",
+              "kind": "Function",
+              "line": 1029,
+              "doc": null
+            },
+            {
+              "name": "set_zoom_level",
+              "kind": "Function",
+              "line": 1039,
+              "doc": null
+            },
+            {
+              "name": "get_image",
+              "kind": "Function",
+              "line": 1049,
+              "doc": null
+            },
+            {
+              "name": "get_cursor",
+              "kind": "Function",
+              "line": 1059,
+              "doc": null
+            },
+            {
+              "name": "take_retired_images",
+              "kind": "Function",
+              "line": 1068,
+              "doc": null
+            },
+            {
+              "name": "get_favicon_image",
+              "kind": "Function",
+              "line": 1085,
+              "doc": null
+            },
+            {
+              "name": "take_updates",
+              "kind": "Function",
+              "line": 1095,
+              "doc": null
+            },
+            {
+              "name": "resize_browser",
+              "kind": "Function",
+              "line": 1108,
+              "doc": null
+            },
+            {
+              "name": "send_mouse_click",
+              "kind": "Function",
+              "line": 1124,
+              "doc": null
+            },
+            {
+              "name": "send_mouse_move",
+              "kind": "Function",
+              "line": 1146,
+              "doc": null
+            },
+            {
+              "name": "send_mouse_wheel",
+              "kind": "Function",
+              "line": 1166,
+              "doc": null
+            },
+            {
+              "name": "navigate",
+              "kind": "Function",
+              "line": 1187,
+              "doc": null
+            },
+            {
+              "name": "reload",
+              "kind": "Function",
+              "line": 1195,
+              "doc": null
+            },
+            {
+              "name": "set_focus",
+              "kind": "Function",
+              "line": 1205,
+              "doc": null
+            },
+            {
+              "name": "send_key_down",
+              "kind": "Function",
+              "line": 1211,
+              "doc": null
+            },
+            {
+              "name": "send_key_up",
+              "kind": "Function",
+              "line": 1242,
+              "doc": null
+            },
+            {
+              "name": "cef_mouse_modifiers",
+              "kind": "Function",
+              "line": 1257,
+              "doc": null
+            },
+            {
+              "name": "cef_key_event",
+              "kind": "Function",
+              "line": 1264,
+              "doc": null
+            },
+            {
+              "name": "native_key_code",
+              "kind": "Function",
+              "line": 1316,
+              "doc": null
+            },
+            {
+              "name": "execute_subprocess",
+              "kind": "Function",
+              "line": 1372,
+              "doc": null
+            },
+            {
+              "name": "drop",
+              "kind": "Function",
+              "line": 1385,
+              "doc": null
+            },
+            {
+              "name": "pump_delay_honors_cef_request_and_caps_safety_interval",
+              "kind": "Function",
+              "line": 1402,
+              "doc": null
+            },
+            {
+              "name": "mouse_modifiers_map_to_cef_flags",
+              "kind": "Function",
+              "line": 1410,
+              "doc": null
+            },
+            {
+              "name": "frame_rate_uses_refresh_with_fallback_and_cap",
+              "kind": "Function",
+              "line": 1422,
+              "doc": null
+            }
+          ]
+        },
+        {
+          "path": "src/history.rs",
+          "layer": "Util",
+          "symbols": [
+            {
+              "name": "history_path",
+              "kind": "Function",
+              "line": 8,
+              "doc": null
+            },
+            {
+              "name": "load_recent_searches",
+              "kind": "Function",
+              "line": 12,
+              "doc": null
+            },
+            {
+              "name": "save_recent_searches",
+              "kind": "Function",
+              "line": 24,
+              "doc": null
+            }
+          ]
+        },
+        {
+          "path": "src/lifecycle.rs",
+          "layer": "Util",
+          "symbols": [
+            {
+              "name": "TabLifecycle",
+              "kind": "Type",
+              "line": 11,
+              "doc": null
+            },
+            {
+              "name": "opened",
+              "kind": "Function",
+              "line": 17,
+              "doc": null
+            },
+            {
+              "name": "activated",
+              "kind": "Function",
+              "line": 22,
+              "doc": null
+            },
+            {
+              "name": "deactivated",
+              "kind": "Function",
+              "line": 27,
+              "doc": null
+            },
+            {
+              "name": "closed",
+              "kind": "Function",
+              "line": 33,
+              "doc": null
+            },
+            {
+              "name": "state",
+              "kind": "Function",
+              "line": 38,
+              "doc": null
+            },
+            {
+              "name": "discard_expired",
+              "kind": "Function",
+              "line": 42,
+              "doc": null
+            },
+            {
+              "name": "discards_only_inactive_live_tabs_after_thirty_minutes",
+              "kind": "Function",
+              "line": 65,
+              "doc": null
+            }
+          ]
+        },
+        {
+          "path": "src/main.rs",
+          "layer": "Util",
+          "symbols": [
+            {
+              "name": "SpaceModalMode",
+              "kind": "Type",
+              "line": 56,
+              "doc": null
+            },
+            {
+              "name": "SpaceModal",
+              "kind": "Type",
+              "line": 61,
+              "doc": null
+            },
+            {
+              "name": "SpaceContextMenu",
+              "kind": "Type",
+              "line": 69,
+              "doc": null
+            },
+            {
+              "name": "SuggestionItem",
+              "kind": "Type",
+              "line": 82,
+              "doc": null
+            },
+            {
+              "name": "Lumen",
+              "kind": "Type",
+              "line": 88,
+              "doc": null
+            },
+            {
+              "name": "is_app_shortcut_for_view",
+              "kind": "Function",
+              "line": 121,
+              "doc": null
+            },
+            {
+              "name": "create_default_space",
+              "kind": "Function",
+              "line": 126,
+              "doc": null
+            },
+            {
+              "name": "next_tab_id",
+              "kind": "Function",
+              "line": 135,
+              "doc": null
+            },
+            {
+              "name": "zoom_file",
+              "kind": "Function",
+              "line": 146,
+              "doc": null
+            },
+            {
+              "name": "load_zooms",
+              "kind": "Function",
+              "line": 153,
+              "doc": null
+            },
+            {
+              "name": "save_zooms",
+              "kind": "Function",
+              "line": 160,
+              "doc": null
+            },
+            {
+              "name": "url_host",
+              "kind": "Function",
+              "line": 170,
+              "doc": null
+            },
+            {
+              "name": "apply_sidebar_threshold",
+              "kind": "Function",
+              "line": 201,
+              "doc": null
+            },
+            {
+              "name": "move_suggestion_selection",
+              "kind": "Function",
+              "line": 220,
+              "doc": null
+            },
+            {
+              "name": "new",
+              "kind": "Function",
+              "line": 234,
+              "doc": null
+            },
+            {
+              "name": "active_space",
+              "kind": "Function",
+              "line": 328,
+              "doc": null
+            },
+            {
+              "name": "activate_space",
+              "kind": "Function",
+              "line": 335,
+              "doc": null
+            },
+            {
+              "name": "open_create_space_modal",
+              "kind": "Function",
+              "line": 341,
+              "doc": null
+            },
+            {
+              "name": "open_edit_space_modal",
+              "kind": "Function",
+              "line": 373,
+              "doc": null
+            },
+            {
+              "name": "commit_space_modal",
+              "kind": "Function",
+              "line": 414,
+              "doc": null
+            },
+            {
+              "name": "delete_space",
+              "kind": "Function",
+              "line": 448,
+              "doc": null
+            },
+            {
+              "name": "add_tab",
+              "kind": "Function",
+              "line": 465,
+              "doc": null
+            },
+            {
+              "name": "close_active_tab",
+              "kind": "Function",
+              "line": 479,
+              "doc": null
+            },
+            {
+              "name": "reopen_closed_tab",
+              "kind": "Function",
+              "line": 509,
+              "doc": null
+            },
+            {
+              "name": "open_popup_tab",
+              "kind": "Function",
+              "line": 528,
+              "doc": null
+            },
+            {
+              "name": "cycle_tab",
+              "kind": "Function",
+              "line": 541,
+              "doc": null
+            },
+            {
+              "name": "activate_tab_number",
+              "kind": "Function",
+              "line": 566,
+              "doc": null
+            },
+            {
+              "name": "is_app_shortcut",
+              "kind": "Function",
+              "line": 585,
+              "doc": null
+            },
+            {
+              "name": "handle_shortcut",
+              "kind": "Function",
+              "line": 597,
+              "doc": null
+            },
+            {
+              "name": "reload_active",
+              "kind": "Function",
+              "line": 619,
+              "doc": null
+            },
+            {
+              "name": "find_in_page",
+              "kind": "Function",
+              "line": 625,
+              "doc": null
+            },
+            {
+              "name": "change_zoom",
+              "kind": "Function",
+              "line": 633,
+              "doc": null
+            },
+            {
+              "name": "effective_sidebar_width",
+              "kind": "Function",
+              "line": 656,
+              "doc": null
+            },
+            {
+              "name": "update_sidebar_threshold",
+              "kind": "Function",
+              "line": 664,
+              "doc": null
+            },
+            {
+              "name": "active_tab_id",
+              "kind": "Function",
+              "line": 673,
+              "doc": null
+            },
+            {
+              "name": "save_state",
+              "kind": "Function",
+              "line": 677,
+              "doc": null
+            },
+            {
+              "name": "navigate",
+              "kind": "Function",
+              "line": 684,
+              "doc": null
+            },
+            {
+              "name": "navigate_to",
+              "kind": "Function",
+              "line": 697,
+              "doc": null
+            },
+            {
+              "name": "update_suggestions",
+              "kind": "Function",
+              "line": 712,
+              "doc": null
+            },
+            {
+              "name": "remember_search",
+              "kind": "Function",
+              "line": 729,
+              "doc": null
+            },
+            {
+              "name": "move_suggestion_selection",
+              "kind": "Function",
+              "line": 742,
+              "doc": null
+            },
+            {
+              "name": "focus_browser",
+              "kind": "Function",
+              "line": 747,
+              "doc": null
+            },
+            {
+              "name": "active_space_mut",
+              "kind": "Function",
+              "line": 756,
+              "doc": null
+            },
+            {
+              "name": "compute_suggestions",
+              "kind": "Function",
+              "line": 764,
+              "doc": null
+            },
+            {
+              "name": "encode_search_query",
+              "kind": "Function",
+              "line": 864,
+              "doc": null
+            },
+            {
+              "name": "normalize_address",
+              "kind": "Function",
+              "line": 878,
+              "doc": null
+            },
+            {
+              "name": "submit_address",
+              "kind": "Function",
+              "line": 912,
+              "doc": null
+            },
+            {
+              "name": "render",
+              "kind": "Function",
+              "line": 946,
+              "doc": null
+            },
+            {
+              "name": "main",
+              "kind": "Function",
+              "line": 1979,
+              "doc": null
+            },
+            {
+              "name": "test_app",
+              "kind": "Function",
+              "line": 2018,
+              "doc": null
+            },
+            {
+              "name": "dispatch_test_key",
+              "kind": "Function",
+              "line": 2069,
+              "doc": null
+            },
+            {
+              "name": "browser_tab_shortcuts_work_from_focused_address_bar",
+              "kind": "Function",
+              "line": 2083,
+              "doc": null
+            },
+            {
+              "name": "find_shortcut_opens_and_escape_closes_find",
+              "kind": "Function",
+              "line": 2100,
+              "doc": null
+            },
+            {
+              "name": "browser_tab_cycle_and_number_shortcuts_select_the_expected_tab",
+              "kind": "Function",
+              "line": 2115,
+              "doc": null
+            },
+            {
+              "name": "autocomplete_arrows_select_a_suggestion_and_enter_opens_it",
+              "kind": "Function",
+              "line": 2139,
+              "doc": null
+            },
+            {
+              "name": "typing_in_the_address_bar_opens_autocomplete",
+              "kind": "Function",
+              "line": 2167,
+              "doc": null
+            },
+            {
+              "name": "focusing_web_content_moves_focus_off_the_address_bar",
+              "kind": "Function",
+              "line": 2190,
+              "doc": null
+            },
+            {
+              "name": "recent_searches_appear_when_the_address_bar_is_empty",
+              "kind": "Function",
+              "line": 2219,
+              "doc": null
+            },
+            {
+              "name": "test_all_assets_has_all_space_icons",
+              "kind": "Function",
+              "line": 2250,
+              "doc": null
+            },
+            {
+              "name": "address_bar_routes_urls_and_searches_to_the_active_tab",
+              "kind": "Function",
+              "line": 2286,
+              "doc": null
+            },
+            {
+              "name": "empty_address_opens_search_home_and_creates_a_tab_if_needed",
+              "kind": "Function",
+              "line": 2308,
+              "doc": null
+            },
+            {
+              "name": "space_has_icon_and_isolated_identity",
+              "kind": "Function",
+              "line": 2318,
+              "doc": null
+            },
+            {
+              "name": "default_space_has_no_hardcoded_secondary_spaces",
+              "kind": "Function",
+              "line": 2329,
+              "doc": null
+            },
+            {
+              "name": "svg_icon_palette_has_plenty_of_distinct_choices",
+              "kind": "Function",
+              "line": 2341,
+              "doc": null
+            },
+            {
+              "name": "address_normalization_handles_urls_domains_and_search_queries",
+              "kind": "Function",
+              "line": 2350,
+              "doc": null
+            },
+            {
+              "name": "space_creation_and_deletion_invariants",
+              "kind": "Function",
+              "line": 2373,
+              "doc": null
+            },
+            {
+              "name": "sidebar_width_has_minimum_and_maximum_clamp",
+              "kind": "Function",
+              "line": 2401,
+              "doc": null
+            },
+            {
+              "name": "narrow_window_collapses_sidebar_and_threshold_crossing_restores_manual_state",
+              "kind": "Function",
+              "line": 2415,
+              "doc": null
+            },
+            {
+              "name": "zoom_is_keyed_by_site_host",
+              "kind": "Function",
+              "line": 2435,
+              "doc": null
+            },
+            {
+              "name": "autocomplete_suggestions_produces_smart_search_and_completions",
+              "kind": "Function",
+              "line": 2447,
+              "doc": null
+            }
+          ]
+        },
+        {
+          "path": "src/model/space.rs",
+          "layer": "Util",
+          "symbols": [
+            {
+              "name": "Space",
+              "kind": "Type",
+              "line": 6,
+              "doc": null
+            },
+            {
+              "name": "new",
+              "kind": "Function",
+              "line": 17,
+              "doc": null
+            }
+          ]
+        },
+        {
+          "path": "src/model/tab.rs",
+          "layer": "Util",
+          "symbols": [
+            {
+              "name": "Tab",
+              "kind": "Type",
+              "line": 4,
+              "doc": null
+            },
+            {
+              "name": "new",
+              "kind": "Function",
+              "line": 17,
+              "doc": null
+            },
+            {
+              "name": "TabState",
+              "kind": "Type",
+              "line": 32,
+              "doc": null
+            }
+          ]
+        },
+        {
+          "path": "src/paths.rs",
+          "layer": "Util",
+          "symbols": [
+            {
+              "name": "config_dir",
+              "kind": "Function",
+              "line": 5,
+              "doc": null
+            },
+            {
+              "name": "data_dir",
+              "kind": "Function",
+              "line": 9,
+              "doc": null
+            },
+            {
+              "name": "cef_root_dir",
+              "kind": "Function",
+              "line": 14,
+              "doc": null
+            },
+            {
+              "name": "profile_dir",
+              "kind": "Function",
+              "line": 18,
+              "doc": null
+            },
+            {
+              "name": "cef_root_from_data_dir",
+              "kind": "Function",
+              "line": 22,
+              "doc": null
+            },
+            {
+              "name": "profile_from_cef_root",
+              "kind": "Function",
+              "line": 26,
+              "doc": null
+            },
+            {
+              "name": "cache_dir",
+              "kind": "Function",
+              "line": 32,
+              "doc": null
+            },
+            {
+              "name": "resolve_cache_dir",
+              "kind": "Function",
+              "line": 42,
+              "doc": null
+            },
+            {
+              "name": "override_or_home",
+              "kind": "Function",
+              "line": 57,
+              "doc": null
+            },
+            {
+              "name": "resolve_override_or_home",
+              "kind": "Function",
+              "line": 65,
+              "doc": null
+            },
+            {
+              "name": "explicit_config_and_data_directories_are_used",
+              "kind": "Function",
+              "line": 81,
+              "doc": null
+            },
+            {
+              "name": "config_and_data_defaults_are_under_home",
+              "kind": "Function",
+              "line": 93,
+              "doc": null
+            },
+            {
+              "name": "explicit_cache_directory_is_used_for_non_profile_caches",
+              "kind": "Function",
+              "line": 105,
+              "doc": null
+            },
+            {
+              "name": "cache_default_preserves_xdg_and_home_resolution",
+              "kind": "Function",
+              "line": 118,
+              "doc": null
+            },
+            {
+              "name": "cef_root_and_space_profiles_are_nested_under_data_directory",
+              "kind": "Function",
+              "line": 135,
+              "doc": null
+            }
+          ]
+        },
+        {
+          "path": "src/persist.rs",
+          "layer": "Util",
+          "symbols": [
+            {
+              "name": "AppState",
+              "kind": "Type",
+              "line": 9,
+              "doc": null
+            },
+            {
+              "name": "spaces_path",
+              "kind": "Function",
+              "line": 14,
+              "doc": null
+            },
+            {
+              "name": "load_state",
+              "kind": "Function",
+              "line": 18,
+              "doc": null
+            },
+            {
+              "name": "save_state",
+              "kind": "Function",
+              "line": 24,
+              "doc": null
+            }
+          ]
+        },
+        {
+          "path": "src/stats.rs",
+          "layer": "Util",
+          "symbols": [
+            {
+              "name": "enabled",
+              "kind": "Function",
+              "line": 20,
+              "doc": null
+            },
+            {
+              "name": "start_reporter",
+              "kind": "Function",
+              "line": 24,
+              "doc": null
+            },
+            {
+              "name": "frame_copy_started",
+              "kind": "Function",
+              "line": 50,
+              "doc": null
+            },
+            {
+              "name": "record_osr_paint",
+              "kind": "Function",
+              "line": 57,
+              "doc": null
+            },
+            {
+              "name": "record_ui_render",
+              "kind": "Function",
+              "line": 68,
+              "doc": null
+            },
+            {
+              "name": "process_rss",
+              "kind": "Function",
+              "line": 76,
+              "doc": null
+            }
+          ]
+        }
+      ],
+      "workflows": []
+    },
+    {
+      "name": "UI Theme & Components",
+      "description": "Architectural subsystem covering UI Theme & Components",
+      "files": [
+        {
+          "path": "src/ui/sidebar.rs",
+          "layer": "Util",
+          "symbols": [
+            {
+              "name": "section_label",
+              "kind": "Function",
+              "line": 4,
+              "doc": null
+            },
+            {
+              "name": "new_tab_button",
+              "kind": "Function",
+              "line": 14,
+              "doc": null
+            }
+          ]
+        },
+        {
+          "path": "src/ui/space_switcher.rs",
+          "layer": "Util",
+          "symbols": [
+            {
+              "name": "render_space_icon",
+              "kind": "Function",
+              "line": 3,
+              "doc": null
+            },
+            {
+              "name": "space_icon_button",
+              "kind": "Function",
+              "line": 32,
+              "doc": null
+            },
+            {
+              "name": "add_space_button",
+              "kind": "Function",
+              "line": 51,
+              "doc": null
+            },
+            {
+              "name": "settings_button",
+              "kind": "Function",
+              "line": 65,
+              "doc": null
+            },
+            {
+              "name": "downloads_button",
+              "kind": "Function",
+              "line": 78,
+              "doc": null
+            }
+          ]
+        },
+        {
+          "path": "src/ui/tab_list.rs",
+          "layer": "Util",
+          "symbols": [
+            {
+              "name": "tab",
+              "kind": "Function",
+              "line": 4,
+              "doc": null
+            }
+          ]
+        },
+        {
+          "path": "src/ui/web_view.rs",
+          "layer": "Util",
+          "symbols": [
+            {
+              "name": "WebViewport",
+              "kind": "Type",
+              "line": 7,
+              "doc": null
+            },
+            {
+              "name": "new",
+              "kind": "Function",
+              "line": 17,
+              "doc": null
+            },
+            {
+              "name": "set_frame",
+              "kind": "Function",
+              "line": 28,
+              "doc": null
+            },
+            {
+              "name": "browser_point",
+              "kind": "Function",
+              "line": 42,
+              "doc": null
+            },
+            {
+              "name": "render",
+              "kind": "Function",
+              "line": 53,
+              "doc": null
+            },
+            {
+              "name": "viewport_coordinates_remove_sidebar_and_topbar_before_scaling",
+              "kind": "Function",
+              "line": 356,
+              "doc": null
+            }
+          ]
+        }
+      ],
+      "workflows": []
+    }
+  ],
+  "file_index": {
+    "src/history.rs": "Core Application Logic",
+    "src/model/tab.rs": "Core Application Logic",
+    "src/paths.rs": "Core Application Logic",
+    "src/ui/web_view.rs": "UI Theme & Components",
+    "src/engine/mod.rs": "Core Application Logic",
+    "src/main.rs": "Core Application Logic",
+    "src/lifecycle.rs": "Core Application Logic",
+    "src/ui/sidebar.rs": "UI Theme & Components",
+    "src/stats.rs": "Core Application Logic",
+    "src/ui/space_switcher.rs": "UI Theme & Components",
+    "src/model/space.rs": "Core Application Logic",
+    "src/persist.rs": "Core Application Logic",
+    "src/ui/tab_list.rs": "UI Theme & Components"
+  },
+  "workflows": []
+}
