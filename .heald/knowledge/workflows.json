@@ -27,5 +27,17 @@
     "symbols": [],
     "guidance": "Resolved ux merge conflicts in src/main.rs and src/engine/mod.rs, preserving infra/engine and UX handlers and state updates. Fixed moved download path compile error. Offline tests passed (24), build and formatting checks passed, no src conflict markers. Report: /home/rover/Projects/kreon/briefs/integrate-report.md. Live CEF behavior unverified.",
     "updated_at": "2026-11-09T12:11:36.751645142+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/mod.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Round 2 integrated perf WebViewport and on_schedule_message_pump_work with infra/engine/ux. Preserved stats, paths, screen metrics, all CEF handlers, sidebar effective sizing, mouse back/forward, keyboard shortcuts, set_visible, and retired image eviction. Popup events drain in pump. Offline tests passed (28), debug and release builds passed, src has no conflict markers, formatting check passed. Appended Round 2 to /home/rover/Projects/kreon/briefs/integrate-report.md. Live CEF interactions unverified.",
+    "updated_at": "2026-11-09T12:17:38.133764491+00:00"
   }
 ]

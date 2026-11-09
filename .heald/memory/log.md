@@ -10,3 +10,7 @@ Implemented centralized test-safe Lumen paths and opt-in once-per-second stats. 
 ## Session 2026-11-09T12:11:36.749048586+00:00
 
 Resolved ux merge conflicts in src/main.rs and src/engine/mod.rs, preserving infra/engine and UX handlers and state updates. Fixed moved download path compile error. Offline tests passed (24), build and formatting checks passed, no src conflict markers. Report: /home/rover/Projects/kreon/briefs/integrate-report.md. Live CEF behavior unverified.
+
+## Session 2026-11-09T12:17:38.128542876+00:00
+
+Round 2 integrated perf WebViewport and on_schedule_message_pump_work with infra/engine/ux. Preserved stats, paths, screen metrics, all CEF handlers, sidebar effective sizing, mouse back/forward, keyboard shortcuts, set_visible, and retired image eviction. Popup events drain in pump. Offline tests passed (28), debug and release builds passed, src has no conflict markers, formatting check passed. Appended Round 2 to /home/rover/Projects/kreon/briefs/integrate-report.md. Live CEF interactions unverified.
