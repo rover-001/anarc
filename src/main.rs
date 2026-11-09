@@ -2128,44 +2128,7 @@ impl Render for Lumen {
                     ),
                 );
 
-            if let Some(row_index) = active_row_index {
-                let rect = visual::sidebar_row_rect(sidebar_width_f32, row_index);
-                let highlight = div()
-                    .id("active-tab-highlight")
-                    .absolute()
-                    .left(px(rect.left))
-                    .w(px(rect.width))
-                    .h(px(rect.height))
-                    .rounded_lg()
-                    .overflow_hidden()
-                    .bg(rgb(theme.surface))
-                    .child(
-                        div()
-                            .absolute()
-                            .left_0()
-                            .top_0()
-                            .bottom_0()
-                            .w(px(2.0 * UI_SCALE))
-                            .rounded_full()
-                            .bg(rgb(selected_color)),
-                    );
-                let highlight = if ui::motion::reduced_motion()
-                    || space_switch_transition.is_some()
-                    || self.theme_transition.is_some()
-                {
-                    highlight.top(px(rect.top)).into_any_element()
-                } else {
-                    highlight
-                        .with_spring(
-                            format!("active-tab-highlight-position-{active_space_id}"),
-                            SpringAnimation::new(SpringConfig::new(400.0, 32.0, 1.0))
-                                .to(px(rect.top)),
-                            |highlight, top| highlight.top(top),
-                        )
-                        .into_any_element()
-                };
-                sidebar_content = sidebar_content.child(highlight);
-            }
+            let _ = active_row_index;
 
             if let Some(pair) = &stored_split_pair {
                 let first = tabs.iter().find(|(id, _, _)| id == &pair.first);
@@ -2199,14 +2162,15 @@ impl Render for Lumen {
                             )
                             .into_any_element()
                     };
+                    let group_active = !expanded
+                        && (active_tab_id.as_deref() == Some(pair.first.as_str())
+                            || active_tab_id.as_deref() == Some(pair.second.as_str()));
                     let group_row = div()
                         .id("split-tab-group")
                         .w_full()
                         .h(px(visual::TAB_ROW_HEIGHT))
                         .cursor_pointer()
                         .active(|style| style.opacity(0.92))
-                        .border_l_2()
-                        .border_color(rgb(theme.base))
                         .group(group_key.clone())
                         .child(
                             div()
@@ -2217,6 +2181,7 @@ impl Render for Lumen {
                                 .gap(px(visual::SIDEBAR_ROW_GAP))
                                 .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                 .rounded_lg()
+                                .when(group_active, |row| row.bg(rgb(theme.surface)))
                                 .hover(|row| row.bg(rgb(theme.surface_hover)))
                                 .child(tab_list::split_favicon(first.2.clone(), second.2.clone()))
                                 .child(
@@ -2274,6 +2239,8 @@ impl Render for Lumen {
                         let mut member_rows = Vec::new();
                         for (pane_index, member) in [first, second].into_iter().enumerate() {
                             let member_id = member.0.clone();
+                            let member_selected =
+                                active_tab_id.as_deref() == Some(member_id.as_str());
                             let member_animation_id = member_id.clone();
                             let close_id = member_id.clone();
                             let pane = pane_index;
@@ -2290,8 +2257,6 @@ impl Render for Lumen {
                                 .cursor_pointer()
                                 .active(|style| style.opacity(0.92))
                                 .group(format!("tab-row-{member_id}"))
-                                .border_l_2()
-                                .border_color(rgb(theme.base))
                                 .child(
                                     div()
                                         .w_full()
@@ -2304,6 +2269,7 @@ impl Render for Lumen {
                                             + visual::SIDEBAR_ROW_GAP))
                                         .pr(px(visual::SIDEBAR_ROW_PADDING_X))
                                         .rounded_lg()
+                                        .when(member_selected, |row| row.bg(rgb(theme.surface)))
                                         .hover(|row| row.bg(rgb(theme.surface_hover)))
                                         .child(tab_list::favicon(member.2.clone()))
                                         .child(
@@ -2415,8 +2381,6 @@ impl Render for Lumen {
                         .h(px(visual::TAB_ROW_HEIGHT))
                         .cursor_pointer()
                         .active(|style| style.opacity(0.92))
-                        .border_l_2()
-                        .border_color(rgb(theme.base))
                         .group(row_group.clone())
                         .child(
                             div()
@@ -2427,6 +2391,7 @@ impl Render for Lumen {
                                 .gap(px(visual::SIDEBAR_ROW_GAP))
                                 .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                 .rounded_lg()
+                                .when(selected, |row| row.bg(rgb(theme.surface)))
                                 .hover(|row| row.bg(rgb(theme.surface_hover)))
                                 .child(tab_list::favicon(favicon.clone()))
                                 .child(
@@ -2563,8 +2528,6 @@ impl Render for Lumen {
                     .h(px(visual::TAB_ROW_HEIGHT))
                     .cursor_pointer()
                     .active(|style| style.opacity(0.92))
-                    .border_l_2()
-                    .border_color(rgb(theme.base))
                     .child(sidebar::new_tab_button(theme))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.add_tab();
@@ -2829,13 +2792,11 @@ impl Render for Lumen {
                     for (row_index, (title, favicon, selected)) in
                         outgoing_rows.into_iter().enumerate()
                     {
-                        let rect = visual::sidebar_row_rect(sidebar_width_f32, row_index);
+                        let _ = row_index;
                         let row = div()
-                            .absolute()
-                            .left(px(rect.left))
-                            .top(px(rect.top))
-                            .w(px(rect.width))
-                            .h(px(rect.height))
+                            .flex_none()
+                            .w_full()
+                            .h(px(visual::TAB_ROW_HEIGHT))
                             .rounded_lg()
                             .when(selected, |row| row.bg(rgb(old_theme.surface)))
                             .flex()
@@ -2853,27 +2814,13 @@ impl Render for Lumen {
                             .child(title);
                         overlay = overlay.child(row);
                     }
-                    if let Some(active_row_index) = active_row_index {
-                        let rect = visual::sidebar_row_rect(sidebar_width_f32, active_row_index);
-                        overlay = overlay.child(
-                            div()
-                                .absolute()
-                                .left(px(rect.left))
-                                .top(px(rect.top))
-                                .w(px(2.0 * UI_SCALE))
-                                .h(px(rect.height))
-                                .rounded_full()
-                                .bg(rgb(old_theme.accent)),
-                        );
-                    }
-                    let new_tab = visual::sidebar_row_rect(sidebar_width_f32, new_tab_index);
+                    let _ = active_row_index;
+                    let _ = new_tab_index;
                     overlay = overlay.child(
                         div()
-                            .absolute()
-                            .left(px(new_tab.left))
-                            .top(px(new_tab.top))
-                            .w(px(new_tab.width))
-                            .h(px(new_tab.height))
+                            .flex_none()
+                            .w_full()
+                            .h(px(visual::TAB_ROW_HEIGHT))
                             .flex()
                             .items_center()
                             .gap(px(visual::SIDEBAR_ROW_GAP))
