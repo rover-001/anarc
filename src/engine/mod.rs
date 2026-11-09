@@ -509,8 +509,12 @@ cef::wrap_display_handler! {
 
         fn on_title_change(&self, _browser: Option<&mut Browser>, title: Option<&CefString>) {
             if let Some(title) = title {
+                let title = title.to_string();
                 let mut state = self.shared.lock().unwrap();
-                state.title = Some(title.to_string());
+                state.title = Some(title.clone());
+                if let Some(url) = state.url.as_deref() {
+                    crate::history::update_title(url, &title);
+                }
                 state.dirty = true;
                 state.root_dirty = true;
             }
@@ -558,6 +562,8 @@ cef::wrap_display_handler! {
                 }
                 if let Ok(mut state) = self.shared.lock() {
                     state.url = Some(page_url.clone());
+                    state.title = None;
+                    crate::history::record_visit(&page_url, "");
                     state.dirty = true;
                     state.root_dirty = true;
                 }
