@@ -1,5 +1,6 @@
-use gpui_kit::{FontWeight, div, prelude::*, px, rgb};
+use gpui_kit::{FontWeight, assets::IconName, component::Icon, div, prelude::*, px, rgb};
 
+#[allow(dead_code)]
 pub fn section_label(label: &str) -> impl IntoElement {
     div()
         .px_3()
@@ -15,13 +16,20 @@ pub fn new_tab_button() -> impl IntoElement {
         .id("new-tab")
         .flex()
         .items_center()
-        .gap_3()
+        .gap_2()
         .px_3()
         .py_2()
         .rounded_lg()
         .text_sm()
         .text_color(rgb(0xb9bbc2))
         .hover(|style| style.bg(rgb(0x282b31)))
-        .child(div().size(px(16.0)).text_lg().child("+"))
-        .child("New tab")
+        .child(
+            div()
+                .w(px(14.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(Icon::new(IconName::Plus)),
+        )
+        .child(div().flex_1().text_sm().child("New tab"))
 }

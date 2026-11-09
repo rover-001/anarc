@@ -5,6 +5,7 @@ pub struct Tab {
     pub id: String,
     pub title: String,
     pub url: String,
+    #[serde(default)]
     pub favicon_path: Option<String>,
     pub pinned: bool,
     pub last_active: u64,
