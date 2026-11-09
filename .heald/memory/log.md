@@ -18,3 +18,7 @@ Round 2 integrated perf WebViewport and on_schedule_message_pump_work with infra
 ## Session 2026-11-09T12:20:58.240823179+00:00
 
 Round 3 fixed CEF cache nesting: root_cache_path uses LUMEN_DATA_DIR/cef and per-space RequestContext cache paths use root/profiles/<space_id>. Updated path tests and README Testing guidance; LUMEN_CACHE_DIR remains for non-profile caches. cargo test --offline passed (29), cargo build --release --offline passed, fmt check passed. Round 3 appended to integrate-report.md. Live cache persistence remains unverified.
+
+## Session 2026-11-09T12:45:42.782323377+00:00
+
+Implemented reader worktree P2.6 Chromium profile import and P2.7 reader mode. Tests 32/32 and release build passed; CLI fixture import produced expected bookmark and visit JSON. Reader live interaction remains unverified. Report: /home/rover/Projects/kreon/briefs/reader-report.md.

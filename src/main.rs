@@ -1,9 +1,11 @@
 mod engine;
 mod history;
+mod import;
 mod lifecycle;
 mod model;
 mod paths;
 mod persist;
+mod reader;
 mod stats;
 mod ui;
 
@@ -1612,6 +1614,13 @@ impl Render for Lumen {
                     cx.stop_propagation();
                     return;
                 }
+                if browser_modifier && modifiers.alt && key == "r" && !modifiers.shift {
+                    this.engine
+                        .execute_script(this.active_tab_id(), &reader::toggle_script());
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return;
+                }
                 let suggestions_open = this.show_suggestions && !this.suggestions.is_empty();
                 let is_suggestion_arrow = suggestions_open
                     && matches!(key.as_str(), "up" | "down" | "arrowup" | "arrowdown");
@@ -1977,6 +1986,9 @@ impl Render for Lumen {
 }
 
 fn main() {
+    if handle_import_cli() {
+        return;
+    }
     #[cfg(target_os = "linux")]
     if std::env::var_os("DISPLAY").is_some() {
         // GPUI prefers Wayland when both display variables are set. CEF's
@@ -2008,6 +2020,41 @@ fn main() {
             )
             .expect("open Lumen window");
         });
+}
+
+fn handle_import_cli() -> bool {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    let Some(index) = args.iter().position(|arg| arg == "--import") else {
+        return false;
+    };
+    let Some(browser) = args.get(index + 1) else {
+        eprintln!("usage: lumen --import chrome|chromium|brave|edge|all");
+        std::process::exit(2);
+    };
+    match import::import(browser) {
+        Ok(summary) => {
+            println!(
+                "Import complete: {} profiles, {} bookmarks, {} visits",
+                summary.profiles, summary.bookmarks, summary.visits
+            );
+            println!(
+                "Bookmarks: {}",
+                paths::data_dir().join("bookmarks.json").display()
+            );
+            println!(
+                "History: {}",
+                paths::data_dir().join("imported-history.json").display()
+            );
+            for warning in summary.warnings {
+                eprintln!("Import warning: {warning}");
+            }
+        }
+        Err(error) => {
+            eprintln!("Import failed: {error}");
+            std::process::exit(2);
+        }
+    }
+    true
 }
 
 #[cfg(test)]
