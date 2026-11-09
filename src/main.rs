@@ -988,38 +988,46 @@ impl Lumen {
             .max(100.0) as i32;
         let sidebar_width = self.effective_sidebar_width();
         let content_width = (width - sidebar_width - CONTENT_BEZEL_X * 2.0).max(100.0);
-        let mut sizes = Vec::new();
-        if let Some(pair) = pair {
-            let (first_width, second_width) = if split_divider {
-                let max_width = split_view::max_divider_pane_width(content_width) as i32;
-                (max_width, max_width)
-            } else {
-                let max_content_width =
-                    (width - SIDEBAR_MIN_WIDTH - CONTENT_BEZEL_X * 2.0).max(100.0);
-                let (first, second) = split_view::pane_widths(max_content_width, self.split_ratio);
-                (first as i32, second as i32)
-            };
-            sizes.push(split_view::BrowserSize {
-                tab_id: pair.first,
-                width: first_width.max(1),
-                height,
-            });
-            sizes.push(split_view::BrowserSize {
-                tab_id: pair.second,
-                width: second_width.max(1),
-                height,
-            });
-        } else if let Some(tab_id) = self.active_space().active.clone() {
-            let max_content_width =
-                (width - SIDEBAR_MIN_WIDTH - CONTENT_BEZEL_X * 2.0).max(100.0) as i32;
-            sizes.push(split_view::BrowserSize {
-                tab_id,
-                width: max_content_width,
-                height,
-            });
-        }
-
-        for size in self.resize_drag.start(sizes) {
+        let fallback_widths = if pair.is_some() {
+            let (first, second) = split_view::pane_widths(content_width, self.split_ratio);
+            vec![first.max(1.0) as i32, second.max(1.0) as i32]
+        } else if self.active_space().active.is_some() {
+            vec![content_width.max(1.0) as i32]
+        } else {
+            Vec::new()
+        };
+        let tab_ids = pair
+            .map(|pair| vec![pair.first, pair.second])
+            .unwrap_or_else(|| self.active_space().active.clone().into_iter().collect());
+        let fallback_surface = visual::space_theme(self.active_space().color).surface;
+        let sizes = tab_ids
+            .iter()
+            .enumerate()
+            .map(|(index, tab_id)| {
+                let (current_width, current_height) = self
+                    .engine
+                    .browser_size(tab_id)
+                    .unwrap_or((fallback_widths[index], height));
+                split_view::BrowserSize {
+                    tab_id: tab_id.clone(),
+                    width: current_width,
+                    height: current_height,
+                }
+            })
+            .collect::<Vec<_>>();
+        let edge_colors = tab_ids
+            .iter()
+            .map(|tab_id| {
+                (
+                    tab_id.clone(),
+                    self.engine
+                        .frame_edge_color(tab_id)
+                        .unwrap_or(fallback_surface),
+                )
+            })
+            .collect();
+        self.resize_drag.start(sizes.clone(), edge_colors);
+        for size in sizes {
             resize_debug(format_args!(
                 "drag_start kind={} tab={} size={}x{}",
                 if split_divider { "split" } else { "sidebar" },
@@ -1027,8 +1035,6 @@ impl Lumen {
                 size.width,
                 size.height
             ));
-            self.engine
-                .flush_resize_browser(&size.tab_id, size.width, size.height);
         }
     }
 
@@ -1639,6 +1645,15 @@ impl Render for Lumen {
                             let image = this.engine.get_image(&first_tab);
                             let cursor = this.engine.get_cursor(&first_tab);
                             let sidebar_width = this.effective_sidebar_width();
+                            let frame_matches_target = this
+                                .resize_drag
+                                .target_size(&first_tab)
+                                .is_some_and(|(w, h)| {
+                                    this.engine.frame_matches_size(&first_tab, w, h)
+                                });
+                            let edge_color = this
+                                .resize_drag
+                                .edge_color_until_frame(&first_tab, frame_matches_target);
                             this.web_viewport.update(cx, |viewport, cx| {
                                 viewport.set_frame(
                                     first_tab,
@@ -1649,6 +1664,7 @@ impl Render for Lumen {
                                     0.0,
                                     0,
                                     visible_ids.len() > 1,
+                                    edge_color,
                                 );
                                 cx.notify();
                             });
@@ -2083,11 +2099,9 @@ impl Render for Lumen {
                     let chevron = Icon::new(IconName::ChevronDown).size(px(14.0 * UI_SCALE));
                     let chevron = if ui::motion::reduced_motion() {
                         chevron
-                            .rotate(gpui_kit::percentage(
-                                ui::motion::clamp_percentage(
-                                    target_rotation / (2.0 * std::f32::consts::PI),
-                                ),
-                            ))
+                            .rotate(gpui_kit::percentage(ui::motion::clamp_percentage(
+                                target_rotation / (2.0 * std::f32::consts::PI),
+                            )))
                             .into_any_element()
                     } else {
                         chevron
@@ -2096,11 +2110,9 @@ impl Render for Lumen {
                                 SpringAnimation::new(SpringConfig::new(400.0, 32.0, 1.0))
                                     .to(target_rotation),
                                 |icon, angle| {
-                                    icon.rotate(gpui_kit::percentage(
-                                        ui::motion::clamp_percentage(
-                                            angle / (2.0 * std::f32::consts::PI),
-                                        ),
-                                    ))
+                                    icon.rotate(gpui_kit::percentage(ui::motion::clamp_percentage(
+                                        angle / (2.0 * std::f32::consts::PI),
+                                    )))
                                 },
                             )
                             .into_any_element()
@@ -2763,6 +2775,19 @@ impl Render for Lumen {
                             .unwrap_or_else(|| active_tab_id_string.clone());
                         let left_image = self.engine.get_image(&left_tab_id);
                         let left_cursor = self.engine.get_cursor(&left_tab_id);
+                        #[cfg(all(target_os = "linux", not(test)))]
+                        let left_frame_matches_target = self
+                            .resize_drag
+                            .target_size(&left_tab_id)
+                            .is_some_and(|(w, h)| {
+                                self.engine.frame_matches_size(&left_tab_id, w, h)
+                            });
+                        #[cfg(all(target_os = "linux", not(test)))]
+                        let left_edge_color = self
+                            .resize_drag
+                            .edge_color_until_frame(&left_tab_id, left_frame_matches_target);
+                        #[cfg(any(not(target_os = "linux"), test))]
+                        let left_edge_color = None;
                         self.web_viewport.update(cx, |viewport, cx| {
                             viewport.set_theme(theme);
                             viewport.set_frame(
@@ -2774,6 +2799,7 @@ impl Render for Lumen {
                                 0.0,
                                 0,
                                 split_pair.is_some(),
+                                left_edge_color,
                             );
                             cx.notify();
                         });
@@ -2781,6 +2807,17 @@ impl Render for Lumen {
                         if let Some(right_tab_id) = right_tab_id {
                             let right_image = self.engine.get_image(&right_tab_id);
                             let right_cursor = self.engine.get_cursor(&right_tab_id);
+                            #[cfg(all(target_os = "linux", not(test)))]
+                            let right_frame_matches_target =
+                                self.resize_drag.target_size(&right_tab_id).is_some_and(
+                                    |(w, h)| self.engine.frame_matches_size(&right_tab_id, w, h),
+                                );
+                            #[cfg(all(target_os = "linux", not(test)))]
+                            let right_edge_color = self
+                                .resize_drag
+                                .edge_color_until_frame(&right_tab_id, right_frame_matches_target);
+                            #[cfg(any(not(target_os = "linux"), test))]
+                            let right_edge_color = None;
                             self.second_web_viewport.update(cx, |viewport, cx| {
                                 viewport.set_theme(theme);
                                 viewport.set_frame(
@@ -2792,6 +2829,7 @@ impl Render for Lumen {
                                     left_width + DIVIDER_WIDTH,
                                     1,
                                     true,
+                                    right_edge_color,
                                 );
                                 cx.notify();
                             });
@@ -2823,7 +2861,9 @@ impl Render for Lumen {
                                                 ))
                                                 .with_easing(ui::motion::ease_out_quint),
                                                 |pane, progress| {
-                                                    pane.opacity(ui::motion::clamp_percentage(progress))
+                                                    pane.opacity(ui::motion::clamp_percentage(
+                                                        progress,
+                                                    ))
                                                 },
                                             )
                                             .child(
@@ -2874,7 +2914,9 @@ impl Render for Lumen {
                                                 ))
                                                 .with_easing(ui::motion::ease_out_quint),
                                                 |pane, progress| {
-                                                    pane.opacity(ui::motion::clamp_percentage(progress))
+                                                    pane.opacity(ui::motion::clamp_percentage(
+                                                        progress,
+                                                    ))
                                                 },
                                             )
                                             .child(

@@ -14,12 +14,15 @@ pub struct BrowserSize {
 #[derive(Default)]
 pub struct ResizeDrag {
     frozen: Option<Vec<BrowserSize>>,
+    edge_colors: std::collections::HashMap<String, u32>,
+    pending_targets: std::collections::HashMap<String, (i32, i32)>,
 }
 
 impl ResizeDrag {
-    pub fn start(&mut self, max_sizes: Vec<BrowserSize>) -> Vec<BrowserSize> {
-        self.frozen = Some(max_sizes.clone());
-        max_sizes
+    pub fn start(&mut self, current_sizes: Vec<BrowserSize>, edge_colors: Vec<(String, u32)>) {
+        self.frozen = Some(current_sizes);
+        self.edge_colors = edge_colors.into_iter().collect();
+        self.pending_targets.clear();
     }
 
     pub fn frozen_size(&self, tab_id: &str) -> Option<(i32, i32)> {
@@ -29,14 +32,30 @@ impl ResizeDrag {
             .find_map(|size| (size.tab_id == tab_id).then_some((size.width, size.height)))
     }
 
+    #[cfg(all(target_os = "linux", not(test)))]
+    pub fn target_size(&self, tab_id: &str) -> Option<(i32, i32)> {
+        self.pending_targets.get(tab_id).copied()
+    }
+
     pub fn finish(&mut self, exact_sizes: Vec<BrowserSize>) -> Vec<BrowserSize> {
         self.frozen = None;
+        self.pending_targets = exact_sizes
+            .iter()
+            .map(|size| (size.tab_id.clone(), (size.width, size.height)))
+            .collect();
         exact_sizes
     }
-}
 
-pub fn max_divider_pane_width(content_width: f32) -> f32 {
-    (content_width - DIVIDER_WIDTH - MIN_PANE_WIDTH).max(1.0)
+    pub fn edge_color_until_frame(
+        &mut self,
+        tab_id: &str,
+        frame_matches_target: bool,
+    ) -> Option<u32> {
+        if frame_matches_target && self.pending_targets.remove(tab_id).is_some() {
+            self.edge_colors.remove(tab_id);
+        }
+        self.edge_colors.get(tab_id).copied()
+    }
 }
 
 pub fn tab_for_pane<'a>(first: &'a str, second: &'a str, pane_index: usize) -> &'a str {
@@ -104,20 +123,17 @@ mod tests {
     }
 
     #[test]
-    fn divider_drag_freezes_at_max_width_and_moves_do_not_resize() {
-        let max_width = max_divider_pane_width(1004.0) as i32;
-        assert_eq!(max_width, 760);
+    fn drag_keeps_current_sizes_until_release() {
         let mut drag = ResizeDrag::default();
         let start = vec![BrowserSize {
             tab_id: "tab-a".into(),
-            width: max_width,
+            width: 410,
             height: 700,
         }];
-        assert_eq!(drag.start(start.clone()), start);
-        assert_eq!(drag.frozen_size("tab-a"), Some((760, 700)));
-        // Any number of pointer moves leave the frozen browser request unchanged.
-        assert_eq!(drag.frozen_size("tab-a"), Some((760, 700)));
-        assert_eq!(drag.frozen_size("tab-a"), Some((760, 700)));
+        drag.start(start, vec![("tab-a".into(), 0x123456)]);
+        // Pointer moves update layout only; browser sizing stays at its start value.
+        assert_eq!(drag.frozen_size("tab-a"), Some((410, 700)));
+        assert_eq!(drag.edge_color_until_frame("tab-a", false), Some(0x123456));
         let end = vec![BrowserSize {
             tab_id: "tab-a".into(),
             width: 360,
@@ -125,5 +141,7 @@ mod tests {
         }];
         assert_eq!(drag.finish(end.clone()), end);
         assert_eq!(drag.frozen_size("tab-a"), None);
+        assert_eq!(drag.edge_color_until_frame("tab-a", false), Some(0x123456));
+        assert_eq!(drag.edge_color_until_frame("tab-a", true), None);
     }
 }

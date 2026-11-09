@@ -129,6 +129,7 @@ pub struct BrowserSharedState {
     pub width: i32,
     pub height: i32,
     pub image: Option<Arc<RenderImage>>,
+    pub edge_color: Option<u32>,
     pub dirty: bool,
     pub root_dirty: bool,
     pub title: Option<String>,
@@ -145,6 +146,32 @@ pub struct BrowserSharedState {
     pub screen_origin_x: i32,
     pub screen_origin_y: i32,
     pub cursor: i32,
+}
+
+fn median_edge_color_bgra(pixels: &[u8], width: usize, height: usize) -> Option<u32> {
+    if width == 0 || height == 0 || pixels.len() < width.checked_mul(height)?.checked_mul(4)? {
+        return None;
+    }
+    let mut red = Vec::with_capacity(height);
+    let mut green = Vec::with_capacity(height);
+    let mut blue = Vec::with_capacity(height);
+    let x = width - 1;
+    for y in 0..height {
+        let offset = (y * width + x) * 4;
+        blue.push(pixels[offset]);
+        green.push(pixels[offset + 1]);
+        red.push(pixels[offset + 2]);
+    }
+    let median = |values: &mut [u8]| {
+        let middle = values.len() / 2;
+        values.select_nth_unstable(middle);
+        values[middle]
+    };
+    Some(
+        (u32::from(median(&mut red)) << 16)
+            | (u32::from(median(&mut green)) << 8)
+            | u32::from(median(&mut blue)),
+    )
 }
 
 cef::wrap_load_handler! {
@@ -493,6 +520,7 @@ cef::wrap_render_handler! {
             let slice = unsafe { std::slice::from_raw_parts(buffer, len) };
             let copy_started = crate::stats::frame_copy_started();
             let pixels = slice.to_vec();
+            let edge_color = median_edge_color_bgra(&pixels, width as usize, height as usize);
             crate::stats::record_osr_paint(copy_started);
             if let Some(img_buffer) = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
                 width as u32,
@@ -505,6 +533,7 @@ cef::wrap_render_handler! {
                 if let Some(previous) = state.image.replace(render_image) {
                     state.retired.push(previous);
                 }
+                state.edge_color = edge_color;
                 state.dirty = true;
             }
             let _ = self.paint_wake.try_send(());
@@ -1099,6 +1128,7 @@ impl Engine {
                 width: width.max(1),
                 height: height.max(1),
                 image: None,
+                edge_color: None,
                 dirty: false,
                 root_dirty: false,
                 title: None,
@@ -1406,6 +1436,46 @@ impl Engine {
                 .ok()
                 .and_then(|state| state.image.clone())
         })
+    }
+
+    pub fn browser_size(&self, tab_id: &str) -> Option<(i32, i32)> {
+        self.browsers
+            .get(tab_id)
+            .and_then(|entry| {
+                entry
+                    .state
+                    .lock()
+                    .ok()
+                    .map(|state| (state.width, state.height))
+            })
+            .or_else(|| {
+                self.pending_browsers
+                    .get(tab_id)
+                    .and_then(|state| state.lock().ok().map(|state| (state.width, state.height)))
+            })
+    }
+
+    pub fn frame_edge_color(&self, tab_id: &str) -> Option<u32> {
+        self.browsers
+            .get(tab_id)
+            .and_then(|entry| entry.state.lock().ok().and_then(|state| state.edge_color))
+    }
+
+    pub fn frame_matches_size(&self, tab_id: &str, width: i32, height: i32) -> bool {
+        self.browsers
+            .get(tab_id)
+            .and_then(|entry| {
+                entry.state.lock().ok().and_then(|state| {
+                    state.image.as_ref().map(|image| {
+                        let image_size = image.size(0);
+                        let scale = state.screen_scale.max(f32::EPSILON);
+                        (u32::from(image_size.width) as f32 / scale - width as f32).abs() < 1.0
+                            && (u32::from(image_size.height) as f32 / scale - height as f32).abs()
+                                < 1.0
+                    })
+                })
+            })
+            .unwrap_or(false)
     }
 
     pub fn get_cursor(&self, tab_id: &str) -> i32 {
@@ -1891,6 +1961,15 @@ mod tests {
             start + Duration::from_millis(8),
             true,
         ));
+    }
+
+    #[test]
+    fn frame_edge_color_is_channel_median_converted_from_bgra_to_rgb() {
+        let pixels = [
+            0, 0, 0, 255, 1, 2, 30, 255, 0, 0, 0, 255, 4, 5, 60, 255, 0, 0, 0, 255, 7, 8, 90, 255,
+        ];
+        assert_eq!(median_edge_color_bgra(&pixels, 2, 3), Some(0x3c0504));
+        assert_eq!(median_edge_color_bgra(&pixels[..7], 2, 3), None);
     }
 
     #[test]
