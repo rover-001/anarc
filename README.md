@@ -10,7 +10,7 @@ Use Rust stable and run:
 cargo run --release
 ```
 
-The UI appears before CEF is initialized. After the first frame, Lumen starts CEF and pumps its external message loop from GPUI. The app logs time to its first GPUI render to stderr. Type a URL or search in the top address field and click **Go**; use **+ New tab** to add a tab. URLs without a scheme get `https://`; plain text is searched with DuckDuckGo.
+The UI appears before CEF is initialized. After the first frame, Lumen starts CEF and pumps its external message loop from GPUI. The app logs time to its first GPUI render to stderr. Type a URL or search in the top address field and click **Go** or press Enter; use **+ New tab** to add a tab. URLs without a scheme get `https://`; plain text is searched with DuckDuckGo. Clicking **Go** on an empty address opens DuckDuckGo.
 
 ## CEF setup (Phase 2+)
 

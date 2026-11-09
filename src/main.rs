@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use gpui_kit::{
     Bounds, Context, FontWeight, Render, Window, WindowBounds, WindowOptions,
-    component::input::{Input, InputState},
+    component::input::{Input, InputEvent, InputState},
     div,
     prelude::*,
     px, rgb, size,
@@ -25,6 +25,7 @@ struct Lumen {
     started_at: Instant,
     first_frame_logged: bool,
     address: gpui_kit::Entity<InputState>,
+    _address_subscription: gpui_kit::Subscription,
     engine: engine::Engine,
     cef_task_started: bool,
 }
@@ -45,15 +46,23 @@ impl Lumen {
         ));
         work.active = Some("work-start".into());
 
+        let address = cx
+            .new(|cx| InputState::new(window, cx).placeholder("Search or enter a website address"));
+        let address_subscription = cx.subscribe(&address, |this: &mut Lumen, _, event, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.navigate(cx);
+                cx.notify();
+            }
+        });
+
         Self {
             spaces: vec![personal, work],
             active_space: "personal".into(),
             sidebar_collapsed: false,
             started_at: Instant::now(),
             first_frame_logged: false,
-            address: cx.new(|cx| {
-                InputState::new(window, cx).placeholder("Search or enter a website address")
-            }),
+            address,
+            _address_subscription: address_subscription,
             engine: engine::Engine::new(),
             cef_task_started: false,
         }
@@ -85,9 +94,11 @@ impl Lumen {
     fn navigate(&mut self, cx: &Context<Self>) {
         let input = self.address.read(cx).value().to_string();
         let url = normalize_address(&input);
-        if url.is_empty() {
-            return;
-        }
+        let url = if url.is_empty() {
+            "https://duckduckgo.com".to_owned()
+        } else {
+            url
+        };
         let space = self
             .spaces
             .iter_mut()
