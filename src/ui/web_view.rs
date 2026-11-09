@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use gpui_kit::{Context, Render, Window, div, prelude::*, px, rgb};
 
+use crate::ui::visual::TOPBAR_HEIGHT;
 use crate::{CONTENT_BEZEL_X, Lumen};
 
 pub struct WebViewport {
@@ -81,7 +82,7 @@ fn browser_point_in_pane(
 ) -> (i32, i32) {
     let x = ((f32::from(position.x) - sidebar_width - CONTENT_BEZEL_X - pane_offset).max(0.0)
         * scale) as i32;
-    let y = ((f32::from(position.y) - 52.0).max(0.0) * scale) as i32;
+    let y = ((f32::from(position.y) - TOPBAR_HEIGHT).max(0.0) * scale) as i32;
     (x, y)
 }
 
@@ -439,8 +440,16 @@ mod tests {
     #[test]
     fn viewport_coordinates_remove_sidebar_and_topbar_before_scaling() {
         let position = gpui_kit::point(px(340.0), px(72.0));
-        assert_eq!(browser_point(position, 2.0, 320.0), (32, 40));
-        assert_eq!(browser_point(position, 1.0, 64.0), (272, 20));
+        assert_eq!(browser_point(position, 2.0, 320.0), (33, 55));
+        assert_eq!(browser_point(position, 1.0, 64.0), (272, 27));
+    }
+
+    #[test]
+    fn viewport_mouse_origin_matches_scaled_topbar_height() {
+        let at_origin = gpui_kit::point(px(100.0), px(TOPBAR_HEIGHT));
+        let below_origin = gpui_kit::point(px(100.0), px(TOPBAR_HEIGHT + 10.0));
+        assert_eq!(browser_point(at_origin, 1.0, 0.0).1, 0);
+        assert_eq!(browser_point(below_origin, 1.0, 0.0).1, 10);
     }
 
     #[test]
@@ -448,7 +457,7 @@ mod tests {
         let position = gpui_kit::point(px(520.0), px(72.0));
         assert_eq!(
             browser_point_in_pane(position, 2.0, 320.0, 100.0),
-            (192, 40)
+            (193, 55)
         );
     }
 }
