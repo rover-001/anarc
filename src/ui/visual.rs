@@ -10,7 +10,7 @@ pub const SIDEBAR_ROW_PADDING_X: f32 = 12.0;
 pub const SIDEBAR_ROW_ICON_SIZE: f32 = 16.0 * UI_SCALE;
 pub const SIDEBAR_ROW_GAP: f32 = 8.0;
 
-pub const DEFAULT_PAGE_ZOOM_FACTOR: f64 = 1.0;
+pub const DEFAULT_PAGE_ZOOM_FACTOR: f64 = 0.9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpaceTheme {
@@ -72,14 +72,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_zoom_is_one_hundred_percent() {
-        assert!((1.2_f64.powf(default_zoom_level()) - 1.0).abs() < 1e-12);
+    fn default_zoom_is_ninety_percent() {
+        assert!((1.2_f64.powf(default_zoom_level()) - 0.9).abs() < 1e-12);
     }
 
     #[test]
     fn zoom_reset_returns_to_default_instead_of_zero_level() {
         assert_eq!(zoom_after_delta(Some(2.0), 0.0), default_zoom_level());
-        assert_eq!(zoom_after_delta(None, 1.0), 1.0);
+        assert_eq!(zoom_after_delta(None, 1.0), default_zoom_level() + 1.0);
     }
 
     #[test]
