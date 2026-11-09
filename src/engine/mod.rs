@@ -114,6 +114,8 @@ pub struct BrowserSharedState {
     pub title: Option<String>,
     pub url: Option<String>,
     pub is_loading: bool,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
     pub favicon: Option<Arc<RenderImage>>,
     /// Superseded frames that must be evicted from GPUI's sprite atlas on the UI thread.
     pub retired: Vec<Arc<RenderImage>>,
@@ -122,6 +124,48 @@ pub struct BrowserSharedState {
     pub screen_scale: f32,
     pub screen_origin_x: i32,
     pub screen_origin_y: i32,
+}
+
+cef::wrap_load_handler! {
+    struct LumenLoadHandler {
+        shared: Arc<Mutex<BrowserSharedState>>,
+    }
+
+    impl LoadHandler {
+        fn on_loading_state_change(
+            &self,
+            _browser: Option<&mut Browser>,
+            is_loading: i32,
+            can_go_back: i32,
+            can_go_forward: i32,
+        ) {
+            if let Ok(mut state) = self.shared.lock() {
+                state.is_loading = is_loading != 0;
+                state.can_go_back = can_go_back != 0;
+                state.can_go_forward = can_go_forward != 0;
+                state.dirty = true;
+            }
+        }
+    }
+}
+
+cef::wrap_context_menu_handler! {
+    struct LumenContextMenuHandler;
+
+    impl ContextMenuHandler {
+        fn on_before_context_menu(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _params: Option<&mut ContextMenuParams>,
+            model: Option<&mut MenuModel>,
+        ) {
+            // CEF's OSR menu paints use PET_POPUP, which this client intentionally ignores.
+            if let Some(model) = model {
+                model.clear();
+            }
+        }
+    }
 }
 
 cef::wrap_download_image_callback! {
@@ -251,7 +295,6 @@ cef::wrap_render_handler! {
                     state.retired.push(previous);
                 }
                 state.dirty = true;
-                state.is_loading = false;
             }
         }
     }
@@ -390,6 +433,7 @@ cef::wrap_download_handler! {
                 .map(|events| events.downloads.as_slice())
                 .unwrap_or_default();
             let path = unique_download_path(&name, reserved);
+            let cef_path = CefString::from(path.to_string_lossy().as_ref());
             let record = DownloadRecord {
                 id: item.id(),
                 url: CefStringUtf16::from(&item.url()).to_string(),
@@ -403,7 +447,6 @@ cef::wrap_download_handler! {
                 events.downloads.push(record.clone());
             }
             drop(events);
-            let cef_path = CefString::from(path.to_string_lossy().as_ref());
             callback.cont(Some(&cef_path), 0);
             eprintln!("Lumen download started: {} -> {}", record.url, record.path.display());
             0
@@ -507,6 +550,8 @@ cef::wrap_client! {
         life_span_handler: LifeSpanHandler,
         download_handler: DownloadHandler,
         permission_handler: PermissionHandler,
+        load_handler: LoadHandler,
+        context_menu_handler: ContextMenuHandler,
     }
 
     impl Client {
@@ -521,6 +566,13 @@ cef::wrap_client! {
         fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(self.life_span_handler.clone()) }
         fn download_handler(&self) -> Option<DownloadHandler> { Some(self.download_handler.clone()) }
         fn permission_handler(&self) -> Option<PermissionHandler> { Some(self.permission_handler.clone()) }
+        fn load_handler(&self) -> Option<LoadHandler> {
+            Some(self.load_handler.clone())
+        }
+
+        fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+            Some(self.context_menu_handler.clone())
+        }
     }
 }
 
@@ -641,6 +693,8 @@ impl Engine {
                 title: None,
                 url: None,
                 is_loading: true,
+                can_go_back: false,
+                can_go_forward: false,
                 favicon: None,
                 retired: Vec::new(),
                 screen_width: width.max(1),
@@ -655,12 +709,16 @@ impl Engine {
                 LumenLifeSpanHandler::new(self.events.clone(), space_id.to_owned());
             let download_handler = LumenDownloadHandler::new(self.events.clone());
             let permission_handler = LumenPermissionHandler::new();
+            let load_handler = LumenLoadHandler::new(shared.clone());
+            let context_menu_handler = LumenContextMenuHandler::new();
             let mut client = LumenClient::new(
                 render_handler,
                 display_handler,
                 life_span_handler,
                 download_handler,
                 permission_handler,
+                load_handler,
+                context_menu_handler,
             );
 
             let window_info = WindowInfo::default().set_as_windowless(0);
@@ -813,6 +871,83 @@ impl Engine {
             .lock()
             .map(|events| events.downloads.clone())
             .unwrap_or_default()
+    }
+
+    pub fn go_back(&self, tab_id: &str) {
+        if let Some(browser) = self.browsers.get(tab_id).map(|entry| entry.browser.clone())
+            && browser.can_go_back() != 0
+        {
+            browser.go_back();
+        }
+    }
+
+    pub fn go_forward(&self, tab_id: &str) {
+        if let Some(browser) = self.browsers.get(tab_id).map(|entry| entry.browser.clone())
+            && browser.can_go_forward() != 0
+        {
+            browser.go_forward();
+        }
+    }
+
+    pub fn stop_load(&self, tab_id: &str) {
+        if let Some(browser) = self.browsers.get(tab_id) {
+            browser.browser.stop_load();
+        }
+    }
+
+    pub fn is_loading(&self, tab_id: &str) -> bool {
+        self.browsers.get(tab_id).is_some_and(|entry| {
+            entry
+                .state
+                .lock()
+                .map(|state| state.is_loading)
+                .unwrap_or(false)
+        })
+    }
+
+    pub fn can_go_back(&self, tab_id: &str) -> bool {
+        self.browsers.get(tab_id).is_some_and(|entry| {
+            entry
+                .state
+                .lock()
+                .map(|state| state.can_go_back)
+                .unwrap_or(false)
+        })
+    }
+
+    pub fn find(&self, tab_id: &str, query: &str, forward: bool, next: bool) {
+        if let Some(host) = self
+            .browsers
+            .get(tab_id)
+            .and_then(|entry| entry.browser.host())
+        {
+            host.find(
+                Some(&CefString::from(query)),
+                forward as i32,
+                0,
+                next as i32,
+            );
+        }
+    }
+
+    pub fn stop_finding(&self, tab_id: &str) {
+        if let Some(host) = self
+            .browsers
+            .get(tab_id)
+            .and_then(|entry| entry.browser.host())
+        {
+            host.stop_finding(1);
+        }
+    }
+
+    pub fn set_zoom_level(&self, tab_id: &str, level: f64) {
+        if let Some(host) = self
+            .browsers
+            .get(tab_id)
+            .and_then(|entry| entry.browser.host())
+        {
+            host.set_zoom_level(level.clamp(-5.0, 5.0));
+        }
     }
 
     pub fn get_image(&self, tab_id: &str) -> Option<Arc<RenderImage>> {
