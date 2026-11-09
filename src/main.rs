@@ -2,6 +2,7 @@ mod engine;
 mod history;
 mod lifecycle;
 mod model;
+mod paths;
 mod persist;
 mod stats;
 mod ui;
@@ -771,6 +772,7 @@ fn submit_address(space: &mut Space, input: &str) -> Option<(String, String)> {
 
 impl Render for Lumen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        stats::record_ui_render();
         if !self.first_frame_logged {
             self.first_frame_logged = true;
             eprintln!(
