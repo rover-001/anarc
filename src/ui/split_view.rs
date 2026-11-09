@@ -1,5 +1,7 @@
-pub const DIVIDER_WIDTH: f32 = 4.0;
-pub const MIN_PANE_WIDTH: f32 = 240.0;
+use crate::ui::visual::UI_SCALE;
+
+pub const DIVIDER_WIDTH: f32 = 4.0 * UI_SCALE;
+pub const MIN_PANE_WIDTH: f32 = 240.0 * UI_SCALE;
 
 pub fn tab_for_pane<'a>(first: &'a str, second: &'a str, pane_index: usize) -> &'a str {
     if pane_index == 1 { second } else { first }
@@ -32,14 +34,19 @@ mod tests {
 
     #[test]
     fn split_panes_preserve_divider_and_minimum_width() {
-        assert_eq!(pane_widths(1004.0, 0.25), (250.0, 750.0));
-        assert_eq!(pane_widths(400.0, 0.1), (198.0, 198.0));
+        let (left, right) = pane_widths(1004.0, 0.25);
+        assert!((left - 250.15).abs() < 0.01);
+        assert!((right - 750.45).abs() < 0.01);
+        let (left, right) = pane_widths(400.0, 0.1);
+        assert!((left - 198.3).abs() < 0.01);
+        assert!((right - 198.3).abs() < 0.01);
     }
 
     #[test]
     fn divider_drag_clamps_to_minimum_pane_width() {
-        assert_eq!(ratio_at_pointer(100.0, 0.0, 1004.0), 0.24);
-        assert_eq!(ratio_at_pointer(900.0, 0.0, 1004.0), 0.76);
+        let min_ratio = MIN_PANE_WIDTH / (1004.0 - DIVIDER_WIDTH);
+        assert!((ratio_at_pointer(100.0, 0.0, 1004.0) - min_ratio).abs() < 1e-6);
+        assert!((ratio_at_pointer(900.0, 0.0, 1004.0) - (1.0 - min_ratio)).abs() < 1e-6);
         assert_eq!(ratio_at_pointer(100.0, 0.0, 400.0), 0.5);
     }
 
