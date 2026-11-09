@@ -705,7 +705,7 @@ impl Engine {
         settings.user_agent = CefString::from(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
         );
-        let cache_root = crate::paths::cache_dir();
+        let cache_root = crate::paths::cef_root_dir();
         std::fs::create_dir_all(&cache_root)
             .map_err(|error| format!("cannot create CEF cache directory: {error}"))?;
         settings.root_cache_path = CefString::from(cache_root.to_string_lossy().as_ref());
@@ -821,7 +821,7 @@ impl Engine {
             let start_url = CefString::from(url);
 
             if !self.contexts.contains_key(space_id) {
-                let cache_dir = crate::paths::data_dir().join("profiles").join(space_id);
+                let cache_dir = crate::paths::profile_dir(space_id);
                 let _ = std::fs::create_dir_all(&cache_dir);
 
                 let mut settings = RequestContextSettings::default();
