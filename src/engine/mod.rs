@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::ffi::c_ulong;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cef::args::Args;
@@ -25,10 +26,45 @@ fn origin_favicon_url(page_url: &str) -> Option<String> {
     Some(format!("{scheme}://{authority}/favicon.ico"))
 }
 
+const NO_SCHEDULED_PUMP: u64 = u64::MAX;
+const PUMP_SAFETY_TICK_MS: u64 = 33;
+
+pub fn pump_sleep_ms(requested_delay: Option<u64>) -> u64 {
+    requested_delay
+        .unwrap_or(PUMP_SAFETY_TICK_MS)
+        .min(PUMP_SAFETY_TICK_MS)
+}
+
+pub fn frame_rate_for_refresh(refresh_interval: Option<std::time::Duration>) -> i32 {
+    refresh_interval
+        .filter(|interval| !interval.is_zero())
+        .map(|interval| (1.0 / interval.as_secs_f64()).round() as i32)
+        .unwrap_or(60)
+        .clamp(1, 120)
+}
+
+cef::wrap_browser_process_handler! {
+    struct LumenBrowserProcessHandler {
+        scheduled_delay_ms: Arc<AtomicU64>,
+    }
+
+    impl BrowserProcessHandler {
+        fn on_schedule_message_pump_work(&self, delay_ms: i64) {
+            self.scheduled_delay_ms.fetch_min(delay_ms.max(0) as u64, Ordering::AcqRel);
+        }
+    }
+}
+
 cef::wrap_app! {
-    struct LumenCefApp;
+    struct LumenCefApp {
+        scheduled_delay_ms: Arc<AtomicU64>,
+    }
 
     impl App {
+        fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
+            Some(LumenBrowserProcessHandler::new(self.scheduled_delay_ms.clone()))
+        }
+
         fn on_before_command_line_processing(
             &self,
             _process_type: Option<&CefString>,
@@ -89,12 +125,14 @@ pub struct BrowserSharedState {
     pub height: i32,
     pub image: Option<Arc<RenderImage>>,
     pub dirty: bool,
+    pub root_dirty: bool,
     pub title: Option<String>,
     pub url: Option<String>,
     pub is_loading: bool,
     pub favicon: Option<Arc<RenderImage>>,
     /// Superseded frames that must be evicted from GPUI's sprite atlas on the UI thread.
     pub retired: Vec<Arc<RenderImage>>,
+    pub cursor: i32,
 }
 
 cef::wrap_download_image_callback! {
@@ -132,6 +170,7 @@ cef::wrap_download_image_callback! {
                 if self.preferred || state.favicon.is_none() {
                     state.favicon = Some(render_image);
                     state.dirty = true;
+                    state.root_dirty = true;
                 }
             }
         }
@@ -229,7 +268,36 @@ cef::wrap_display_handler! {
                 let mut state = self.shared.lock().unwrap();
                 state.title = Some(title.to_string());
                 state.dirty = true;
+                state.root_dirty = true;
             }
+        }
+
+        fn on_cursor_change(
+            &self,
+            _browser: Option<&mut Browser>,
+            _cursor: c_ulong,
+            cursor_type: CursorType,
+            _custom_cursor_info: Option<&CursorInfo>,
+        ) -> i32 {
+            let cursor = match cursor_type {
+                CursorType::IBEAM | CursorType::VERTICALTEXT => 1,
+                CursorType::CROSS => 2,
+                CursorType::HAND => 3,
+                CursorType::EASTWESTRESIZE | CursorType::COLUMNRESIZE => 5,
+                CursorType::NORTHSOUTHRESIZE | CursorType::ROWRESIZE => 6,
+                CursorType::GRAB => 7,
+                CursorType::GRABBING => 8,
+                CursorType::NOTALLOWED | CursorType::NODROP => 9,
+                CursorType::ALIAS | CursorType::DND_LINK => 10,
+                CursorType::COPY | CursorType::DND_COPY => 11,
+                CursorType::CONTEXTMENU => 12,
+                _ => 0,
+            };
+            if let Ok(mut state) = self.shared.lock() {
+                state.cursor = cursor;
+                state.dirty = true;
+            }
+            1
         }
 
         fn on_address_change(
@@ -247,6 +315,7 @@ cef::wrap_display_handler! {
                 if let Ok(mut state) = self.shared.lock() {
                     state.url = Some(page_url.clone());
                     state.dirty = true;
+                    state.root_dirty = true;
                 }
                 if let Some(favicon_url) = origin_favicon_url(&page_url)
                     && let Some(host) = browser.and_then(|browser| browser.host())
@@ -294,6 +363,8 @@ pub struct Engine {
     args: Args,
     app: Option<cef::App>,
     visible: Option<String>,
+    scheduled_delay_ms: Arc<AtomicU64>,
+    windowless_frame_rate: i32,
 }
 
 impl Engine {
@@ -305,6 +376,8 @@ impl Engine {
             args: Args::new(),
             app: None,
             visible: None,
+            scheduled_delay_ms: Arc::new(AtomicU64::new(NO_SCHEDULED_PUMP)),
+            windowless_frame_rate: 60,
         }
     }
 
@@ -313,7 +386,7 @@ impl Engine {
         if self.initialized {
             return Ok(());
         }
-        let mut app = LumenCefApp::new();
+        let mut app = LumenCefApp::new(self.scheduled_delay_ms.clone());
         let subprocess = cef::execute_process(
             Some(self.args.as_main_args()),
             Some(&mut app),
@@ -361,19 +434,40 @@ impl Engine {
 
     pub fn pump(&self) {
         if self.initialized {
+            self.scheduled_delay_ms
+                .store(NO_SCHEDULED_PUMP, Ordering::Release);
             cef::do_message_loop_work();
         }
     }
 
-    pub fn take_dirty(&self) -> bool {
-        self.browsers.values().fold(false, |dirty, entry| {
-            let entry_dirty = entry.state.lock().ok().is_some_and(|mut state| {
-                let dirty = state.dirty;
-                state.dirty = false;
-                dirty
-            });
-            dirty || entry_dirty
-        })
+    /// Delay requested by CEF, if any. The app loop also caps sleeps to its 33 ms safety tick.
+    pub fn take_scheduled_pump_delay_ms(&self) -> Option<u64> {
+        let delay = self
+            .scheduled_delay_ms
+            .swap(NO_SCHEDULED_PUMP, Ordering::AcqRel);
+        (delay != NO_SCHEDULED_PUMP).then_some(delay)
+    }
+
+    pub fn set_windowless_frame_rate(&mut self, frame_rate: i32) {
+        self.windowless_frame_rate = frame_rate.clamp(1, 120);
+    }
+
+    pub fn take_dirty(&self, active_tab_id: &str) -> (bool, bool) {
+        self.browsers
+            .iter()
+            .fold((false, false), |(dirty, root_dirty), (id, entry)| {
+                let (entry_dirty, entry_root_dirty) =
+                    entry.state.lock().ok().map_or((false, false), |mut state| {
+                        let entry_dirty = state.dirty;
+                        state.dirty = false;
+                        let entry_root_dirty = id == active_tab_id && state.root_dirty;
+                        if id == active_tab_id {
+                            state.root_dirty = false;
+                        }
+                        (entry_dirty, entry_root_dirty)
+                    });
+                (dirty || entry_dirty, root_dirty || entry_root_dirty)
+            })
     }
 
     pub fn is_initialized(&self) -> bool {
@@ -397,11 +491,13 @@ impl Engine {
                 height: height.max(1),
                 image: None,
                 dirty: false,
+                root_dirty: false,
                 title: None,
                 url: None,
                 is_loading: true,
                 favicon: None,
                 retired: Vec::new(),
+                cursor: 0,
             }));
             let render_handler = LumenRenderHandler::new(shared.clone());
             let display_handler = LumenDisplayHandler::new(shared.clone());
@@ -431,7 +527,7 @@ impl Engine {
             let mut browser_settings = BrowserSettings::default();
             browser_settings.background_color = 0xff15161a;
             // CEF's OSR default is 30 fps, which makes scrolling and animations visibly choppy.
-            browser_settings.windowless_frame_rate = 60;
+            browser_settings.windowless_frame_rate = self.windowless_frame_rate;
 
             let browser = cef::browser_host_create_browser_sync(
                 Some(&window_info),
@@ -478,6 +574,13 @@ impl Engine {
                 .ok()
                 .and_then(|state| state.image.clone())
         })
+    }
+
+    pub fn get_cursor(&self, tab_id: &str) -> i32 {
+        self.browsers
+            .get(tab_id)
+            .and_then(|entry| entry.state.lock().ok().map(|state| state.cursor))
+            .unwrap_or(0)
     }
 
     /// Drains frames replaced since the last call so the caller can evict them from
@@ -542,28 +645,56 @@ impl Engine {
         button: MouseButtonType,
         mouse_up: bool,
         click_count: i32,
+        modifiers: &gpui_kit::Modifiers,
     ) {
         if let Some(entry) = self.browsers.get(tab_id) {
             if let Some(host) = entry.browser.host() {
-                let event = MouseEvent { x, y, modifiers: 0 };
+                let event = MouseEvent {
+                    x,
+                    y,
+                    modifiers: cef_mouse_modifiers(modifiers),
+                };
                 host.send_mouse_click_event(Some(&event), button, mouse_up as i32, click_count);
             }
         }
     }
 
-    pub fn send_mouse_move(&self, tab_id: &str, x: i32, y: i32, mouse_leave: bool) {
+    pub fn send_mouse_move(
+        &self,
+        tab_id: &str,
+        x: i32,
+        y: i32,
+        mouse_leave: bool,
+        modifiers: &gpui_kit::Modifiers,
+    ) {
         if let Some(entry) = self.browsers.get(tab_id) {
             if let Some(host) = entry.browser.host() {
-                let event = MouseEvent { x, y, modifiers: 0 };
+                let event = MouseEvent {
+                    x,
+                    y,
+                    modifiers: cef_mouse_modifiers(modifiers),
+                };
                 host.send_mouse_move_event(Some(&event), mouse_leave as i32);
             }
         }
     }
 
-    pub fn send_mouse_wheel(&self, tab_id: &str, x: i32, y: i32, delta_x: i32, delta_y: i32) {
+    pub fn send_mouse_wheel(
+        &self,
+        tab_id: &str,
+        x: i32,
+        y: i32,
+        delta_x: i32,
+        delta_y: i32,
+        modifiers: &gpui_kit::Modifiers,
+    ) {
         if let Some(entry) = self.browsers.get(tab_id) {
             if let Some(host) = entry.browser.host() {
-                let event = MouseEvent { x, y, modifiers: 0 };
+                let event = MouseEvent {
+                    x,
+                    y,
+                    modifiers: cef_mouse_modifiers(modifiers),
+                };
                 host.send_mouse_wheel_event(Some(&event), delta_x, delta_y);
             }
         }
@@ -604,7 +735,13 @@ impl Engine {
             .as_deref()
             .and_then(|value| value.encode_utf16().next())
             .unwrap_or(0);
-        let base = cef_key_event(key, &event.keystroke.modifiers, KeyEventType::RAWKEYDOWN, 0);
+        let base = cef_key_event(
+            key,
+            &event.keystroke.modifiers,
+            KeyEventType::RAWKEYDOWN,
+            0,
+            true,
+        );
         host.send_key_event(Some(&base));
         if character != 0 {
             let text = cef_key_event(
@@ -612,6 +749,7 @@ impl Engine {
                 &event.keystroke.modifiers,
                 KeyEventType::CHAR,
                 character,
+                true,
             );
             host.send_key_event(Some(&text));
         }
@@ -620,10 +758,23 @@ impl Engine {
     pub fn send_key_up(&self, id: &str, event: &KeyUpEvent) {
         if let Some(host) = self.browsers.get(id).and_then(|entry| entry.browser.host()) {
             let key = &event.keystroke.key;
-            let key_event = cef_key_event(key, &event.keystroke.modifiers, KeyEventType::KEYUP, 0);
+            let key_event = cef_key_event(
+                key,
+                &event.keystroke.modifiers,
+                KeyEventType::KEYUP,
+                0,
+                true,
+            );
             host.send_key_event(Some(&key_event));
         }
     }
+}
+
+fn cef_mouse_modifiers(modifiers: &gpui_kit::Modifiers) -> u32 {
+    (if modifiers.shift { 2 } else { 0 })
+        | (if modifiers.control { 4 } else { 0 })
+        | (if modifiers.alt { 8 } else { 0 })
+        | (if modifiers.platform { 128 } else { 0 })
 }
 
 fn cef_key_event(
@@ -631,6 +782,7 @@ fn cef_key_event(
     modifiers: &gpui_kit::Modifiers,
     event_type: KeyEventType,
     character: u16,
+    focus_on_editable_field: bool,
 ) -> KeyEvent {
     let mut flags = 0;
     if modifiers.shift {
@@ -673,7 +825,7 @@ fn cef_key_event(
         is_system_key: 0,
         character,
         unmodified_character: character,
-        focus_on_editable_field: 0,
+        focus_on_editable_field: focus_on_editable_field as i32,
     }
 }
 
@@ -736,7 +888,7 @@ fn native_key_code(key: &str, fallback: i32) -> i32 {
 pub fn execute_subprocess() -> Option<i32> {
     let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
     let args = Args::new();
-    let mut app = LumenCefApp::new();
+    let mut app = LumenCefApp::new(Arc::new(AtomicU64::new(NO_SCHEDULED_PUMP)));
     let result = cef::execute_process(
         Some(args.as_main_args()),
         Some(&mut app),
@@ -755,5 +907,47 @@ impl Drop for Engine {
         if self.initialized {
             cef::shutdown();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pump_delay_honors_cef_request_and_caps_safety_interval() {
+        assert_eq!(pump_sleep_ms(Some(0)), 0);
+        assert_eq!(pump_sleep_ms(Some(12)), 12);
+        assert_eq!(pump_sleep_ms(Some(80)), 33);
+        assert_eq!(pump_sleep_ms(None), 33);
+    }
+
+    #[test]
+    fn mouse_modifiers_map_to_cef_flags() {
+        let modifiers = gpui_kit::Modifiers {
+            shift: true,
+            control: true,
+            alt: false,
+            platform: true,
+            function: false,
+        };
+        assert_eq!(cef_mouse_modifiers(&modifiers), 2 | 4 | 128);
+    }
+
+    #[test]
+    fn frame_rate_uses_refresh_with_fallback_and_cap() {
+        assert_eq!(frame_rate_for_refresh(None), 60);
+        assert_eq!(
+            frame_rate_for_refresh(Some(std::time::Duration::from_millis(144))),
+            7
+        );
+        assert_eq!(
+            frame_rate_for_refresh(Some(std::time::Duration::from_millis(240))),
+            4
+        );
+        assert_eq!(
+            frame_rate_for_refresh(Some(std::time::Duration::from_millis(4))),
+            120
+        );
     }
 }
