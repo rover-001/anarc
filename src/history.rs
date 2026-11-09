@@ -6,10 +6,7 @@ use std::path::PathBuf;
 const MAX_RECENT_SEARCHES: usize = 10;
 
 fn history_path() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    home.join(".local/share/lumen/recent-searches.json")
+    crate::paths::data_dir().join("recent-searches.json")
 }
 
 pub fn load_recent_searches() -> Vec<String> {

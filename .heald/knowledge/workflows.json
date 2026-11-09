@@ -1,0 +1,20 @@
+[
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/history.rs",
+      "src/main.rs",
+      "src/model/space.rs",
+      "src/model/tab.rs",
+      "src/persist.rs",
+      "src/stats.rs",
+      "src/ui/sidebar.rs",
+      "src/ui/space_switcher.rs",
+      "src/ui/tab_list.rs"
+    ],
+    "symbols": [],
+    "guidance": "Implemented centralized test-safe Lumen paths and opt-in once-per-second stats. cargo test --offline passed 20 tests; debug and release builds passed. Safe live run was blocked by inaccessible X server; commit was blocked by read-only shared Git metadata. Wrote infra report.",
+    "updated_at": "2026-11-09T11:56:23.414532029+00:00"
+  }
+]

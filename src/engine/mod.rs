@@ -173,10 +173,13 @@ cef::wrap_render_handler! {
             }
             let len = (width as usize) * (height as usize) * 4;
             let slice = unsafe { std::slice::from_raw_parts(buffer, len) };
+            let copy_started = crate::stats::frame_copy_started();
+            let pixels = slice.to_vec();
+            crate::stats::record_osr_paint(copy_started);
             if let Some(img_buffer) = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
                 width as u32,
                 height as u32,
-                slice.to_vec(),
+                pixels,
             ) {
                 let frame = image::Frame::new(img_buffer);
                 let render_image = Arc::new(RenderImage::new(smallvec::smallvec![frame]));
@@ -332,14 +335,7 @@ impl Engine {
         settings.user_agent = CefString::from(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
         );
-        let cache_root = std::env::var_os("XDG_CACHE_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cache"))
-            })
-            .unwrap_or_else(std::env::temp_dir)
-            .join("lumen")
-            .join("cef");
+        let cache_root = crate::paths::cache_dir();
         std::fs::create_dir_all(&cache_root)
             .map_err(|error| format!("cannot create CEF cache directory: {error}"))?;
         settings.root_cache_path = CefString::from(cache_root.to_string_lossy().as_ref());
@@ -411,10 +407,7 @@ impl Engine {
             let start_url = CefString::from(url);
 
             if !self.contexts.contains_key(space_id) {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-                let cache_dir = std::path::PathBuf::from(home)
-                    .join(".local/share/lumen/profiles")
-                    .join(space_id);
+                let cache_dir = crate::paths::data_dir().join("profiles").join(space_id);
                 let _ = std::fs::create_dir_all(&cache_dir);
 
                 let mut settings = RequestContextSettings::default();

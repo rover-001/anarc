@@ -10,6 +10,31 @@ Use Rust stable and run:
 cargo run --release
 ```
 
+## Testing
+
+Set these variables to isolate a test run from the normal Lumen profile:
+
+- `LUMEN_CONFIG_DIR`: directory for `spaces.json` (default: `~/.config/lumen`)
+- `LUMEN_DATA_DIR`: directory for recent searches and per-space CEF profiles (default: `~/.local/share/lumen`)
+- `LUMEN_CACHE_DIR`: CEF root cache directory (default: `${XDG_CACHE_HOME:-~/.cache}/lumen/cef`)
+- `LUMEN_STATS=1`: print OSR paints/s, root UI renders/s, average frame-copy time, and process RSS to stderr once per second
+
+For a safe live run, create temporary directories and point all Lumen state there:
+
+```sh
+test_root="$(mktemp -d)"
+mkdir -p "$test_root/home" "$test_root/config" "$test_root/data" "$test_root/cache"
+HOME="$test_root/home" \
+LUMEN_CONFIG_DIR="$test_root/config" \
+LUMEN_DATA_DIR="$test_root/data" \
+LUMEN_CACHE_DIR="$test_root/cache" \
+LUMEN_STATS=1 \
+LD_LIBRARY_PATH="$CEF_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+./target/release/lumen
+```
+
+The temporary state can be removed after the run with `rm -r "$test_root"`.
+
 The UI appears before CEF is initialized. After the first frame, Lumen starts CEF and pumps its external message loop from GPUI. The app logs time to its first GPUI render to stderr. Type a URL or search in the top address field and click **Go** or press Enter; use **+ New tab** to add a tab. URLs without a scheme get `https://`; plain text is searched with DuckDuckGo. Clicking **Go** on an empty address opens DuckDuckGo.
 
 ## CEF setup (Phase 2+)
