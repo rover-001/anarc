@@ -19,6 +19,15 @@ pub fn reduced_motion() -> bool {
     std::env::var_os("LUMEN_REDUCED_MOTION").is_some_and(|value| value == "1")
 }
 
+/// Keep values passed to GPUI percentage and opacity APIs inside their valid range.
+pub fn clamp_percentage(value: f32) -> f32 {
+    if value.is_nan() {
+        0.0
+    } else {
+        value.clamp(0.0, 1.0)
+    }
+}
+
 /// A compact damped spring curve for passive entrances and exits.
 /// Interactive gestures should use GPUI's stateful `with_spring` API instead.
 pub fn spring_out(progress: f32) -> f32 {
@@ -53,5 +62,18 @@ mod tests {
             .map(|step| spring_out(step as f32 / 1000.0))
             .fold(0.0_f32, f32::max);
         assert!(peak > 1.0 && peak < 1.15);
+    }
+
+    #[test]
+    fn percentage_easing_outputs_are_clamped_and_finite() {
+        for step in 0..=1000 {
+            let eased = spring_out(step as f32 / 1000.0);
+            let percentage = clamp_percentage(eased);
+            assert!((0.0..=1.0).contains(&percentage));
+        }
+
+        assert_eq!(clamp_percentage(f32::NAN), 0.0);
+        assert_eq!(clamp_percentage(f32::INFINITY), 1.0);
+        assert_eq!(clamp_percentage(f32::NEG_INFINITY), 0.0);
     }
 }

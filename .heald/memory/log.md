@@ -54,3 +54,7 @@ Fixed autocomplete overlay stacking, synced the address bar on tab and space cha
 ## Session 2026-11-09T15:27:12.590124432+00:00
 
 Resolved the main.rs merge import conflict retaining omni Focusable and motion Animation imports; web_view corner rings and frame transitions are preserved. Implemented spring-driven active row highlight and chevron, 30ms split-member stagger, closing-row collapse, autocomplete enter/exit, and sidebar width transition with CEF frozen to max frame size then resized once at completion. cargo check --offline and --tests --offline passed; no tests/live run. Updated briefs/motion-report.md. hc send t20 was attempted but Core unavailable due read-only filesystem.
+
+## Session 2026-11-09T15:32:15.720233677+00:00
+
+Fixed animated percentage/opacity clamping with NaN handling and added a unit test; moved per-space CEF profile directories to sanitized direct children of root cache, updated README and paths tests. cargo check --offline and cargo check --tests --offline passed; runtime/tests not run per instruction.

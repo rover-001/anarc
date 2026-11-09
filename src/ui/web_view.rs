@@ -457,7 +457,9 @@ impl Render for WebViewport {
                                 crate::ui::motion::MOTION_CONTENT,
                             ))
                             .with_easing(crate::ui::motion::ease_out_quint),
-                            |element, progress| element.opacity((1.0 - progress).clamp(0.0, 1.0)),
+                            |element, progress| {
+                                element.opacity(crate::ui::motion::clamp_percentage(1.0 - progress))
+                            },
                         )
                         .child(
                             gpui_kit::img(image)
@@ -498,7 +500,9 @@ impl Render for WebViewport {
                             crate::ui::motion::MOTION_CONTENT,
                         ))
                         .with_easing(crate::ui::motion::ease_out_quint),
-                        |element, progress| element.opacity(progress.clamp(0.0, 1.0)),
+                        |element, progress| {
+                            element.opacity(crate::ui::motion::clamp_percentage(progress))
+                        },
                     )
                     .into_any_element()
             } else {
