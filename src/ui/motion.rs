@@ -30,6 +30,7 @@ pub fn clamp_percentage(value: f32) -> f32 {
 
 /// A compact damped spring curve for passive entrances and exits.
 /// Interactive gestures should use GPUI's stateful `with_spring` API instead.
+#[allow(dead_code)]
 pub fn spring_out(progress: f32) -> f32 {
     let t = progress.clamp(0.0, 1.0);
     let damping = 7.8_f32;

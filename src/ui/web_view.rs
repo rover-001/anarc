@@ -8,6 +8,10 @@ use crate::ui::{
 };
 use crate::{CONTENT_BEZEL_X, Lumen};
 
+/// Crossfading old->new frame on drag release made centred pages visibly bounce
+/// sideways; with live resizing the final frame differs by a few pixels, so swap directly.
+const RESIZE_RELEASE_CROSSFADE: bool = false;
+
 #[derive(Default)]
 struct ResizeFrameHandoff {
     retaining_old_frame: bool,
@@ -94,6 +98,7 @@ impl WebViewport {
         } else if self
             .resize_frame_handoff
             .target_frame_arrived(drag_edge_color.is_some())
+            && RESIZE_RELEASE_CROSSFADE
         {
             // The edge fill is released only when CEF supplies the exact target
             // size. Keep the frozen-size image above it while the new frame fades in.
