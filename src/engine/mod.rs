@@ -418,6 +418,7 @@ cef::wrap_render_handler! {
     struct LumenRenderHandler {
         shared: Arc<Mutex<BrowserSharedState>>,
         paint_wake: async_channel::Sender<()>,
+        tab_id: String,
     }
 
     impl RenderHandler {
@@ -485,6 +486,10 @@ cef::wrap_render_handler! {
                 return;
             }
             let len = (width as usize) * (height as usize) * 4;
+            resize_debug(format_args!(
+                "paint tab={} frame={}x{}",
+                self.tab_id, width, height
+            ));
             let slice = unsafe { std::slice::from_raw_parts(buffer, len) };
             let copy_started = crate::stats::frame_copy_started();
             let pixels = slice.to_vec();
@@ -925,6 +930,13 @@ fn resize_should_send(
     })
 }
 
+fn resize_debug(message: std::fmt::Arguments<'_>) {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ENABLED.get_or_init(|| std::env::var("LUMEN_DEBUG_RESIZE").as_deref() == Ok("1")) {
+        eprintln!("[resize-debug] {message}");
+    }
+}
+
 impl Engine {
     pub fn new() -> Self {
         let (ui_update_wake, ui_update_receiver) = async_channel::bounded(1);
@@ -1101,7 +1113,7 @@ impl Engine {
                 cursor: 0,
             }));
             let render_handler =
-                LumenRenderHandler::new(shared.clone(), self.ui_update_wake.clone());
+                LumenRenderHandler::new(shared.clone(), self.ui_update_wake.clone(), id.to_owned());
             let display_handler = LumenDisplayHandler::new(
                 shared.clone(),
                 id.to_owned(),
@@ -1455,6 +1467,7 @@ impl Engine {
         let now = Instant::now();
         let should_resize = resize_should_send(self.resize_state.get(tab_id), (w, h), now, force);
         if should_resize {
+            resize_debug(format_args!("resize tab={tab_id} requested={w}x{h}"));
             self.resize_state.insert(tab_id.to_owned(), (now, w, h));
             if let Some(entry) = self.browsers.get(tab_id) {
                 let mut state = entry.state.lock().unwrap();
@@ -1464,6 +1477,10 @@ impl Engine {
                 if let Some(host) = entry.browser.host() {
                     host.was_resized();
                 }
+            } else if let Some(state) = self.pending_browsers.get(tab_id) {
+                let mut state = state.lock().unwrap();
+                state.width = w;
+                state.height = h;
             }
         }
     }
