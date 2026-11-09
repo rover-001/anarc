@@ -208,5 +208,103 @@
     "symbols": [],
     "guidance": "Implemented resize frame crossfade handoff, corrected sidebar highlight geometry, and added coordinated space-switch transitions. Offline cargo checks and diff check pass; runtime behavior and tests remain unverified.",
     "updated_at": "2026-11-09T15:58:15.183037437+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/motion.rs",
+      "src/ui/split_view.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Removed border from search bar and added back and forward navigation icon buttons to the left of the search bar",
+    "updated_at": "2026-11-09T16:16:08.221224839+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/motion.rs",
+      "src/ui/split_view.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Centered sidebar resize handle directly over the visual cut at sidebar_width + CONTENT_BEZEL_X on root overlay to eliminate hit target occlusion and offset",
+    "updated_at": "2026-11-09T16:24:18.243288741+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/motion.rs",
+      "src/ui/split_view.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Ensured address bar syncs to current tab URL upon back/forward navigation and auto-hides autocomplete suggestions when focus moves out of the address bar or outside clicked",
+    "updated_at": "2026-11-09T16:34:15.774386446+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/motion.rs",
+      "src/ui/split_view.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Fixed new tab 90% zoom retention across creation/load, fixed web view width adaptation and horizontal scrollbars by syncing CEF layout bounds and screen info notification, and unlocked high-refresh display FPS (up to 240Hz, auto-detecting 144Hz via Hyprland/xrandr) with tuned pump timer.",
+    "updated_at": "2026-11-09T16:55:50.266044452+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/motion.rs",
+      "src/ui/split_view.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Fixed input typing for period (.) and all OEM punctuation/symbol keys by implementing windows_key_code_for_key with VK_OEM codes instead of ASCII clashes (e.g. 0x2e VK_DELETE), with fallback character encoding; and fixed website favicons by resolving relative/absolute/data URLs, supporting cached/304 HTTP responses, adding raw bitmap extraction fallback, disk caching, and immediate tab row favicon hydration.",
+    "updated_at": "2026-11-09T17:15:42.358574494+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/motion.rs",
+      "src/ui/split_view.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Updated default tab zoom factor to 80% (0.8) in src/ui/visual.rs and switched default search engine from DuckDuckGo to Google in src/main.rs (including search suggestions, address bar normalization, empty query search home, and title handling)",
+    "updated_at": "2026-11-09T17:20:12.677869247+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/mod.rs",
+      "src/main.rs",
+      "src/ui/motion.rs",
+      "src/ui/split_view.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Fixed favicon site switching and stale icon issues: (1) Added host-tracking to BrowserSharedState (favicon_host, current_url, current_host) to invalidate and reload site icons immediately when navigating or switching sites; (2) Added favicon_url_score to rank modern high-res PNG/SVG/touch icons over legacy 16x16 ICOs; (3) Fixed LumenFaviconCallback to save favicons under the tab's page host rather than third-party CDN hosts (like gstatic or webflow); (4) Made save_favicon_to_disk and load_favicon_from_disk handle www and bare domains symmetrically.",
+    "updated_at": "2026-11-09T17:36:18.231341035+00:00"
   }
 ]

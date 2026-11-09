@@ -48,6 +48,144 @@ fn origin_favicon_url(page_url: &str) -> Option<String> {
     Some(format!("{scheme}://{authority}/favicon.ico"))
 }
 
+pub fn resolve_favicon_url(page_url: &str, raw_url: &str) -> Option<String> {
+    let raw = raw_url.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.starts_with("http://") || raw.starts_with("https://") || raw.starts_with("data:image/") {
+        return Some(raw.to_owned());
+    }
+    if let Some(rest) = raw.strip_prefix("//") {
+        let scheme = if page_url.starts_with("http://") { "http" } else { "https" };
+        return Some(format!("{scheme}://{rest}"));
+    }
+    let (scheme, remainder) = page_url.split_once("://")?;
+    let (authority, path) = match remainder.split_once('/') {
+        Some((auth, p)) => (auth, format!("/{p}")),
+        None => (remainder.split(['?', '#']).next()?, "/".to_string()),
+    };
+    if authority.is_empty() {
+        return None;
+    }
+    let origin = format!("{scheme}://{authority}");
+    if raw.starts_with('/') {
+        Some(format!("{origin}{raw}"))
+    } else {
+        let clean_path = path.split('?').next().unwrap_or(&path);
+        if let Some(idx) = clean_path.rfind('/') {
+            let dir = &clean_path[..=idx];
+            Some(format!("{origin}{dir}{raw}"))
+        } else {
+            Some(format!("{origin}/{raw}"))
+        }
+    }
+}
+
+pub fn decode_base64(input: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut buf = 0u32;
+    let mut bits = 0;
+    for &b in input.as_bytes() {
+        let val = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            _ => continue,
+        };
+        buf = (buf << 6) | (val as u32);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+pub fn favicons_dir() -> std::path::PathBuf {
+    crate::paths::data_dir().join("favicons")
+}
+
+pub fn save_favicon_to_disk(host: &str, image: &image::RgbaImage) {
+    let dir = favicons_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let clean_host = host.trim().to_ascii_lowercase();
+    if clean_host.is_empty() {
+        return;
+    }
+    let path = dir.join(format!("{clean_host}.png"));
+    let _ = image.save_with_format(path, image::ImageFormat::Png);
+
+    // Also save alternate host (with/without www.) so lookups on either always hit
+    if let Some(without_www) = clean_host.strip_prefix("www.") {
+        if !without_www.is_empty() {
+            let alt_path = dir.join(format!("{without_www}.png"));
+            let _ = image.save_with_format(alt_path, image::ImageFormat::Png);
+        }
+    } else {
+        let with_www = format!("www.{clean_host}");
+        let alt_path = dir.join(format!("{with_www}.png"));
+        let _ = image.save_with_format(alt_path, image::ImageFormat::Png);
+    }
+}
+
+pub fn load_favicon_from_disk(host: &str) -> Option<Arc<RenderImage>> {
+    let dir = favicons_dir();
+    let clean_host = host.trim().to_ascii_lowercase();
+    if clean_host.is_empty() {
+        return None;
+    }
+    let direct_path = dir.join(format!("{clean_host}.png"));
+    let final_path = if direct_path.exists() {
+        direct_path
+    } else if let Some(without_www) = clean_host.strip_prefix("www.") {
+        dir.join(format!("{without_www}.png"))
+    } else {
+        dir.join(format!("www.{clean_host}.png"))
+    };
+
+    let decoded = image::open(final_path).ok()?;
+    let frame = image::Frame::new(decoded.to_rgba8());
+    Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
+}
+
+pub fn favicon_url_score(url: &str) -> i32 {
+    let lower = url.to_ascii_lowercase();
+    let mut score = 50;
+
+    if lower.contains("192")
+        || lower.contains("180")
+        || lower.contains("128")
+        || lower.contains("apple-touch")
+    {
+        score += 40;
+    } else if lower.contains("64") || lower.contains("48") || lower.contains("32") {
+        score += 30;
+    } else if lower.contains("16") {
+        score -= 10;
+    }
+
+    if lower.contains(".svg") {
+        score += 35;
+    } else if lower.contains(".png") {
+        score += 30;
+    } else if lower.contains(".webp") {
+        score += 25;
+    } else if lower.ends_with(".ico") || lower.contains(".ico?") {
+        score -= 20;
+    }
+
+    if lower.contains("branding") || lower.contains("searchlogo") || lower.contains("logo") {
+        score += 15;
+    }
+
+    score
+}
+
 fn favicon_debug(message: std::fmt::Arguments<'_>) {
     if std::env::var_os("LUMEN_DEBUG_FAVICON").is_some_and(|value| value == "1") {
         eprintln!("Lumen favicon: {message}");
@@ -58,12 +196,83 @@ pub fn log_favicon_row_rendered(tab_id: &str, has_image: bool) {
     favicon_debug(format_args!("row rendered tab={tab_id} image={has_image}"));
 }
 
+pub fn detect_system_refresh_rate() -> Option<i32> {
+    if let Ok(val) = std::env::var("LUMEN_FPS") {
+        if let Ok(fps) = val.parse::<i32>() {
+            if (30..=360).contains(&fps) {
+                return Some(fps);
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Try hyprctl monitors if on Hyprland
+        if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
+            if let Ok(output) = std::process::Command::new("hyprctl")
+                .arg("monitors")
+                .output()
+            {
+                if let Ok(text) = std::str::from_utf8(&output.stdout) {
+                    for line in text.lines() {
+                        let trimmed = line.trim();
+                        if let Some(at_idx) = trimmed.find('@') {
+                            let after_at = &trimmed[at_idx + 1..];
+                            let num_str: String = after_at
+                                .chars()
+                                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                                .collect();
+                            if let Ok(hz) = num_str.parse::<f64>() {
+                                if (30.0..=360.0).contains(&hz) {
+                                    return Some(hz.round() as i32);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Fallback: try xrandr
+        if let Ok(output) = std::process::Command::new("xrandr").output() {
+            if let Ok(text) = std::str::from_utf8(&output.stdout) {
+                for line in text.lines() {
+                    if line.contains('*') {
+                        for part in line.split_whitespace() {
+                            if part.contains('*') {
+                                let clean: String = part
+                                    .chars()
+                                    .filter(|c| c.is_ascii_digit() || *c == '.')
+                                    .collect();
+                                if let Ok(hz) = clean.parse::<f64>() {
+                                    if (30.0..=360.0).contains(&hz) {
+                                        return Some(hz.round() as i32);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn frame_rate_for_refresh(refresh_interval: Option<std::time::Duration>) -> i32 {
-    refresh_interval
+    let rate = refresh_interval
         .filter(|interval| !interval.is_zero())
         .map(|interval| (1.0 / interval.as_secs_f64()).round() as i32)
-        .unwrap_or(60)
-        .clamp(1, 120)
+        .or_else(|| {
+            #[cfg(test)]
+            {
+                None
+            }
+            #[cfg(not(test))]
+            {
+                detect_system_refresh_rate()
+            }
+        })
+        .unwrap_or(60);
+    rate.clamp(1, 240)
 }
 
 cef::wrap_app! {
@@ -106,7 +315,7 @@ cef::wrap_app! {
                 let value = CefString::from("user-gesture-required");
                 command_line.append_switch_with_value(Some(&name), Some(&value));
                 let name = CefString::from("enable-features");
-                let value = CefString::from("OverlayScrollbar");
+                let value = CefString::from("OverlayScrollbar,OverlayScrollbars");
                 command_line.append_switch_with_value(Some(&name), Some(&value));
                 let name = CefString::from("disable-features");
                 let value = CefString::from(
@@ -138,6 +347,9 @@ pub struct BrowserSharedState {
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub favicon: Option<Arc<RenderImage>>,
+    pub favicon_host: Option<String>,
+    pub current_url: Option<String>,
+    pub current_host: Option<String>,
     /// Superseded frames that must be evicted from GPUI's sprite atlas on the UI thread.
     pub retired: Vec<Arc<RenderImage>>,
     pub screen_width: i32,
@@ -146,6 +358,7 @@ pub struct BrowserSharedState {
     pub screen_origin_x: i32,
     pub screen_origin_y: i32,
     pub cursor: i32,
+    pub target_zoom_level: Option<f64>,
 }
 
 fn median_edge_color_bgra(pixels: &[u8], width: usize, height: usize) -> Option<u32> {
@@ -198,12 +411,21 @@ cef::wrap_load_handler! {
 
         fn on_load_end(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             frame: Option<&mut Frame>,
             _http_status_code: i32,
         ) {
             let Some(frame) = frame else { return; };
             if frame.is_main() == 0 { return; }
+            if let Some(browser) = browser {
+                if let Some(host) = browser.host() {
+                    if let Ok(state) = self.shared.lock() {
+                        if let Some(zoom) = state.target_zoom_level {
+                            host.set_zoom_level(zoom.clamp(-5.0, 5.0));
+                        }
+                    }
+                }
+            }
             let url = CefStringUtf16::from(&frame.url()).to_string();
             if let Ok(mut state) = self.https_state.lock() {
                 clear_https_upgrade(&mut state, &url);
@@ -382,6 +604,7 @@ cef::wrap_download_image_callback! {
         tab_id: String,
         wake: async_channel::Sender<()>,
         preferred: bool,
+        page_host: Option<String>,
     }
 
     impl DownloadImageCallback {
@@ -396,39 +619,99 @@ cef::wrap_download_image_callback! {
                 self.tab_id,
                 image_url.map(ToString::to_string).unwrap_or_default()
             ));
-            if !(200..300).contains(&http_status_code) {
-                return;
-            }
-            let Some(png) = favicon_image.and_then(|image| image.as_png(1.0, 1, None, None)) else {
-                favicon_debug(format_args!("no PNG image for tab={}", self.tab_id));
+            let Some(favicon_image) = favicon_image else {
+                favicon_debug(format_args!("no image for tab={}", self.tab_id));
                 return;
             };
-            let size = png.size();
-            favicon_debug(format_args!("PNG bytes tab={} size={size}", self.tab_id));
-            if size == 0 || size > 512 * 1024 {
+            if favicon_image.is_empty() != 0 {
+                favicon_debug(format_args!("empty image for tab={}", self.tab_id));
                 return;
             }
-            let mut bytes = vec![0; size];
-            let copied = png.data(Some(&mut bytes), 0).min(size);
-            bytes.truncate(copied);
-            let decoded = match image::load_from_memory(&bytes) {
-                Ok(decoded) => decoded,
-                Err(error) => {
-                    favicon_debug(format_args!("decode failed tab={}: {error}", self.tab_id));
-                    return;
+            if !(200..300).contains(&http_status_code) && http_status_code != 0 && http_status_code != 304 {
+                favicon_debug(format_args!("non-success HTTP status for tab={}: {http_status_code}", self.tab_id));
+                return;
+            }
+
+            let mut decoded_buffer: Option<image::ImageBuffer<image::Rgba<u8>, Vec<u8>>> = None;
+            for scale in [1.0f32, 2.0, 0.0] {
+                if let Some(png) = favicon_image.as_png(scale, 1, None, None) {
+                    let size = png.size();
+                    if size > 0 && size <= 512 * 1024 {
+                        let mut bytes = vec![0u8; size];
+                        let copied = png.data(Some(&mut bytes), 0).min(size);
+                        bytes.truncate(copied);
+                        if let Ok(decoded) = image::load_from_memory(&bytes) {
+                            decoded_buffer = Some(decoded.to_rgba8());
+                            break;
+                        }
+                    }
                 }
+            }
+
+            if decoded_buffer.is_none() {
+                for scale in [1.0f32, 2.0, 0.0] {
+                    let mut pw: ::std::os::raw::c_int = 0;
+                    let mut ph: ::std::os::raw::c_int = 0;
+                    if let Some(bitmap) = favicon_image.as_bitmap(
+                        scale,
+                        ColorType::RGBA_8888,
+                        AlphaType::PREMULTIPLIED,
+                        Some(&mut pw),
+                        Some(&mut ph),
+                    ) {
+                        let size = bitmap.size();
+                        let expected = (pw as usize) * (ph as usize) * 4;
+                        if pw > 0 && ph > 0 && size >= expected {
+                            let mut bytes = vec![0u8; size];
+                            bitmap.data(Some(&mut bytes), 0);
+                            bytes.truncate(expected);
+                            if let Some(img_buffer) =
+                                image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(pw as u32, ph as u32, bytes)
+                            {
+                                decoded_buffer = Some(img_buffer);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            let Some(img_buffer) = decoded_buffer else {
+                favicon_debug(format_args!("failed to decode favicon for tab={}", self.tab_id));
+                return;
             };
-            favicon_debug(format_args!(
-                "decoded tab={} dimensions={}x{}",
-                self.tab_id,
-                decoded.width(),
-                decoded.height()
-            ));
-            let frame = image::Frame::new(decoded.to_rgba8());
+
+            let frame = image::Frame::new(img_buffer.clone());
             let render_image = Arc::new(RenderImage::new(smallvec::smallvec![frame]));
             if let Ok(mut state) = self.shared.lock() {
-                if self.preferred || state.favicon.is_none() {
+                let img_url_string = image_url.map(|s| s.to_string());
+                let target_host = self
+                    .page_host
+                    .clone()
+                    .or_else(|| state.current_host.clone())
+                    .or_else(|| state.current_url.as_deref().and_then(crate::shield::url_host))
+                    .or_else(|| state.url.as_deref().and_then(crate::shield::url_host))
+                    .or_else(|| img_url_string.as_deref().and_then(crate::shield::url_host));
+
+                if let Some(ref host) = target_host {
+                    save_favicon_to_disk(host, &img_buffer);
+                }
+
+                let matches_current = match (&state.current_host, &target_host) {
+                    (Some(curr), Some(target)) => {
+                        curr == target
+                            || curr.trim_start_matches("www.") == target.trim_start_matches("www.")
+                    }
+                    _ => true,
+                };
+
+                if matches_current
+                    && (self.preferred
+                        || state.favicon.is_none()
+                        || state.favicon_host != target_host)
+                {
                     state.favicon = Some(render_image);
+                    state.favicon_host = target_host;
                     state.dirty = true;
                     state.root_dirty = true;
                     favicon_debug(format_args!("stored image for tab={}", self.tab_id));
@@ -557,14 +840,59 @@ cef::wrap_display_handler! {
             let Some(icon_urls) = icon_urls else {
                 return;
             };
-            let Some(url) = std::mem::take(icon_urls)
-                .into_iter()
-                .find(|url| url.starts_with("http://") || url.starts_with("https://"))
-            else {
-                favicon_debug(format_args!("no HTTP icon URL for tab={}", self.tab_id));
+            let (page_url, page_host) = self
+                .shared
+                .lock()
+                .ok()
+                .map(|state| {
+                    let url = state
+                        .current_url
+                        .clone()
+                        .or_else(|| state.url.clone())
+                        .unwrap_or_default();
+                    let host = state
+                        .current_host
+                        .clone()
+                        .or_else(|| crate::shield::url_host(&url));
+                    (url, host)
+                })
+                .unwrap_or_default();
+
+            let mut urls: Vec<String> = std::mem::take(icon_urls).into_iter().collect();
+            urls.sort_by_key(|u| std::cmp::Reverse(favicon_url_score(u)));
+
+            let resolved_url = urls.iter().find_map(|raw_url| {
+                resolve_favicon_url(&page_url, raw_url)
+            });
+            let Some(url) = resolved_url else {
+                favicon_debug(format_args!("no valid icon URL for tab={}", self.tab_id));
                 return;
             };
             favicon_debug(format_args!("URL found tab={} url={url}", self.tab_id));
+            if url.starts_with("data:image/") {
+                if let Some(comma) = url.find(',') {
+                    let data_part = &url[comma + 1..];
+                    if let Some(bytes) = decode_base64(data_part) {
+                        if let Ok(decoded) = image::load_from_memory(&bytes) {
+                            let rgba = decoded.to_rgba8();
+                            let target_host = page_host.clone().or_else(|| crate::shield::url_host(&page_url));
+                            if let Some(ref host) = target_host {
+                                save_favicon_to_disk(host, &rgba);
+                            }
+                            let frame = image::Frame::new(rgba);
+                            let render_image = Arc::new(RenderImage::new(smallvec::smallvec![frame]));
+                            if let Ok(mut state) = self.shared.lock() {
+                                state.favicon = Some(render_image);
+                                state.favicon_host = target_host;
+                                state.dirty = true;
+                                state.root_dirty = true;
+                                let _ = self.ui_update_wake.try_send(());
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
             let Some(host) = browser.and_then(|browser| browser.host()) else {
                 favicon_debug(format_args!("no browser host for icon tab={}", self.tab_id));
                 return;
@@ -574,6 +902,7 @@ cef::wrap_display_handler! {
                 self.tab_id.clone(),
                 self.ui_update_wake.clone(),
                 true,
+                page_host,
             );
             favicon_debug(format_args!("download started tab={} url={url}", self.tab_id));
             host.download_image(
@@ -638,9 +967,38 @@ cef::wrap_display_handler! {
                 if !is_main_frame {
                     return;
                 }
+                let new_host = crate::shield::url_host(&page_url);
                 if let Ok(mut state) = self.shared.lock() {
                     state.url = Some(page_url.clone());
+                    state.current_url = Some(page_url.clone());
                     state.title = None;
+                    let host_changed = match (&state.current_host, &new_host) {
+                        (Some(curr), Some(new_h)) => {
+                            curr != new_h
+                                && curr.trim_start_matches("www.") != new_h.trim_start_matches("www.")
+                        }
+                        (None, Some(_)) => true,
+                        (Some(_), None) => true,
+                        (None, None) => false,
+                    };
+                    if host_changed {
+                        state.current_host = new_host.clone();
+                        state.favicon = None;
+                        state.favicon_host = None;
+                        if let Some(ref host) = new_host {
+                            if let Some(cached) = load_favicon_from_disk(host) {
+                                state.favicon = Some(cached);
+                                state.favicon_host = Some(host.clone());
+                            }
+                        }
+                    } else if state.favicon.is_none() {
+                        if let Some(ref host) = new_host {
+                            if let Some(cached) = load_favicon_from_disk(host) {
+                                state.favicon = Some(cached);
+                                state.favicon_host = Some(host.clone());
+                            }
+                        }
+                    }
                     crate::history::record_visit(&page_url, "");
                     state.dirty = true;
                     state.root_dirty = true;
@@ -654,6 +1012,7 @@ cef::wrap_display_handler! {
                         self.tab_id.clone(),
                         self.ui_update_wake.clone(),
                         false,
+                        new_host,
                     );
                     favicon_debug(format_args!(
                         "fallback download started tab={} url={favicon_url}",
@@ -1039,7 +1398,7 @@ impl Engine {
     }
 
     pub fn set_windowless_frame_rate(&mut self, frame_rate: i32) {
-        self.windowless_frame_rate = frame_rate.clamp(1, 120);
+        self.windowless_frame_rate = frame_rate.clamp(1, 240);
         for entry in self.browsers.values() {
             if let Some(host) = entry.browser.host() {
                 host.set_windowless_frame_rate(self.windowless_frame_rate);
@@ -1070,6 +1429,13 @@ impl Engine {
                     self.resize_state
                         .insert(id.clone(), (Instant::now(), width, height));
                 }
+                if let Ok(guard) = state.lock() {
+                    if let Some(zoom) = guard.target_zoom_level {
+                        if let Some(host) = browser.host() {
+                            host.set_zoom_level(zoom.clamp(-5.0, 5.0));
+                        }
+                    }
+                }
                 self.browsers
                     .insert(id.clone(), BrowserEntry { browser, state });
                 self.lifecycle.opened(&id, Instant::now());
@@ -1093,13 +1459,13 @@ impl Engine {
             .fold((false, false), |(dirty, root_dirty), (id, entry)| {
                 let (entry_dirty, entry_root_dirty) =
                     entry.state.lock().ok().map_or((false, false), |mut state| {
-                        let entry_dirty = state.dirty;
-                        state.dirty = false;
                         let is_visible = active_tab_ids.contains(&id.as_str());
-                        let entry_root_dirty = is_visible && state.root_dirty;
+                        let entry_dirty = is_visible && state.dirty;
                         if is_visible {
-                            state.root_dirty = false;
+                            state.dirty = false;
                         }
+                        let entry_root_dirty = state.root_dirty;
+                        state.root_dirty = false;
                         (entry_dirty, entry_root_dirty)
                     });
                 (dirty || entry_dirty, root_dirty || entry_root_dirty)
@@ -1124,6 +1490,8 @@ impl Engine {
             return Ok(());
         }
         if !self.browsers.contains_key(id) && !self.pending_browsers.contains_key(id) {
+            let initial_host = crate::shield::url_host(url);
+            let initial_favicon = initial_host.as_deref().and_then(load_favicon_from_disk);
             let shared = Arc::new(Mutex::new(BrowserSharedState {
                 width: width.max(1),
                 height: height.max(1),
@@ -1136,7 +1504,10 @@ impl Engine {
                 is_loading: true,
                 can_go_back: false,
                 can_go_forward: false,
-                favicon: None,
+                favicon: initial_favicon,
+                favicon_host: initial_host.clone(),
+                current_url: Some(url.to_string()),
+                current_host: initial_host,
                 retired: Vec::new(),
                 screen_width: width.max(1),
                 screen_height: height.max(1),
@@ -1144,6 +1515,7 @@ impl Engine {
                 screen_origin_x: 0,
                 screen_origin_y: 0,
                 cursor: 0,
+                target_zoom_level: Some(initial_zoom_level),
             }));
             let render_handler =
                 LumenRenderHandler::new(shared.clone(), self.ui_update_wake.clone(), id.to_owned());
@@ -1317,6 +1689,10 @@ impl Engine {
         self.lifecycle.state(tab_id)
     }
 
+    pub fn has_browser(&self, tab_id: &str) -> bool {
+        self.browsers.contains_key(tab_id)
+    }
+
     pub fn set_screen_metrics(
         &self,
         tab_id: &str,
@@ -1329,11 +1705,22 @@ impl Engine {
         if let Some(entry) = self.browsers.get(tab_id)
             && let Ok(mut state) = entry.state.lock()
         {
+            let changed = state.screen_width != screen_width.max(1)
+                || state.screen_height != screen_height.max(1)
+                || (state.screen_scale - scale.max(1.0)).abs() > f32::EPSILON
+                || state.screen_origin_x != origin_x
+                || state.screen_origin_y != origin_y;
             state.screen_width = screen_width.max(1);
             state.screen_height = screen_height.max(1);
             state.screen_scale = scale.max(1.0);
             state.screen_origin_x = origin_x;
             state.screen_origin_y = origin_y;
+            drop(state);
+            if changed {
+                if let Some(host) = entry.browser.host() {
+                    host.notify_screen_info_changed();
+                }
+            }
         }
     }
 
@@ -1393,6 +1780,16 @@ impl Engine {
         })
     }
 
+    pub fn can_go_forward(&self, tab_id: &str) -> bool {
+        self.browsers.get(tab_id).is_some_and(|entry| {
+            entry
+                .state
+                .lock()
+                .map(|state| state.can_go_forward)
+                .unwrap_or(false)
+        })
+    }
+
     pub fn find(&self, tab_id: &str, query: &str, forward: bool, next: bool) {
         if let Some(host) = self
             .browsers
@@ -1419,12 +1816,17 @@ impl Engine {
     }
 
     pub fn set_zoom_level(&self, tab_id: &str, level: f64) {
-        if let Some(host) = self
-            .browsers
-            .get(tab_id)
-            .and_then(|entry| entry.browser.host())
-        {
-            host.set_zoom_level(level.clamp(-5.0, 5.0));
+        if let Some(entry) = self.browsers.get(tab_id) {
+            if let Ok(mut state) = entry.state.lock() {
+                state.target_zoom_level = Some(level);
+            }
+            if let Some(host) = entry.browser.host() {
+                host.set_zoom_level(level.clamp(-5.0, 5.0));
+            }
+        } else if let Some(state) = self.pending_browsers.get(tab_id) {
+            if let Ok(mut state) = state.lock() {
+                state.target_zoom_level = Some(level);
+            }
         }
     }
 
@@ -1504,14 +1906,47 @@ impl Engine {
         retired
     }
 
-    pub fn get_favicon_image(&self, tab_id: &str) -> Option<Arc<RenderImage>> {
-        self.browsers.get(tab_id).and_then(|entry| {
-            entry
-                .state
-                .lock()
-                .ok()
-                .and_then(|state| state.favicon.clone())
-        })
+    pub fn get_favicon_image(&self, tab_id: &str, fallback_url: Option<&str>) -> Option<Arc<RenderImage>> {
+        let expected_host = fallback_url.and_then(crate::shield::url_host);
+        if let Some(entry) = self.browsers.get(tab_id) {
+            if let Ok(mut state) = entry.state.lock() {
+                if let Some(ref expected) = expected_host {
+                    let matches_current = state.current_host.as_deref().is_some_and(|h| {
+                        h == expected.as_str()
+                            || h.trim_start_matches("www.") == expected.trim_start_matches("www.")
+                    });
+                    let matches_favicon = state.favicon_host.as_deref().is_some_and(|h| {
+                        h == expected.as_str()
+                            || h.trim_start_matches("www.") == expected.trim_start_matches("www.")
+                    });
+
+                    if !matches_current && !matches_favicon && state.favicon.is_some() {
+                        state.favicon = None;
+                        state.favicon_host = None;
+                    }
+                }
+
+                if let Some(img) = state.favicon.clone() {
+                    return Some(img);
+                }
+
+                let target_host = expected_host
+                    .or_else(|| state.current_host.clone())
+                    .or_else(|| state.current_url.as_deref().and_then(crate::shield::url_host))
+                    .or_else(|| state.url.as_deref().and_then(crate::shield::url_host));
+
+                if let Some(ref host) = target_host {
+                    if let Some(img) = load_favicon_from_disk(host) {
+                        state.favicon = Some(img.clone());
+                        state.favicon_host = Some(host.clone());
+                        return Some(img);
+                    }
+                }
+            }
+        } else if let Some(ref host) = expected_host {
+            return load_favicon_from_disk(host);
+        }
+        None
     }
 
     pub fn take_updates(&self, tab_id: &str) -> Option<(Option<String>, Option<String>)> {
@@ -1625,6 +2060,31 @@ impl Engine {
 
     pub fn navigate(&mut self, id: &str, url: &str) {
         if let Some(entry) = self.browsers.get(id) {
+            let new_host = crate::shield::url_host(url);
+            if let Ok(mut state) = entry.state.lock() {
+                state.current_url = Some(url.to_string());
+                let host_changed = match (&state.current_host, &new_host) {
+                    (Some(curr), Some(new_h)) => {
+                        curr != new_h
+                            && curr.trim_start_matches("www.") != new_h.trim_start_matches("www.")
+                    }
+                    (None, Some(_)) => true,
+                    (Some(_), None) => true,
+                    (None, None) => false,
+                };
+                if host_changed {
+                    state.current_host = new_host.clone();
+                    state.favicon = None;
+                    state.favicon_host = None;
+                    if let Some(ref host) = new_host {
+                        if let Some(cached) = load_favicon_from_disk(host) {
+                            state.favicon = Some(cached);
+                            state.favicon_host = Some(host.clone());
+                        }
+                    }
+                    state.root_dirty = true;
+                }
+            }
             if let Some(frame) = entry.browser.main_frame() {
                 frame.load_url(Some(&CefString::from(url)));
             }
@@ -1691,12 +2151,23 @@ impl Engine {
             .key_char
             .as_deref()
             .and_then(|value| value.encode_utf16().next())
+            .or_else(|| {
+                let mut chars = key.chars();
+                let ch = chars.next()?;
+                if chars.next().is_none() && !ch.is_control() {
+                    let mut buf = [0u16; 2];
+                    ch.encode_utf16(&mut buf);
+                    Some(buf[0])
+                } else {
+                    None
+                }
+            })
             .unwrap_or(0);
         let base = cef_key_event(
             key,
             &event.keystroke.modifiers,
             KeyEventType::RAWKEYDOWN,
-            0,
+            character,
             true,
         );
         host.send_key_event(Some(&base));
@@ -1727,6 +2198,60 @@ impl Engine {
     }
 }
 
+pub fn windows_key_code_for_key(key: &str) -> i32 {
+    match key.to_ascii_lowercase().as_str() {
+        "backspace" => 0x08,
+        "tab" => 0x09,
+        "enter" | "return" => 0x0d,
+        "escape" | "esc" => 0x1b,
+        "space" => 0x20,
+        "pageup" => 0x21,
+        "pagedown" => 0x22,
+        "end" => 0x23,
+        "home" => 0x24,
+        "left" | "arrowleft" => 0x25,
+        "up" | "arrowup" => 0x26,
+        "right" | "arrowright" => 0x27,
+        "down" | "arrowdown" => 0x28,
+        "insert" => 0x2d,
+        "delete" => 0x2e,
+        // Punctuation and symbols - Windows OEM Virtual Key Codes
+        ";" | ":" => 0xba,
+        "=" | "+" => 0xbb,
+        "," | "<" => 0xbc,
+        "-" | "_" => 0xbd,
+        "." | ">" => 0xbe,
+        "/" | "?" => 0xbf,
+        "`" | "~" => 0xc0,
+        "[" | "{" => 0xdb,
+        "\\" | "|" => 0xdc,
+        "]" | "}" => 0xdd,
+        "'" | "\"" => 0xde,
+        // Function keys
+        "f1" => 0x70,
+        "f2" => 0x71,
+        "f3" => 0x72,
+        "f4" => 0x73,
+        "f5" => 0x74,
+        "f6" => 0x75,
+        "f7" => 0x76,
+        "f8" => 0x77,
+        "f9" => 0x78,
+        "f10" => 0x79,
+        "f11" => 0x7a,
+        "f12" => 0x7b,
+        value if value.len() == 1 => {
+            let b = value.as_bytes()[0];
+            if b.is_ascii_alphanumeric() {
+                b.to_ascii_uppercase() as i32
+            } else {
+                b as i32
+            }
+        }
+        _ => 0,
+    }
+}
+
 fn cef_mouse_modifiers(modifiers: &gpui_kit::Modifiers) -> u32 {
     (if modifiers.shift { 2 } else { 0 })
         | (if modifiers.control { 4 } else { 0 })
@@ -1754,25 +2279,7 @@ fn cef_key_event(
     if modifiers.platform {
         flags |= 1 << 7;
     }
-    let code = match key.to_ascii_lowercase().as_str() {
-        "backspace" => 0x08,
-        "tab" => 0x09,
-        "enter" | "return" => 0x0d,
-        "escape" => 0x1b,
-        "space" => 0x20,
-        "pageup" => 0x21,
-        "pagedown" => 0x22,
-        "end" => 0x23,
-        "home" => 0x24,
-        "left" => 0x25,
-        "up" => 0x26,
-        "right" => 0x27,
-        "down" => 0x28,
-        "insert" => 0x2d,
-        "delete" => 0x2e,
-        value if value.len() == 1 => value.as_bytes()[0].to_ascii_uppercase() as i32,
-        _ => 0,
-    };
+    let code = windows_key_code_for_key(key);
     KeyEvent {
         size: std::mem::size_of::<KeyEvent>(),
         type_: event_type,
@@ -1819,6 +2326,7 @@ fn native_key_code(key: &str, fallback: i32) -> i32 {
             "pagedown" => x11::keysym::XK_Page_Down,
             "end" => x11::keysym::XK_End,
             "delete" => x11::keysym::XK_Delete,
+            "insert" => x11::keysym::XK_Insert,
             value if value.len() == 1 => value.as_bytes()[0] as u32,
             _ => 0,
         };
@@ -1915,8 +2423,17 @@ mod tests {
         );
         assert_eq!(
             frame_rate_for_refresh(Some(std::time::Duration::from_millis(4))),
-            120
+            240
         );
+    }
+
+    #[test]
+    fn system_refresh_rate_detection_extracts_display_hz() {
+        let detected = detect_system_refresh_rate();
+        // On Linux Hyprland / xrandr environments, this detects a valid refresh rate (e.g. 144Hz)
+        if let Some(hz) = detected {
+            assert!((30..=360).contains(&hz));
+        }
     }
 
     #[test]
@@ -1985,5 +2502,99 @@ mod tests {
             fallback_http_after_upgrade_failure(&mut state, "https://example.test/other"),
             None
         );
+    }
+
+    #[test]
+    fn engine_navigation_flags_default_to_false_for_missing_or_new_tabs() {
+        let engine = Engine::new();
+        assert!(!engine.can_go_back("non-existent-tab"));
+        assert!(!engine.can_go_forward("non-existent-tab"));
+    }
+
+    #[test]
+    fn windows_key_code_maps_dots_punctuation_and_letters() {
+        assert_eq!(windows_key_code_for_key("."), 0xbe); // VK_OEM_PERIOD (not VK_DELETE 0x2e!)
+        assert_eq!(windows_key_code_for_key(">"), 0xbe);
+        assert_eq!(windows_key_code_for_key(","), 0xbc); // VK_OEM_COMMA
+        assert_eq!(windows_key_code_for_key("<"), 0xbc);
+        assert_eq!(windows_key_code_for_key("-"), 0xbd); // VK_OEM_MINUS
+        assert_eq!(windows_key_code_for_key("_"), 0xbd);
+        assert_eq!(windows_key_code_for_key("/"), 0xbf); // VK_OEM_2
+        assert_eq!(windows_key_code_for_key("?"), 0xbf);
+        assert_eq!(windows_key_code_for_key(";"), 0xba); // VK_OEM_1
+        assert_eq!(windows_key_code_for_key(":"), 0xba);
+        assert_eq!(windows_key_code_for_key("="), 0xbb); // VK_OEM_PLUS
+        assert_eq!(windows_key_code_for_key("+"), 0xbb);
+        assert_eq!(windows_key_code_for_key("["), 0xdb); // VK_OEM_4
+        assert_eq!(windows_key_code_for_key("{"), 0xdb);
+        assert_eq!(windows_key_code_for_key("\\"), 0xdc); // VK_OEM_5
+        assert_eq!(windows_key_code_for_key("|"), 0xdc);
+        assert_eq!(windows_key_code_for_key("]"), 0xdd); // VK_OEM_6
+        assert_eq!(windows_key_code_for_key("}"), 0xdd);
+        assert_eq!(windows_key_code_for_key("'"), 0xde); // VK_OEM_7
+        assert_eq!(windows_key_code_for_key("\""), 0xde);
+        assert_eq!(windows_key_code_for_key("`"), 0xc0); // VK_OEM_3
+        assert_eq!(windows_key_code_for_key("~"), 0xc0);
+        assert_eq!(windows_key_code_for_key("delete"), 0x2e); // VK_DELETE
+        assert_eq!(windows_key_code_for_key("insert"), 0x2d); // VK_INSERT
+        assert_eq!(windows_key_code_for_key("a"), 0x41);
+        assert_eq!(windows_key_code_for_key("Z"), 0x5a);
+        assert_eq!(windows_key_code_for_key("0"), 0x30);
+        assert_eq!(windows_key_code_for_key("9"), 0x39);
+    }
+
+    #[test]
+    fn resolve_favicon_url_handles_relative_and_absolute_links() {
+        assert_eq!(
+            resolve_favicon_url("https://github.com/torvalds/linux", "/favicon.svg"),
+            Some("https://github.com/favicon.svg".to_owned())
+        );
+        assert_eq!(
+            resolve_favicon_url("https://example.com/blog/post", "icon.png"),
+            Some("https://example.com/blog/icon.png".to_owned())
+        );
+        assert_eq!(
+            resolve_favicon_url("https://example.com", "//cdn.example.com/fav.ico"),
+            Some("https://cdn.example.com/fav.ico".to_owned())
+        );
+        assert_eq!(
+            resolve_favicon_url("https://example.com", "https://other.com/fav.ico"),
+            Some("https://other.com/fav.ico".to_owned())
+        );
+        assert_eq!(
+            resolve_favicon_url("https://example.com", "data:image/png;base64,abc"),
+            Some("data:image/png;base64,abc".to_owned())
+        );
+    }
+
+    #[test]
+    fn decode_base64_decodes_bytes() {
+        let input = "SGVsbG8gV29ybGQ="; // "Hello World"
+        let decoded = decode_base64(input).unwrap();
+        assert_eq!(decoded, b"Hello World");
+    }
+
+    #[test]
+    fn favicon_url_score_prioritizes_modern_high_res_over_legacy_ico() {
+        let legacy_ico = "https://example.com/favicon.ico";
+        let modern_png = "https://example.com/icons/favicon-32x32.png";
+        let touch_icon = "https://example.com/apple-touch-icon-180x180.png";
+        let vector_svg = "https://example.com/icon.svg";
+
+        assert!(favicon_url_score(modern_png) > favicon_url_score(legacy_ico));
+        assert!(favicon_url_score(touch_icon) > favicon_url_score(legacy_ico));
+        assert!(favicon_url_score(vector_svg) > favicon_url_score(legacy_ico));
+    }
+
+    #[test]
+    fn disk_favicon_resolution_handles_www_and_bare_domain_symmetrically() {
+        let buffer = image::ImageBuffer::from_pixel(16, 16, image::Rgba([255, 0, 0, 255]));
+        save_favicon_to_disk("www.test-domain-sym.com", &buffer);
+
+        let loaded_with_www = load_favicon_from_disk("www.test-domain-sym.com");
+        let loaded_bare = load_favicon_from_disk("test-domain-sym.com");
+
+        assert!(loaded_with_www.is_some());
+        assert!(loaded_bare.is_some());
     }
 }

@@ -62,3 +62,31 @@ Fixed animated percentage/opacity clamping with NaN handling and added a unit te
 ## Session 2026-11-09T15:58:15.177162292+00:00
 
 Implemented resize frame crossfade handoff, corrected sidebar highlight geometry, and added coordinated space-switch transitions. Offline cargo checks and diff check pass; runtime behavior and tests remain unverified.
+
+## Session 2026-11-09T16:16:08.213404544+00:00
+
+Removed border from search bar and added back and forward navigation icon buttons to the left of the search bar
+
+## Session 2026-11-09T16:24:18.238805967+00:00
+
+Centered sidebar resize handle directly over the visual cut at sidebar_width + CONTENT_BEZEL_X on root overlay to eliminate hit target occlusion and offset
+
+## Session 2026-11-09T16:34:15.770435114+00:00
+
+Ensured address bar syncs to current tab URL upon back/forward navigation and auto-hides autocomplete suggestions when focus moves out of the address bar or outside clicked
+
+## Session 2026-11-09T16:55:50.260279347+00:00
+
+Fixed new tab 90% zoom retention across creation/load, fixed web view width adaptation and horizontal scrollbars by syncing CEF layout bounds and screen info notification, and unlocked high-refresh display FPS (up to 240Hz, auto-detecting 144Hz via Hyprland/xrandr) with tuned pump timer.
+
+## Session 2026-11-09T17:15:42.350968289+00:00
+
+Fixed input typing for period (.) and all OEM punctuation/symbol keys by implementing windows_key_code_for_key with VK_OEM codes instead of ASCII clashes (e.g. 0x2e VK_DELETE), with fallback character encoding; and fixed website favicons by resolving relative/absolute/data URLs, supporting cached/304 HTTP responses, adding raw bitmap extraction fallback, disk caching, and immediate tab row favicon hydration.
+
+## Session 2026-11-09T17:20:12.670969535+00:00
+
+Updated default tab zoom factor to 80% (0.8) in src/ui/visual.rs and switched default search engine from DuckDuckGo to Google in src/main.rs (including search suggestions, address bar normalization, empty query search home, and title handling)
+
+## Session 2026-11-09T17:36:18.224713013+00:00
+
+Fixed favicon site switching and stale icon issues: (1) Added host-tracking to BrowserSharedState (favicon_host, current_url, current_host) to invalidate and reload site icons immediately when navigating or switching sites; (2) Added favicon_url_score to rank modern high-res PNG/SVG/touch icons over legacy 16x16 ICOs; (3) Fixed LumenFaviconCallback to save favicons under the tab's page host rather than third-party CDN hosts (like gstatic or webflow); (4) Made save_favicon_to_disk and load_favicon_from_disk handle www and bare domains symmetrically.

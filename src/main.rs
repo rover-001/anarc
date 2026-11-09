@@ -26,7 +26,7 @@ use gpui_kit::{
 use model::{Space, SplitPair, Tab, TabState};
 use ui::command_palette::{self, PaletteAction, PaletteItem, PaletteTab, PaletteTarget};
 use ui::split_view::{self, DIVIDER_HIT_WIDTH, DIVIDER_WIDTH};
-use ui::visual::{self, ADDRESS_BAR_HEIGHT, TOPBAR_HEIGHT, UI_SCALE};
+use ui::visual::{self, ADDRESS_BAR_HEIGHT, NAV_BUTTON_SIZE, TOPBAR_HEIGHT, UI_SCALE};
 use ui::web_view::WebViewport;
 use ui::{sidebar, space_switcher, tab_list};
 
@@ -133,7 +133,7 @@ pub(crate) struct Lumen {
     started_at: Instant,
     first_frame_logged: bool,
     address: gpui_kit::Entity<InputState>,
-    address_active_tab: Option<(String, String)>,
+    address_active_tab: Option<(String, String, String)>,
     address_editing: bool,
     reset_address_for_tab_change: bool,
     find_input: gpui_kit::Entity<InputState>,
@@ -1197,7 +1197,10 @@ impl Lumen {
 
     fn remember_search(&mut self, query: &str, url: &str) {
         let query = query.trim();
-        if query.is_empty() || !url.starts_with("https://duckduckgo.com/?q=") {
+        if query.is_empty()
+            || (!url.starts_with("https://www.google.com/search?q=")
+                && !url.starts_with("https://google.com/search?q="))
+        {
             return;
         }
         self.recent_searches
@@ -1413,10 +1416,10 @@ pub fn compute_suggestions(query: &str) -> Vec<SuggestionItem> {
 
     let mut list = Vec::new();
 
-    // 1. DuckDuckGo search action avoids sending every free-form query to Google.
+    // 1. Google search action
     list.push(SuggestionItem {
         icon_type: "search".to_string(),
-        title: format!("Search DuckDuckGo for \"{q}\""),
+        title: format!("Search Google for \"{q}\""),
         target: q.to_string(),
     });
 
@@ -1552,7 +1555,7 @@ fn normalize_address(input: &str) -> String {
         "figma" => "https://figma.com".to_string(),
         "notion" => "https://notion.so".to_string(),
         "stackoverflow" => "https://stackoverflow.com".to_string(),
-        _ => format!("https://duckduckgo.com/?q={}", encode_search_query(input)),
+        _ => format!("https://www.google.com/search?q={}", encode_search_query(input)),
     }
 }
 
@@ -1561,7 +1564,7 @@ fn submit_address(space: &mut Space, input: &str) -> Option<(String, String, boo
         && crate::shield::upgrade_http_url(input.trim()).is_some();
     let url = normalize_address(input);
     let url = if url.is_empty() {
-        "https://duckduckgo.com".to_owned()
+        "https://www.google.com".to_owned()
     } else {
         url
     };
@@ -1573,7 +1576,9 @@ fn submit_address(space: &mut Space, input: &str) -> Option<(String, String, boo
     }
     let id = space.active.clone()?;
     let tab = space.tabs.iter_mut().find(|tab| tab.id == id)?;
-    let title = if url.starts_with("https://duckduckgo.com/?q=") {
+    let title = if url.starts_with("https://www.google.com/search?q=")
+        || url.starts_with("https://google.com/search?q=")
+    {
         format!("Search: {}", input.trim())
     } else if let Some(domain) = url
         .strip_prefix("https://")
@@ -1663,6 +1668,7 @@ impl Render for Lumen {
                         if this.engine.take_created_browsers() {
                             let active = this.active_tab_id().to_owned();
                             this.engine.set_visible(&active);
+                            this.active_zoom_target = None;
                             cx.notify();
                         }
                         let popups = this.engine.take_popups();
@@ -1747,9 +1753,10 @@ impl Render for Lumen {
                     let Ok(Some(())) = updated else {
                         break;
                     };
+                    let fallback_ms = ((1000.0 / refresh_rate as f64).round() as u64).max(4);
                     futures_lite::future::or(
                         cx.background_executor()
-                            .timer(std::time::Duration::from_millis(33)),
+                            .timer(std::time::Duration::from_millis(fallback_ms)),
                         async {
                             let _ = ui_update_receiver.recv().await;
                         },
@@ -1801,23 +1808,30 @@ impl Render for Lumen {
             }
         }
 
-        let active_address_tab = (self.active_space.clone(), self.active_tab_id().to_owned());
+        let current_tab_url = self
+            .active_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == self.active_tab_id())
+            .map(|tab| tab.url.clone())
+            .unwrap_or_default();
+        let active_address_tab = (
+            self.active_space.clone(),
+            self.active_tab_id().to_owned(),
+            current_tab_url.clone(),
+        );
+        let address_focused =
+            _window.focused(cx) == Some(self.address.read(cx).focus_handle(cx));
+        if !address_focused && self.show_suggestions {
+            self.show_suggestions = false;
+            self.selected_suggestion = None;
+        }
         if self.address_active_tab.as_ref() != Some(&active_address_tab) {
-            let active_url = self
-                .active_space()
-                .tabs
-                .iter()
-                .find(|tab| tab.id == active_address_tab.1)
-                .map(|tab| {
-                    if tab.url == "about:blank" {
-                        String::new()
-                    } else {
-                        tab.url.clone()
-                    }
-                })
-                .unwrap_or_default();
-            let address_focused =
-                _window.focused(cx) == Some(self.address.read(cx).focus_handle(cx));
+            let active_url = if current_tab_url == "about:blank" || current_tab_url == "lumen://welcome" {
+                String::new()
+            } else {
+                current_tab_url
+            };
             let force_reset = self.reset_address_for_tab_change;
             if force_reset || !(self.address_editing && address_focused) {
                 self.address.update(cx, |input, cx| {
@@ -1886,7 +1900,7 @@ impl Render for Lumen {
                 (
                     tab.id.clone(),
                     tab.title.clone(),
-                    self.engine.get_favicon_image(&tab.id),
+                    self.engine.get_favicon_image(&tab.id, Some(&tab.url)),
                 )
             })
             .collect();
@@ -2015,12 +2029,29 @@ impl Render for Lumen {
                     }
                 }
             }
+            if let Some(pair) = &split_pair {
+                let left_w = self
+                    .resize_drag
+                    .frozen_size(&pair.first)
+                    .map_or(left_width_dip.max(1), |(width, _)| width);
+                let right_w = self
+                    .resize_drag
+                    .frozen_size(&pair.second)
+                    .map_or(right_width_dip.max(1), |(width, _)| width);
+                self.engine.resize_browser(&pair.first, left_w, content_h);
+                self.engine.resize_browser(&pair.second, right_w, content_h);
+            } else {
+                self.engine
+                    .resize_browser(&active_tab_id_string, active_width.max(1), content_h);
+            }
             let host = url_host(&active_tab_url);
             let zoom_target = (active_tab_id_string.clone(), host.clone());
             if !host.is_empty() && self.active_zoom_target.as_ref() != Some(&zoom_target) {
                 let level = visual::zoom_after_delta(self.zoom_levels.get(&host).copied(), 0.0);
                 self.engine.set_zoom_level(&active_tab_id_string, level);
-                self.active_zoom_target = Some(zoom_target);
+                if self.engine.has_browser(&active_tab_id_string) {
+                    self.active_zoom_target = Some(zoom_target);
+                }
             } else if host.is_empty() {
                 self.active_zoom_target = None;
             }
@@ -2078,7 +2109,17 @@ impl Render for Lumen {
             .px_3()
             .py_3()
             .gap_2()
-            .bg(rgb(theme.base));
+            .bg(rgb(theme.base))
+            .on_mouse_down(
+                gpui_kit::MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.show_suggestions {
+                        this.show_suggestions = false;
+                        this.selected_suggestion = None;
+                        cx.notify();
+                    }
+                }),
+            );
 
         if !self.sidebar_collapsed {
             let mut sidebar_row_index = 0usize;
@@ -2106,25 +2147,6 @@ impl Render for Lumen {
                 sidebar_row_index += 1;
             }
             sidebar_content = sidebar_content
-                .child(
-                    div()
-                        .id("sidebar-resize-handle")
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .right(px(-2.0 * UI_SCALE))
-                        .w(px(6.0 * UI_SCALE))
-                        .cursor_col_resize()
-                        .on_mouse_down(
-                            gpui_kit::MouseButton::Left,
-                            cx.listener(|this, _, _window, cx| {
-                                this.sidebar_resizing = true;
-                                #[cfg(all(target_os = "linux", not(test)))]
-                                this.begin_browser_resize_drag(_window, false);
-                                cx.notify();
-                            }),
-                        ),
-                )
                 .child(
                     div().flex().items_center().px_2().py_2().child(
                         div()
@@ -2802,7 +2824,7 @@ impl Render for Lumen {
                             for member in [first, second] {
                                 outgoing_rows.push((
                                     member.title.clone(),
-                                    self.engine.get_favicon_image(&member.id),
+                                    self.engine.get_favicon_image(&member.id, Some(&member.url)),
                                     outgoing_space.active.as_deref() == Some(member.id.as_str()),
                                 ));
                             }
@@ -2818,7 +2840,7 @@ impl Render for Lumen {
                         }
                         outgoing_rows.push((
                             tab.title.clone(),
-                            self.engine.get_favicon_image(&tab.id),
+                            self.engine.get_favicon_image(&tab.id, Some(&tab.url)),
                             outgoing_space.active.as_deref() == Some(tab.id.as_str()),
                         ));
                     }
@@ -2907,7 +2929,7 @@ impl Render for Lumen {
                         cx.notify();
                     }
                     if this.sidebar_resizing {
-                        let new_width = f32::from(event.position.x);
+                        let new_width = f32::from(event.position.x) - CONTENT_BEZEL_X;
                         this.sidebar_width = new_width.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
                         cx.notify();
                     }
@@ -2987,7 +3009,71 @@ impl Render for Lumen {
                             .h(px(TOPBAR_HEIGHT))
                             .flex()
                             .items_center()
+                            .gap_2()
                             .px_4()
+                            .child(
+                                div()
+                                    .id("navigation-controls")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child({
+                                        let can_go_back = self.engine.can_go_back(self.focused_tab_id());
+                                        div()
+                                            .id("back-btn")
+                                            .size(px(NAV_BUTTON_SIZE))
+                                            .rounded_lg()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_color(rgb(if can_go_back { theme.text } else { theme.muted }))
+                                            .opacity(if can_go_back { 1.0 } else { 0.4 })
+                                            .when(can_go_back, |btn| {
+                                                btn.cursor_pointer()
+                                                    .active(|s| s.opacity(0.92))
+                                                    .hover(move |s| {
+                                                        s.bg(rgb(theme.surface_hover))
+                                                            .text_color(rgb(theme.text))
+                                                    })
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.address_editing = false;
+                                                this.show_suggestions = false;
+                                                this.selected_suggestion = None;
+                                                this.engine.go_back(this.focused_tab_id());
+                                                cx.notify();
+                                            }))
+                                            .child(Icon::new(IconName::ArrowLeft).size(px(16.0 * UI_SCALE)))
+                                    })
+                                    .child({
+                                        let can_go_forward = self.engine.can_go_forward(self.focused_tab_id());
+                                        div()
+                                            .id("forward-btn")
+                                            .size(px(NAV_BUTTON_SIZE))
+                                            .rounded_lg()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_color(rgb(if can_go_forward { theme.text } else { theme.muted }))
+                                            .opacity(if can_go_forward { 1.0 } else { 0.4 })
+                                            .when(can_go_forward, |btn| {
+                                                btn.cursor_pointer()
+                                                    .active(|s| s.opacity(0.92))
+                                                    .hover(move |s| {
+                                                        s.bg(rgb(theme.surface_hover))
+                                                            .text_color(rgb(theme.text))
+                                                    })
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.address_editing = false;
+                                                this.show_suggestions = false;
+                                                this.selected_suggestion = None;
+                                                this.engine.go_forward(this.focused_tab_id());
+                                                cx.notify();
+                                            }))
+                                            .child(Icon::new(IconName::ArrowRight).size(px(16.0 * UI_SCALE)))
+                                    }),
+                            )
                             .child(
                                 div()
                                     .id("address-bar-container")
@@ -2996,13 +3082,6 @@ impl Render for Lumen {
                                     .px_3()
                                     .rounded_lg()
                                     .bg(rgb(theme.surface))
-                                    .border_1()
-                                    .border_color(rgb(if self.browser_focused {
-                                        theme.border
-                                    } else {
-                                        selected_color
-                                    }))
-                                    .hover(move |s| s.border_color(rgb(theme.border_hover)))
                                     .flex()
                                     .items_center()
                                     .gap_2()
@@ -3200,7 +3279,19 @@ impl Render for Lumen {
                                 || active_tab_url == "about:blank"
                                 || active_tab_url.is_empty()
                             {
-                                div().id("empty-space").size_full()
+                                div()
+                                    .id("empty-space")
+                                    .size_full()
+                                    .on_mouse_down(
+                                        gpui_kit::MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            if this.show_suggestions {
+                                                this.show_suggestions = false;
+                                                this.selected_suggestion = None;
+                                                cx.notify();
+                                            }
+                                        }),
+                                    )
                             } else {
                                 div().id("web-viewport-entity").size_full().child(
                                     AnyView::from(self.web_viewport.clone())
@@ -3210,7 +3301,33 @@ impl Render for Lumen {
                     }),
             );
 
-        let suggestions_open = self.show_suggestions && !self.suggestions.is_empty();
+        if !self.sidebar_collapsed {
+            let handle_w = 10.0 * UI_SCALE;
+            let cut_x = sidebar_width_f32 + CONTENT_BEZEL_X;
+            root = root.child(
+                div()
+                    .id("sidebar-resize-handle")
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(cut_x - handle_w / 2.0))
+                    .w(px(handle_w))
+                    .cursor_col_resize()
+                    .on_mouse_down(
+                        gpui_kit::MouseButton::Left,
+                        cx.listener(|this, _, _window, cx| {
+                            this.sidebar_resizing = true;
+                            #[cfg(all(target_os = "linux", not(test)))]
+                            this.begin_browser_resize_drag(_window, false);
+                            cx.notify();
+                        }),
+                    ),
+            );
+        }
+
+        let address_focused =
+            _window.focused(cx) == Some(self.address.read(cx).focus_handle(cx));
+        let suggestions_open = self.show_suggestions && address_focused && !self.suggestions.is_empty();
         if suggestions_open {
             if !self.suggestions_were_visible {
                 self.suggestion_animation_serial = self.suggestion_animation_serial.wrapping_add(1);
@@ -3256,7 +3373,7 @@ impl Render for Lumen {
                 .occlude()
                 .absolute()
                 .top(px(TOPBAR_HEIGHT + 4.0 * UI_SCALE))
-                .left(px(sidebar_width_f32 + 16.0 * UI_SCALE))
+                .left(px(sidebar_width_f32 + 16.0 * UI_SCALE + NAV_BUTTON_SIZE * 2.0 + 12.0 * UI_SCALE))
                 .w(px(560.0 * UI_SCALE))
                 .bg(rgb(theme.surface))
                 .border_1()
@@ -3571,12 +3688,18 @@ impl Render for Lumen {
                     return;
                 }
                 if modifiers.alt && matches!(key.as_str(), "left" | "arrowleft") {
+                    this.address_editing = false;
+                    this.show_suggestions = false;
+                    this.selected_suggestion = None;
                     this.engine.go_back(this.focused_tab_id());
                     window.prevent_default();
                     cx.stop_propagation();
                     return;
                 }
                 if modifiers.alt && matches!(key.as_str(), "right" | "arrowright") {
+                    this.address_editing = false;
+                    this.show_suggestions = false;
+                    this.selected_suggestion = None;
                     this.engine.go_forward(this.focused_tab_id());
                     window.prevent_default();
                     cx.stop_propagation();
@@ -4750,6 +4873,33 @@ mod tests {
     }
 
     #[gpui::test]
+    fn active_tab_navigation_updates_address_bar(cx: &mut gpui::TestAppContext) {
+        let (_handle, view) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| {
+                    let mut app = test_app(window, cx);
+                    app.active_space_mut().tabs[0].url = "https://initial.example".into();
+                    app
+                })
+            })
+            .expect("open test window")
+        });
+
+        view.update(cx, |app, cx| {
+            app.active_space_mut().tabs[0].url = "https://navigated.example".into();
+            cx.notify();
+        });
+
+        view.read_with(cx, |app, cx| {
+            assert_eq!(
+                app.address.read(cx).value().to_string(),
+                "https://navigated.example"
+            );
+        });
+    }
+
+    #[gpui::test]
     fn new_tab_temporarily_leaves_a_split_and_address_targets_it(cx: &mut gpui::TestAppContext) {
         let (handle, view) = cx.update(|cx| {
             gpui_kit::init(cx);
@@ -4911,7 +5061,7 @@ mod tests {
         view.read_with(cx, |app, _| {
             assert_eq!(
                 app.active_space().tabs[0].url,
-                "https://duckduckgo.com/?q=lumen+browser+shortcuts"
+                "https://www.google.com/search?q=lumen+browser+shortcuts"
             );
         });
     }
@@ -4970,7 +5120,7 @@ mod tests {
         // General search query routes to Google search with clean title
         let (id, url, _) = submit_address(&mut space, "rust compiler docs").unwrap();
         assert_eq!(id, "existing");
-        assert_eq!(url, "https://duckduckgo.com/?q=rust+compiler+docs");
+        assert_eq!(url, "https://www.google.com/search?q=rust+compiler+docs");
         assert_eq!(space.tabs[0].title, "Search: rust compiler docs");
     }
 
@@ -4979,7 +5129,7 @@ mod tests {
         let mut space = Space::new("test", "Test", "compass", 0x123456);
         let (id, url, _) = submit_address(&mut space, "").unwrap();
         assert_eq!(id, "tab-1");
-        assert_eq!(url, "https://duckduckgo.com");
+        assert_eq!(url, "https://www.google.com");
         assert_eq!(space.active.as_deref(), Some("tab-1"));
         assert_eq!(space.tabs[0].url, url);
     }
@@ -5039,11 +5189,11 @@ mod tests {
         );
         assert_eq!(
             normalize_address("what is the airspeed velocity of a swallow"),
-            "https://duckduckgo.com/?q=what+is+the+airspeed+velocity+of+a+swallow"
+            "https://www.google.com/search?q=what+is+the+airspeed+velocity+of+a+swallow"
         );
         assert_eq!(
             normalize_address("cats & dogs"),
-            "https://duckduckgo.com/?q=cats+%26+dogs"
+            "https://www.google.com/search?q=cats+%26+dogs"
         );
     }
 
@@ -5116,7 +5266,7 @@ mod tests {
         // Typing "you" provides search, domain completion, and YouTube quick site
         let you_sugs = compute_suggestions("you");
         assert!(!you_sugs.is_empty());
-        assert_eq!(you_sugs[0].title, "Search DuckDuckGo for \"you\"");
+        assert_eq!(you_sugs[0].title, "Search Google for \"you\"");
         assert!(
             you_sugs
                 .iter()
