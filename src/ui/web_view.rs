@@ -15,6 +15,7 @@ pub struct WebViewport {
     sidebar_width: f32,
     pane_offset: f32,
     pane_index: usize,
+    split_layout: bool,
     image: Option<Arc<gpui_kit::RenderImage>>,
     retired_images: Vec<Arc<gpui_kit::RenderImage>>,
     cursor: i32,
@@ -30,6 +31,7 @@ impl WebViewport {
             sidebar_width: 320.0,
             pane_offset: 0.0,
             pane_index: 0,
+            split_layout: false,
             image: None,
             retired_images: Vec::new(),
             cursor: 0,
@@ -46,6 +48,7 @@ impl WebViewport {
         retired_images: Vec<Arc<gpui_kit::RenderImage>>,
         pane_offset: f32,
         pane_index: usize,
+        split_layout: bool,
     ) {
         self.tab_id = tab_id;
         self.sidebar_width = effective_sidebar_width;
@@ -54,6 +57,7 @@ impl WebViewport {
         self.retired_images.extend(retired_images);
         self.pane_offset = pane_offset;
         self.pane_index = pane_index;
+        self.split_layout = split_layout;
     }
 
     pub fn set_content(
@@ -413,6 +417,75 @@ impl Render for WebViewport {
                     ),
             );
         }
+
+        // A captured frame may be wider than its pane while split/sidebar
+        // dividers are moving. Use a rounded border ring whose inner edge
+        // matches the pane's corner arc; the pane's rectangular clip trims
+        // the rest of each ring.
+        let radius = crate::CARD_RADIUS;
+        let ring_size = px(radius * 3.0);
+        let ring_offset = px(-radius);
+        let outer_corner_radius = px(radius * 2.0);
+        let border_width = px(radius);
+        let outer_color = rgb(self.theme.base);
+        let inner_color = rgb(self.theme.surface);
+        let (top_left_color, top_right_color, bottom_left_color, bottom_right_color) =
+            if !self.split_layout {
+                (outer_color, outer_color, outer_color, outer_color)
+            } else if self.pane_index == 0 {
+                (outer_color, inner_color, outer_color, inner_color)
+            } else {
+                (inner_color, outer_color, inner_color, outer_color)
+            };
+        viewport = viewport
+            .child(
+                div()
+                    .absolute()
+                    .top(ring_offset)
+                    .left(ring_offset)
+                    .w(ring_size)
+                    .h(ring_size)
+                    .border_t(border_width)
+                    .border_l(border_width)
+                    .border_color(top_left_color)
+                    .rounded_tl(outer_corner_radius),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(ring_offset)
+                    .right(ring_offset)
+                    .w(ring_size)
+                    .h(ring_size)
+                    .border_t(border_width)
+                    .border_r(border_width)
+                    .border_color(top_right_color)
+                    .rounded_tr(outer_corner_radius),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .bottom(ring_offset)
+                    .left(ring_offset)
+                    .w(ring_size)
+                    .h(ring_size)
+                    .border_b(border_width)
+                    .border_l(border_width)
+                    .border_color(bottom_left_color)
+                    .rounded_bl(outer_corner_radius),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .bottom(ring_offset)
+                    .right(ring_offset)
+                    .w(ring_size)
+                    .h(ring_size)
+                    .border_b(border_width)
+                    .border_r(border_width)
+                    .border_color(bottom_right_color)
+                    .rounded_br(outer_corner_radius),
+            );
         viewport
     }
 }
