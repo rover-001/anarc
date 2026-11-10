@@ -97,6 +97,8 @@ cp -f "$BUNDLE_BIN" "$APP_DIR/bin/anarc.tmp"
 chmod 755 "$APP_DIR/bin/anarc.tmp"
 mv -f "$APP_DIR/bin/anarc.tmp" "$APP_DIR/bin/anarc"
 ln -sf anarc "$APP_DIR/bin/lumen"
+ln -sf anarc "$APP_DIR/bin/chrome"
+ln -sf anarc "$APP_DIR/bin/chromium"
 
 # CEF runtime: copy only runtime files (skip cmake/, include/, CMakeLists, etc.)
 echo "==> Installing CEF runtime to $CEF_DIR"
@@ -113,10 +115,11 @@ for item in libcef.so libcef_dll chrome-sandbox chrome_100_percent.pak \
     fi
 done
 
-# Symlink anarc into CEF runtime directory as anarc and chrome so CEF child processes
+# Symlink anarc into CEF runtime directory as anarc, chrome, and chromium so CEF child processes
 # (renderer, gpu, utility) never search system PATH or trigger external /usr/bin/chromium.
 ln -sf "$APP_DIR/bin/anarc" "$CEF_DIR/anarc"
 ln -sf "$APP_DIR/bin/anarc" "$CEF_DIR/chrome"
+ln -sf "$APP_DIR/bin/anarc" "$CEF_DIR/chromium"
 
 cat > "$BIN_DIR/anarc" <<EOF
 #!/bin/sh
@@ -142,11 +145,13 @@ if [ "$NO_DESKTOP" -eq 0 ]; then
 Type=Application
 Name=Anarc
 Comment=Anarc browser
-Exec=anarc
+Exec=anarc %U
 Icon=anarc
 Terminal=false
 Categories=Network;WebBrowser;
+StartupWMClass=anarc
 StartupNotify=true
+MimeType=text/html;text/xml;application/xhtml+xml;application/xml;application/rss+xml;application/rdf+xml;x-scheme-handler/http;x-scheme-handler/https;
 EOF
     command -v update-desktop-database >/dev/null 2>&1 && \
         update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true

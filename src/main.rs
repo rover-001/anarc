@@ -49,6 +49,7 @@ fn main() {
                         title: Some("Anarc".into()),
                         ..Default::default()
                     }),
+                    app_id: Some("anarc".into()),
                     ..Default::default()
                 },
                 cx,
