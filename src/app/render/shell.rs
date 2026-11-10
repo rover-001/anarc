@@ -44,9 +44,21 @@ impl Lumen {
             .iter()
             .find(|tab| Some(&tab.id) == active_tab_id.as_ref());
         let active_tab_url = active_tab.map(|tab| tab.url.clone()).unwrap_or_default();
-        let split_pair = self.current_split_pair();
+        let split_pair = crate::plugins::split_view_enabled()
+            .then(|| self.current_split_pair())
+            .flatten();
+        let layout_preset = visual::active_layout_preset();
+        let topbar_mode = layout_preset
+            .as_ref()
+            .and_then(|p| p.topbar.as_deref())
+            .unwrap_or("default");
+        let topbar_height = visual::active_topbar_height();
+        let sidebar_on_right = layout_preset
+            .as_ref()
+            .and_then(|p| p.sidebar_side.as_deref())
+            == Some("right");
 
-        let mut root = div()
+        let root = div()
             .relative()
             .flex()
             .size_full()
@@ -57,12 +69,16 @@ impl Lumen {
                     .map_or(&active_space, |modal| &modal.theme_draft),
             ))
             .text_color(rgb(theme.text))
-            .on_mouse_move(
-                cx.listener(|this, event: &gpui_kit::MouseMoveEvent, window, cx| {
+            .on_mouse_move(cx.listener(
+                move |this, event: &gpui_kit::MouseMoveEvent, window, cx| {
                     if this.split_resizing {
                         let bounds = window.bounds();
                         let sidebar = this.effective_sidebar_width();
-                        let card_left = sidebar + CONTENT_BEZEL_X;
+                        let card_left = if sidebar_on_right {
+                            CONTENT_BEZEL_X
+                        } else {
+                            sidebar + CONTENT_BEZEL_X
+                        };
                         let card_width =
                             f32::from(bounds.size.width) - sidebar - 2.0 * CONTENT_BEZEL_X;
                         this.split_ratio = split_view::ratio_at_pointer(
@@ -73,15 +89,21 @@ impl Lumen {
                         cx.notify();
                     }
                     if this.sidebar_resizing {
-                        let new_width = f32::from(event.position.x) - CONTENT_BEZEL_X;
+                        let new_width = if sidebar_on_right {
+                            f32::from(window.bounds().size.width)
+                                - f32::from(event.position.x)
+                                - CONTENT_BEZEL_X
+                        } else {
+                            f32::from(event.position.x) - CONTENT_BEZEL_X
+                        };
                         this.sidebar_width = new_width.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
                         cx.notify();
                     }
-                }),
-            )
+                },
+            ))
             .on_mouse_up(
                 gpui_kit::MouseButton::Left,
-                cx.listener(|this, _, _window, cx| {
+                cx.listener(move |this, _, _window, cx| {
                     #[cfg(all(target_os = "linux", not(test)))]
                     let finish_split_resize = this.split_resizing;
                     #[cfg(all(target_os = "linux", not(test)))]
@@ -92,7 +114,7 @@ impl Lumen {
                             (f32::from(bounds.size.width) - sidebar - 2.0 * CONTENT_BEZEL_X)
                                 .max(100.0);
                         let height =
-                            (f32::from(bounds.size.height) - TOPBAR_HEIGHT - CONTENT_BEZEL_BOTTOM)
+                            (f32::from(bounds.size.height) - topbar_height - CONTENT_BEZEL_BOTTOM)
                                 .max(100.0) as i32;
                         let exact_sizes = if let Some(pair) = this.current_split_pair() {
                             let (left, right) =
@@ -138,152 +160,152 @@ impl Lumen {
                         cx.notify();
                     }
                 }),
-            )
-            .child(sidebar_content)
-            .children(outgoing_space_overlay)
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .h_full()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .h(px(TOPBAR_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_4()
-                            .child(
-                                div()
-                                    .id("navigation-controls")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child({
-                                        let can_go_back =
-                                            self.engine.can_go_back(self.focused_tab_id());
-                                        div()
-                                            .id("back-btn")
-                                            .size(px(NAV_BUTTON_SIZE))
-                                            .rounded_lg()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_color(rgb(if can_go_back {
-                                                theme.text
-                                            } else {
-                                                theme.muted
-                                            }))
-                                            .opacity(if can_go_back { 1.0 } else { 0.4 })
-                                            .when(can_go_back, |btn| {
-                                                btn.cursor_pointer()
-                                                    .active(|s| s.opacity(0.92))
-                                                    .hover(move |s| {
-                                                        s.bg(rgb(theme.surface_hover))
-                                                            .text_color(rgb(theme.text))
-                                                    })
-                                            })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.address_editing = false;
-                                                this.show_suggestions = false;
-                                                this.selected_suggestion = None;
-                                                this.engine.go_back(this.focused_tab_id());
-                                                cx.notify();
-                                            }))
-                                            .child(
-                                                Icon::new(IconName::ArrowLeft)
-                                                    .size(px(16.0 * UI_SCALE)),
+            );
+
+        let main_column = div()
+            .relative()
+            .flex_1()
+            .h_full()
+            .flex()
+            .flex_col()
+            .when(topbar_mode != "hidden", |col| {
+                col.child(
+                    div()
+                        .h(px(topbar_height))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_4()
+                        .child(
+                            div()
+                                .id("navigation-controls")
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child({
+                                    let can_go_back =
+                                        self.engine.can_go_back(self.focused_tab_id());
+                                    div()
+                                        .id("back-btn")
+                                        .size(px(NAV_BUTTON_SIZE))
+                                        .rounded_lg()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(rgb(if can_go_back {
+                                            theme.text
+                                        } else {
+                                            theme.muted
+                                        }))
+                                        .opacity(if can_go_back { 1.0 } else { 0.4 })
+                                        .when(can_go_back, |btn| {
+                                            btn.cursor_pointer().active(|s| s.opacity(0.92)).hover(
+                                                move |s| {
+                                                    s.bg(rgb(theme.surface_hover))
+                                                        .text_color(rgb(theme.text))
+                                                },
                                             )
-                                    })
-                                    .child({
-                                        let can_go_forward =
-                                            self.engine.can_go_forward(self.focused_tab_id());
-                                        div()
-                                            .id("forward-btn")
-                                            .size(px(NAV_BUTTON_SIZE))
-                                            .rounded_lg()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_color(rgb(if can_go_forward {
-                                                theme.text
-                                            } else {
-                                                theme.muted
-                                            }))
-                                            .opacity(if can_go_forward { 1.0 } else { 0.4 })
-                                            .when(can_go_forward, |btn| {
-                                                btn.cursor_pointer()
-                                                    .active(|s| s.opacity(0.92))
-                                                    .hover(move |s| {
-                                                        s.bg(rgb(theme.surface_hover))
-                                                            .text_color(rgb(theme.text))
-                                                    })
-                                            })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.address_editing = false;
-                                                this.show_suggestions = false;
-                                                this.selected_suggestion = None;
-                                                this.engine.go_forward(this.focused_tab_id());
-                                                cx.notify();
-                                            }))
-                                            .child(
-                                                Icon::new(IconName::ArrowRight)
-                                                    .size(px(16.0 * UI_SCALE)),
+                                        })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.address_editing = false;
+                                            this.show_suggestions = false;
+                                            this.selected_suggestion = None;
+                                            this.engine.go_back(this.focused_tab_id());
+                                            cx.notify();
+                                        }))
+                                        .child(
+                                            Icon::new(IconName::ArrowLeft)
+                                                .size(px(16.0 * UI_SCALE)),
+                                        )
+                                })
+                                .child({
+                                    let can_go_forward =
+                                        self.engine.can_go_forward(self.focused_tab_id());
+                                    div()
+                                        .id("forward-btn")
+                                        .size(px(NAV_BUTTON_SIZE))
+                                        .rounded_lg()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(rgb(if can_go_forward {
+                                            theme.text
+                                        } else {
+                                            theme.muted
+                                        }))
+                                        .opacity(if can_go_forward { 1.0 } else { 0.4 })
+                                        .when(can_go_forward, |btn| {
+                                            btn.cursor_pointer().active(|s| s.opacity(0.92)).hover(
+                                                move |s| {
+                                                    s.bg(rgb(theme.surface_hover))
+                                                        .text_color(rgb(theme.text))
+                                                },
                                             )
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .id("address-bar-container")
-                                    .flex_1()
-                                    .h(px(ADDRESS_BAR_HEIGHT))
-                                    .px_3()
-                                    .rounded_lg()
-                                    .bg(rgb(theme.surface))
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .cursor_text()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.browser_focused = false;
-                                        let tab_id = this.active_tab_id().to_string();
-                                        this.engine.set_focus(&tab_id, false);
-                                        this.address.update(cx, |input, cx| {
-                                            input.focus(window, cx);
-                                        });
-                                        let text = this.address.read(cx).value().to_string();
-                                        this.update_suggestions(&text);
-                                        cx.notify();
-                                    }))
-                                    .child(
-                                        div()
-                                            .text_color(rgb(0x777b85))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(Icon::new(IconName::Search)),
-                                    )
-                                    .child(
-                                        Input::new(&self.address)
-                                            .id("address-bar")
-                                            .w_full()
-                                            .appearance(false),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .id("plugins-btn")
-                                    .cursor_pointer()
-                                    .active(|style| style.opacity(0.92))
-                                    .child(space_switcher::plugins_button(theme))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.plugins_menu_open = !this.plugins_menu_open;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
+                                        })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.address_editing = false;
+                                            this.show_suggestions = false;
+                                            this.selected_suggestion = None;
+                                            this.engine.go_forward(this.focused_tab_id());
+                                            cx.notify();
+                                        }))
+                                        .child(
+                                            Icon::new(IconName::ArrowRight)
+                                                .size(px(16.0 * UI_SCALE)),
+                                        )
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id("address-bar-container")
+                                .flex_1()
+                                .h(px(ADDRESS_BAR_HEIGHT))
+                                .px_3()
+                                .rounded_lg()
+                                .bg(rgb(theme.surface))
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .cursor_text()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.browser_focused = false;
+                                    let tab_id = this.active_tab_id().to_string();
+                                    this.engine.set_focus(&tab_id, false);
+                                    this.address.update(cx, |input, cx| {
+                                        input.focus(window, cx);
+                                    });
+                                    let text = this.address.read(cx).value().to_string();
+                                    this.update_suggestions(&text);
+                                    cx.notify();
+                                }))
+                                .child(
+                                    div()
+                                        .text_color(rgb(0x777b85))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(Icon::new(IconName::Search)),
+                                )
+                                .child(
+                                    Input::new(&self.address)
+                                        .id("address-bar")
+                                        .w_full()
+                                        .appearance(false),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("plugins-btn")
+                                .cursor_pointer()
+                                .active(|style| style.opacity(0.92))
+                                .child(space_switcher::plugins_button(theme))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.plugins_menu_open = !this.plugins_menu_open;
+                                    cx.notify();
+                                })),
+                        )
+                        .when(crate::plugins::downloads_enabled(), |row| {
+                            row.child(
                                 div()
                                     .id("downloads-btn")
                                     .cursor_pointer()
@@ -293,188 +315,201 @@ impl Lumen {
                                         this.app_page = Some(AppPage::Downloads);
                                         cx.notify();
                                     })),
-                            ),
-                    )
-                    .child({
-                        let viewport_sidebar = sidebar_width_f32;
-                        let total_width = f32::from(window.bounds().size.width)
-                            - viewport_sidebar
-                            - 2.0 * CONTENT_BEZEL_X;
-                        let (left_width, right_width) =
-                            split_view::pane_widths(total_width, self.split_ratio);
-                        let left_tab_id = split_pair
-                            .as_ref()
-                            .map(|pair| pair.first.clone())
-                            .unwrap_or_else(|| active_tab_id_string.clone());
-                        let left_image = self.engine.get_image(&left_tab_id);
-                        let left_cursor = self.engine.get_cursor(&left_tab_id);
-                        #[cfg(all(target_os = "linux", not(test)))]
-                        let left_frame_matches_target = self
-                            .resize_drag
-                            .target_size(&left_tab_id)
-                            .is_some_and(|(w, h)| {
-                                self.engine.frame_matches_size(&left_tab_id, w, h)
-                            });
-                        #[cfg(all(target_os = "linux", not(test)))]
-                        let left_edge_color = self
-                            .resize_drag
-                            .edge_color_until_frame(&left_tab_id, left_frame_matches_target);
-                        #[cfg(any(not(target_os = "linux"), test))]
-                        let left_edge_color = None;
-                        self.web_viewport.update(cx, |viewport, cx| {
-                            viewport.set_theme(theme);
-                            viewport.set_frame(
-                                left_tab_id.clone(),
-                                viewport_sidebar,
-                                left_image,
-                                left_cursor,
-                                Vec::new(),
-                                0.0,
-                                0,
-                                split_pair.is_some(),
-                                left_edge_color,
-                            );
-                            cx.notify();
-                        });
-                        let right_tab_id = split_pair.as_ref().map(|pair| pair.second.clone());
-                        if let Some(right_tab_id) = right_tab_id {
-                            let right_image = self.engine.get_image(&right_tab_id);
-                            let right_cursor = self.engine.get_cursor(&right_tab_id);
-                            #[cfg(all(target_os = "linux", not(test)))]
-                            let right_frame_matches_target =
-                                self.resize_drag.target_size(&right_tab_id).is_some_and(
-                                    |(w, h)| self.engine.frame_matches_size(&right_tab_id, w, h),
-                                );
-                            #[cfg(all(target_os = "linux", not(test)))]
-                            let right_edge_color = self
-                                .resize_drag
-                                .edge_color_until_frame(&right_tab_id, right_frame_matches_target);
-                            #[cfg(any(not(target_os = "linux"), test))]
-                            let right_edge_color = None;
-                            self.second_web_viewport.update(cx, |viewport, cx| {
-                                viewport.set_theme(theme);
-                                viewport.set_frame(
-                                    right_tab_id.clone(),
-                                    viewport_sidebar,
-                                    right_image,
-                                    right_cursor,
-                                    Vec::new(),
-                                    left_width + DIVIDER_WIDTH,
-                                    1,
-                                    true,
-                                    right_edge_color,
-                                );
-                                cx.notify();
-                            });
-                        }
+                            )
+                        }),
+                )
+            })
+            .child({
+                let viewport_sidebar = if sidebar_on_right {
+                    0.0
+                } else {
+                    sidebar_width_f32
+                };
+                let total_width = f32::from(window.bounds().size.width)
+                    - viewport_sidebar
+                    - 2.0 * CONTENT_BEZEL_X;
+                let (left_width, right_width) =
+                    split_view::pane_widths(total_width, self.split_ratio);
+                let left_tab_id = split_pair
+                    .as_ref()
+                    .map(|pair| pair.first.clone())
+                    .unwrap_or_else(|| active_tab_id_string.clone());
+                let left_image = self.engine.get_image(&left_tab_id);
+                let left_cursor = self.engine.get_cursor(&left_tab_id);
+                #[cfg(all(target_os = "linux", not(test)))]
+                let left_frame_matches_target = self
+                    .resize_drag
+                    .target_size(&left_tab_id)
+                    .is_some_and(|(w, h)| self.engine.frame_matches_size(&left_tab_id, w, h));
+                #[cfg(all(target_os = "linux", not(test)))]
+                let left_edge_color = self
+                    .resize_drag
+                    .edge_color_until_frame(&left_tab_id, left_frame_matches_target);
+                #[cfg(any(not(target_os = "linux"), test))]
+                let left_edge_color = None;
+                self.web_viewport.update(cx, |viewport, cx| {
+                    viewport.set_theme(theme);
+                    viewport.set_frame(
+                        left_tab_id.clone(),
+                        viewport_sidebar,
+                        left_image,
+                        left_cursor,
+                        Vec::new(),
+                        0.0,
+                        0,
+                        split_pair.is_some(),
+                        left_edge_color,
+                    );
+                    cx.notify();
+                });
+                let right_tab_id = split_pair.as_ref().map(|pair| pair.second.clone());
+                if let Some(right_tab_id) = right_tab_id {
+                    let right_image = self.engine.get_image(&right_tab_id);
+                    let right_cursor = self.engine.get_cursor(&right_tab_id);
+                    #[cfg(all(target_os = "linux", not(test)))]
+                    let right_frame_matches_target = self
+                        .resize_drag
+                        .target_size(&right_tab_id)
+                        .is_some_and(|(w, h)| self.engine.frame_matches_size(&right_tab_id, w, h));
+                    #[cfg(all(target_os = "linux", not(test)))]
+                    let right_edge_color = self
+                        .resize_drag
+                        .edge_color_until_frame(&right_tab_id, right_frame_matches_target);
+                    #[cfg(any(not(target_os = "linux"), test))]
+                    let right_edge_color = None;
+                    self.second_web_viewport.update(cx, |viewport, cx| {
+                        viewport.set_theme(theme);
+                        viewport.set_frame(
+                            right_tab_id.clone(),
+                            viewport_sidebar,
+                            right_image,
+                            right_cursor,
+                            Vec::new(),
+                            left_width + DIVIDER_WIDTH,
+                            1,
+                            true,
+                            right_edge_color,
+                        );
+                        cx.notify();
+                    });
+                }
+                div()
+                    .id("web-content-card")
+                    .flex_1()
+                    .mx(px(CONTENT_BEZEL_X))
+                    .mb(px(CONTENT_BEZEL_BOTTOM))
+                    .rounded(px(visual::active_card_radius()))
+                    .bg(rgb(theme.surface))
+                    .overflow_hidden()
+                    .child(if let Some(split_pair) = split_pair.as_ref() {
                         div()
-                            .id("web-content-card")
-                            .flex_1()
-                            .mx(px(CONTENT_BEZEL_X))
-                            .mb(px(CONTENT_BEZEL_BOTTOM))
-                            .rounded(px(CARD_RADIUS))
-                            .bg(rgb(theme.surface))
-                            .overflow_hidden()
-                            .child(if let Some(split_pair) = split_pair.as_ref() {
+                            .id("split-viewports")
+                            .size_full()
+                            .flex()
+                            .child(
                                 div()
-                                    .id("split-viewports")
-                                    .size_full()
-                                    .flex()
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .w(px(left_width))
-                                            .with_animation(
-                                                format!("split-left-enter-{}", split_pair.first),
-                                                Animation::new(ui::motion::duration(
-                                                    ui::motion::MOTION_SLOW,
-                                                ))
-                                                .with_easing(ui::motion::ease_out_quint),
-                                                |pane, progress| {
-                                                    pane.opacity(ui::motion::clamp_percentage(
-                                                        progress,
-                                                    ))
-                                                },
-                                            )
-                                            .child(
-                                                AnyView::from(self.web_viewport.clone())
-                                                    .cached(StyleRefinement::default().size_full()),
-                                            ),
+                                    .h_full()
+                                    .w(px(left_width))
+                                    .with_animation(
+                                        format!("split-left-enter-{}", split_pair.first),
+                                        Animation::new(ui::motion::duration(
+                                            ui::motion::MOTION_SLOW,
+                                        ))
+                                        .with_easing(ui::motion::ease_out_quint),
+                                        |pane, progress| {
+                                            pane.opacity(ui::motion::clamp_percentage(progress))
+                                        },
                                     )
                                     .child(
-                                        div()
-                                            .id("split-divider")
-                                            .w(px(DIVIDER_HIT_WIDTH))
-                                            .mx(px((DIVIDER_WIDTH - DIVIDER_HIT_WIDTH) / 2.0))
-                                            .h_full()
-                                            .cursor_col_resize()
-                                            .on_mouse_down(
-                                                gpui_kit::MouseButton::Left,
-                                                cx.listener(|this, _, _window, cx| {
-                                                    this.split_resizing = true;
-                                                    #[cfg(all(target_os = "linux", not(test)))]
-                                                    this.begin_browser_resize_drag(_window, true);
-                                                    cx.notify();
-                                                }),
-                                            )
-                                            .with_animation(
-                                                "split-divider-enter",
-                                                Animation::new(ui::motion::duration(
-                                                    ui::motion::MOTION_SLOW,
-                                                ))
-                                                .with_easing(ui::motion::ease_out_quint),
-                                                |divider, progress| {
-                                                    divider.opacity(ui::motion::clamp_percentage(
-                                                        0.35 + 0.65 * progress,
-                                                    ))
-                                                },
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .w(px(right_width))
-                                            .with_animation(
-                                                format!("split-right-enter-{}", split_pair.second),
-                                                Animation::new(ui::motion::duration(
-                                                    ui::motion::MOTION_SLOW,
-                                                ))
-                                                .with_easing(ui::motion::ease_out_quint),
-                                                |pane, progress| {
-                                                    pane.opacity(ui::motion::clamp_percentage(
-                                                        progress,
-                                                    ))
-                                                },
-                                            )
-                                            .child(
-                                                AnyView::from(self.second_web_viewport.clone())
-                                                    .cached(StyleRefinement::default().size_full()),
-                                            ),
-                                    )
-                            } else if active_tab_url == "lumen://welcome"
-                                || active_tab_url == "about:blank"
-                                || active_tab_url.is_empty()
-                            {
-                                div().id("empty-space").size_full().on_mouse_down(
-                                    gpui_kit::MouseButton::Left,
-                                    cx.listener(|this, _, _, cx| {
-                                        if this.show_suggestions {
-                                            this.show_suggestions = false;
-                                            this.selected_suggestion = None;
+                                        AnyView::from(self.web_viewport.clone())
+                                            .cached(StyleRefinement::default().size_full()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("split-divider")
+                                    .w(px(DIVIDER_HIT_WIDTH))
+                                    .mx(px((DIVIDER_WIDTH - DIVIDER_HIT_WIDTH) / 2.0))
+                                    .h_full()
+                                    .cursor_col_resize()
+                                    .on_mouse_down(
+                                        gpui_kit::MouseButton::Left,
+                                        cx.listener(|this, _, _window, cx| {
+                                            this.split_resizing = true;
+                                            #[cfg(all(target_os = "linux", not(test)))]
+                                            this.begin_browser_resize_drag(_window, true);
                                             cx.notify();
-                                        }
-                                    }),
-                                )
-                            } else {
-                                div().id("web-viewport-entity").size_full().child(
-                                    AnyView::from(self.web_viewport.clone())
-                                        .cached(StyleRefinement::default().size_full()),
-                                )
-                            })
-                    }),
-            );
+                                        }),
+                                    )
+                                    .with_animation(
+                                        "split-divider-enter",
+                                        Animation::new(ui::motion::duration(
+                                            ui::motion::MOTION_SLOW,
+                                        ))
+                                        .with_easing(ui::motion::ease_out_quint),
+                                        |divider, progress| {
+                                            divider.opacity(ui::motion::clamp_percentage(
+                                                0.35 + 0.65 * progress,
+                                            ))
+                                        },
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(px(right_width))
+                                    .with_animation(
+                                        format!("split-right-enter-{}", split_pair.second),
+                                        Animation::new(ui::motion::duration(
+                                            ui::motion::MOTION_SLOW,
+                                        ))
+                                        .with_easing(ui::motion::ease_out_quint),
+                                        |pane, progress| {
+                                            pane.opacity(ui::motion::clamp_percentage(progress))
+                                        },
+                                    )
+                                    .child(
+                                        AnyView::from(self.second_web_viewport.clone())
+                                            .cached(StyleRefinement::default().size_full()),
+                                    ),
+                            )
+                    } else if active_tab_url == "lumen://welcome"
+                        || active_tab_url == "anarc://welcome"
+                        || active_tab_url == "about:blank"
+                        || active_tab_url.is_empty()
+                    {
+                        div().id("empty-space").size_full().on_mouse_down(
+                            gpui_kit::MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                if this.show_suggestions {
+                                    this.show_suggestions = false;
+                                    this.selected_suggestion = None;
+                                    cx.notify();
+                                }
+                            }),
+                        )
+                    } else {
+                        div().id("web-viewport-entity").size_full().child(
+                            AnyView::from(self.web_viewport.clone())
+                                .cached(StyleRefinement::default().size_full()),
+                        )
+                    })
+            });
 
-        if let Some(page) = self.app_page {
+        let mut root = if sidebar_on_right {
+            root.child(main_column)
+                .children(outgoing_space_overlay)
+                .child(sidebar_content)
+        } else {
+            root.child(sidebar_content)
+                .children(outgoing_space_overlay)
+                .child(main_column)
+        };
+
+        if let Some(page) = self
+            .app_page
+            .filter(|page| *page != AppPage::Downloads || crate::plugins::downloads_enabled())
+        {
             let active_url = self
                 .active_space()
                 .tabs
@@ -498,26 +533,41 @@ impl Lumen {
                 self.settings_section,
                 self.preferences.search_engine,
                 self.active_space().color,
+                self.plugin_rows(),
+                self.pending_plugin_review(),
+                self.plugin_action_error().map(str::to_owned),
                 cx,
             );
             root = root.child(
                 div()
                     .id("app-page-overlay")
                     .absolute()
-                    .top(px(TOPBAR_HEIGHT))
+                    .top(px(topbar_height))
                     .bottom(px(CONTENT_BEZEL_BOTTOM))
-                    .left(px(sidebar_width_f32 + CONTENT_BEZEL_X))
-                    .right(px(CONTENT_BEZEL_X))
-                    .rounded(px(CARD_RADIUS))
+                    .left(px(if sidebar_on_right {
+                        CONTENT_BEZEL_X
+                    } else {
+                        sidebar_width_f32 + CONTENT_BEZEL_X
+                    }))
+                    .right(px(if sidebar_on_right {
+                        sidebar_width_f32 + CONTENT_BEZEL_X
+                    } else {
+                        CONTENT_BEZEL_X
+                    }))
+                    .rounded(px(visual::active_card_radius()))
                     .bg(rgb(theme.surface))
                     .overflow_hidden()
                     .child(content),
             );
         }
 
-        if !self.sidebar_collapsed {
+        if !self.is_sidebar_collapsed() {
             let handle_w = 10.0 * UI_SCALE;
-            let cut_x = sidebar_width_f32 + CONTENT_BEZEL_X;
+            let cut_x = if sidebar_on_right {
+                f32::from(window.bounds().size.width) - sidebar_width_f32 - CONTENT_BEZEL_X
+            } else {
+                sidebar_width_f32 + CONTENT_BEZEL_X
+            };
             root = root.child(
                 div()
                     .id("sidebar-resize-handle")
@@ -586,9 +636,12 @@ impl Lumen {
                 .id("autocomplete-suggestions")
                 .occlude()
                 .absolute()
-                .top(px(TOPBAR_HEIGHT + 4.0 * UI_SCALE))
-                .left(px(sidebar_width_f32
-                    + 16.0 * UI_SCALE
+                .top(px(topbar_height + 4.0 * UI_SCALE))
+                .left(px((if sidebar_on_right {
+                    0.0
+                } else {
+                    sidebar_width_f32
+                }) + 16.0 * UI_SCALE
                     + NAV_BUTTON_SIZE * 2.0
                     + 12.0 * UI_SCALE))
                 .w(px(560.0 * UI_SCALE))
@@ -834,14 +887,24 @@ impl Lumen {
                     cx.notify();
                     return;
                 }
-                if !event.is_held && browser_modifier && modifiers.shift && key == "s" {
+                if !event.is_held
+                    && browser_modifier
+                    && modifiers.shift
+                    && key == "s"
+                    && crate::plugins::split_view_enabled()
+                {
                     this.split_active_with_next();
                     window.prevent_default();
                     cx.stop_propagation();
                     cx.notify();
                     return;
                 }
-                if !event.is_held && browser_modifier && modifiers.shift && key == "w" {
+                if !event.is_held
+                    && browser_modifier
+                    && modifiers.shift
+                    && key == "w"
+                    && crate::plugins::split_view_enabled()
+                {
                     this.exit_split();
                     window.prevent_default();
                     cx.stop_propagation();
@@ -851,6 +914,7 @@ impl Lumen {
                 if !event.is_held
                     && modifiers.alt
                     && browser_modifier
+                    && crate::plugins::split_view_enabled()
                     && this.current_split_pair().is_some()
                     && matches!(key.as_str(), "left" | "arrowleft" | "right" | "arrowright")
                 {
@@ -948,8 +1012,10 @@ impl Lumen {
                     return;
                 }
                 if browser_modifier && modifiers.alt && key == "r" && !modifiers.shift {
-                    this.engine
-                        .execute_script(this.active_tab_id(), &reader::toggle_script());
+                    if reader::is_plugin_enabled() {
+                        this.engine
+                            .execute_script(this.active_tab_id(), &reader::toggle_script());
+                    }
                     window.prevent_default();
                     cx.stop_propagation();
                     return;

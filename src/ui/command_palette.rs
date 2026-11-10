@@ -1,11 +1,12 @@
 use crate::history::HistoryEntry;
-use crate::plugin::PaletteCommand;
+use crate::plugin::{PaletteCommand, PluginRow};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaletteTarget {
     Tab { space_id: String, tab_id: String },
     History(String),
     Action(PaletteAction),
+    PluginToggle { id: String, enabled: bool },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,6 +20,10 @@ pub enum PaletteAction {
     ZoomOut,
     ZoomReset,
     NewSpace,
+    EnablePlugin,
+    DisablePlugin,
+    ReloadPlugins,
+    OpenPluginFolder,
 }
 
 impl PaletteAction {
@@ -33,6 +38,10 @@ impl PaletteAction {
             "zoom-out" => Self::ZoomOut,
             "zoom-reset" => Self::ZoomReset,
             "new-space" => Self::NewSpace,
+            "enable-plugin" => Self::EnablePlugin,
+            "disable-plugin" => Self::DisablePlugin,
+            "reload-plugins" => Self::ReloadPlugins,
+            "open-plugin-folder" => Self::OpenPluginFolder,
             _ => return None,
         })
     }
@@ -60,6 +69,7 @@ pub fn rank_items(
     tabs: &[PaletteTab<'_>],
     history: &[HistoryEntry],
     actions: &[PaletteCommand],
+    plugins: &[PluginRow],
 ) -> Vec<PaletteItem> {
     let mut items = Vec::new();
     for tab in tabs {
@@ -106,6 +116,32 @@ pub fn rank_items(
                 detail: command.detail.to_string(),
                 target: PaletteTarget::Action(action),
                 score: score + 30,
+            });
+        }
+    }
+    for plugin in plugins
+        .iter()
+        .filter(|plugin| plugin.descriptor.can_toggle && !query.trim().is_empty())
+    {
+        let (enabled, verb) = if plugin.enabled {
+            (false, "Disable")
+        } else {
+            (true, "Enable")
+        };
+        let title = format!("{verb} {}", plugin.descriptor.name);
+        let search_text = format!(
+            "{verb} plugin {} {} {}",
+            plugin.descriptor.name, plugin.descriptor.id, plugin.descriptor.description
+        );
+        if let Some(score) = fuzzy_score(query, &search_text) {
+            items.push(PaletteItem {
+                title,
+                detail: format!("Plugin · {}", plugin.descriptor.id),
+                target: PaletteTarget::PluginToggle {
+                    id: plugin.descriptor.id.clone(),
+                    enabled,
+                },
+                score: score + 28,
             });
         }
     }
@@ -173,10 +209,10 @@ mod tests {
                 url: "https://gitlab.com",
             },
         ];
-        let items = rank_items("github", &tabs, &[], crate::plugin::PALETTE_COMMANDS);
+        let items = rank_items("github", &tabs, &[], crate::plugin::PALETTE_COMMANDS, &[]);
         assert_eq!(items[0].title, "GitHub");
         assert!(!items.iter().any(|item| item.title == "GitLab"));
-        let actions = rank_items("new", &[], &[], crate::plugin::PALETTE_COMMANDS);
+        let actions = rank_items("new", &[], &[], crate::plugin::PALETTE_COMMANDS, &[]);
         assert!(actions.iter().any(|item| item.title == "New tab"));
     }
 
@@ -184,5 +220,50 @@ mod tests {
     fn fuzzy_matching_accepts_subsequences() {
         assert!(fuzzy_score("rld", "Reload").is_some());
         assert!(fuzzy_score("zz", "Reload").is_none());
+    }
+
+    #[test]
+    fn plugin_enable_and_disable_queries_target_the_matching_plugin() {
+        let row = PluginRow {
+            descriptor: crate::plugin::PluginDescriptor {
+                id: "example.notes".into(),
+                name: "Notes Panel".into(),
+                version: "1.0.0".into(),
+                kind: crate::plugin::PluginKind::Panel,
+                description: "A private notes panel".into(),
+                permissions: Vec::new(),
+                enabled_by_default: false,
+                can_toggle: true,
+            },
+            enabled: false,
+            runtime: crate::plugin::RuntimeStatus::Pending,
+        };
+        let enabled = rank_items(
+            "enable plugin notes",
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&row),
+        );
+        assert!(enabled.iter().any(|item| {
+            item.title == "Enable Notes Panel"
+                && item.target
+                    == (PaletteTarget::PluginToggle {
+                        id: "example.notes".into(),
+                        enabled: true,
+                    })
+        }));
+
+        let mut row = row;
+        row.enabled = true;
+        let disabled = rank_items("disable plugin notes", &[], &[], &[], &[row]);
+        assert!(disabled.iter().any(|item| {
+            item.title == "Disable Notes Panel"
+                && item.target
+                    == (PaletteTarget::PluginToggle {
+                        id: "example.notes".into(),
+                        enabled: false,
+                    })
+        }));
     }
 }

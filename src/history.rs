@@ -2,11 +2,21 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, Transaction, params};
 
 const MAX_RECENT_SEARCHES: usize = 10;
+static PLUGIN_ENABLED: AtomicBool = AtomicBool::new(true);
+
+pub(crate) fn set_plugin_enabled(enabled: bool) {
+    PLUGIN_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub(crate) fn plugin_enabled() -> bool {
+    PLUGIN_ENABLED.load(Ordering::Relaxed)
+}
 
 fn history_path() -> PathBuf {
     crate::paths::data_dir().join("recent-searches.json")
@@ -67,6 +77,9 @@ pub struct HistoryEntry {
 
 /// Record each committed main-frame URL once, increasing its visit count.
 pub fn record_visit(url: &str, title: &str) {
+    if !plugin_enabled() {
+        return;
+    }
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return;
     }
@@ -82,6 +95,9 @@ pub fn import_visits<I>(visits: I) -> rusqlite::Result<usize>
 where
     I: IntoIterator<Item = (String, String, i64)>,
 {
+    if !plugin_enabled() {
+        return Ok(0);
+    }
     let mut connection = open_database()?;
     let transaction = connection.transaction()?;
     let imported = import_visits_in(&transaction, visits)?;
@@ -133,6 +149,9 @@ fn record_visit_in(connection: &Connection, url: &str, title: &str) -> rusqlite:
 
 /// Refresh the title for a URL already recorded in history.
 pub fn update_title(url: &str, title: &str) {
+    if !plugin_enabled() {
+        return;
+    }
     if url.is_empty() || title.is_empty() {
         return;
     }
@@ -152,7 +171,7 @@ fn update_title_in(connection: &Connection, url: &str, title: &str) -> rusqlite:
 
 /// Return URL/title matches ordered by a frecency score (frequency and recency).
 pub fn search(query: &str, limit: usize) -> Vec<HistoryEntry> {
-    if query.trim().is_empty() || limit == 0 {
+    if !plugin_enabled() || query.trim().is_empty() || limit == 0 {
         return Vec::new();
     }
     let Ok(connection) = open_database() else {
@@ -188,6 +207,9 @@ fn search_in(connection: &Connection, query: &str, limit: usize) -> Vec<HistoryE
 }
 
 pub fn load_recent_searches() -> Vec<String> {
+    if !plugin_enabled() {
+        return Vec::new();
+    }
     fs::read_to_string(history_path())
         .ok()
         .and_then(|data| serde_json::from_str::<Vec<String>>(&data).ok())
@@ -200,6 +222,9 @@ pub fn load_recent_searches() -> Vec<String> {
 
 #[cfg(not(test))]
 pub fn save_recent_searches(searches: &[String]) {
+    if !plugin_enabled() {
+        return;
+    }
     let path = history_path();
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -214,6 +239,9 @@ pub fn save_recent_searches(searches: &[String]) {
 }
 
 pub fn clear_browsing_history() {
+    if !plugin_enabled() {
+        return;
+    }
     if let Ok(connection) = open_database() {
         let _ = connection.execute_batch("DELETE FROM history; DELETE FROM imported_visits;");
     }

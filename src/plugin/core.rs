@@ -46,6 +46,26 @@ pub(crate) const PALETTE_COMMANDS: &[PaletteCommand] = &[
         title: "New space",
         detail: "Action",
     },
+    PaletteCommand {
+        id: "enable-plugin",
+        title: "Enable plugin…",
+        detail: "Open plugin settings and enable a plugin",
+    },
+    PaletteCommand {
+        id: "disable-plugin",
+        title: "Disable plugin…",
+        detail: "Open plugin settings and disable a plugin",
+    },
+    PaletteCommand {
+        id: "reload-plugins",
+        title: "Reload plugins",
+        detail: "Rescan installed plugins",
+    },
+    PaletteCommand {
+        id: "open-plugin-folder",
+        title: "Open plugin folder",
+        detail: "Show installed plugin files",
+    },
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,7 +187,17 @@ impl CorePlugin {
                 id: "lumen.core".into(),
                 required: Vec::new(),
                 optional: Vec::new(),
-                provides: vec!["commands".into(), "keymap".into(), "settings".into()],
+                provides: vec![
+                    "commands".into(),
+                    "keymap".into(),
+                    "settings".into(),
+                    "history".into(),
+                    "navigation".into(),
+                    "tabs".into(),
+                    "spaces".into(),
+                    "engine".into(),
+                    "theme".into(),
+                ],
             },
         }
     }
@@ -179,6 +209,15 @@ impl Plugin for CorePlugin {
     }
 
     fn apply(&mut self, ctx: &mut PluginCtx<'_>) -> Result<(), PluginError> {
+        ctx.provide(super::HISTORY, super::HistoryService);
+        ctx.provide(super::SETTINGS, super::SettingsService);
+        ctx.provide(super::NAVIGATION, super::NavigationService);
+        ctx.provide(super::TABS, super::TabsService);
+        ctx.provide(super::SPACES, super::SpacesService);
+        ctx.provide(super::ENGINE, super::EngineService);
+        ctx.provide(super::COMMANDS, super::CommandsService);
+        ctx.provide(super::KEYMAP, super::KeymapService);
+        ctx.provide(super::THEME, super::ThemeService);
         for command in PALETTE_COMMANDS {
             ctx.contribute("palette.action", command.id, Order::default());
         }

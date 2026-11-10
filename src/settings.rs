@@ -1,9 +1,11 @@
 fn zoom_file() -> std::path::PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    home.join(".local/share/lumen/zoom.json")
+    crate::paths::data_dir().join("zoom.json")
 }
+
+use std::{
+    collections::BTreeMap,
+    sync::{OnceLock, RwLock},
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -15,6 +17,14 @@ pub(crate) enum SearchEngine {
 }
 
 impl SearchEngine {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Google => "google",
+            Self::Bing => "bing",
+            Self::DuckDuckGo => "duck_duck_go",
+        }
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Google => "Google",
@@ -24,13 +34,174 @@ impl SearchEngine {
     }
 
     pub(crate) fn search_url(self, encoded_query: &str) -> String {
-        let base = match self {
-            Self::Google => "https://www.google.com/search?q=",
-            Self::Bing => "https://www.bing.com/search?q=",
-            Self::DuckDuckGo => "https://duckduckgo.com/?q=",
-        };
-        format!("{base}{encoded_query}")
+        search_engine_registry()
+            .read()
+            .expect("search engine registry lock poisoned")
+            .url(self.id(), encoded_query)
+            .unwrap_or_else(|| builtin_search_url(self.id(), encoded_query))
     }
+}
+
+fn builtin_search_url(id: &str, encoded_query: &str) -> String {
+    let template = match id {
+        "google" => "https://www.google.com/search?q=%s",
+        "bing" => "https://www.bing.com/search?q=%s",
+        "duck_duck_go" => "https://duckduckgo.com/?q=%s",
+        _ => "https://www.google.com/search?q=%s",
+    };
+    template.replace("%s", encoded_query)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SearchEngineDefinition {
+    pub(crate) id: String,
+    pub(crate) label: String,
+    pub(crate) url_template: String,
+    pub(crate) keyword: Option<String>,
+}
+
+/// Search-engine definitions are registry entries; the persisted enum remains
+/// as the stable id for existing browser-preferences.json files.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SearchEngineRegistry {
+    entries: BTreeMap<String, SearchEngineDefinition>,
+    plugin_owners: BTreeMap<String, String>,
+}
+
+impl SearchEngineRegistry {
+    #[cfg(test)]
+    pub(crate) fn builtins() -> Self {
+        let mut registry = Self::default();
+        for definition in [
+            SearchEngineDefinition {
+                id: "google".into(),
+                label: "Google".into(),
+                url_template: "https://www.google.com/search?q=%s".into(),
+                keyword: None,
+            },
+            SearchEngineDefinition {
+                id: "bing".into(),
+                label: "Bing".into(),
+                url_template: "https://www.bing.com/search?q=%s".into(),
+                keyword: None,
+            },
+            SearchEngineDefinition {
+                id: "duck_duck_go".into(),
+                label: "DuckDuckGo".into(),
+                url_template: "https://duckduckgo.com/?q=%s".into(),
+                keyword: None,
+            },
+        ] {
+            registry.register(definition);
+        }
+        registry
+    }
+
+    #[cfg(test)]
+    pub(crate) fn register(&mut self, definition: SearchEngineDefinition) {
+        self.entries.insert(definition.id.clone(), definition);
+    }
+
+    pub(crate) fn register_owned(
+        &mut self,
+        owner: &str,
+        definition: SearchEngineDefinition,
+    ) -> Result<(), String> {
+        if self.entries.contains_key(&definition.id) {
+            return Err(format!(
+                "search engine id is already registered: {}",
+                definition.id
+            ));
+        }
+        if definition.keyword.as_deref().is_some_and(|keyword| {
+            let keyword = normalize_engine_keyword(keyword);
+            self.entries.values().any(|entry| {
+                entry.keyword.as_deref().is_some_and(|existing| {
+                    normalize_engine_keyword(existing).eq_ignore_ascii_case(keyword)
+                })
+            })
+        }) {
+            return Err("search engine keyword is already registered".into());
+        }
+        self.plugin_owners
+            .insert(definition.id.clone(), owner.to_owned());
+        self.entries.insert(definition.id.clone(), definition);
+        Ok(())
+    }
+
+    pub(crate) fn unregister_owner(&mut self, owner: &str) -> usize {
+        let ids = self
+            .plugin_owners
+            .iter()
+            .filter(|(_, registered)| registered.as_str() == owner)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in &ids {
+            self.plugin_owners.remove(id);
+            self.entries.remove(id);
+        }
+        ids.len()
+    }
+
+    pub(crate) fn get(&self, id: &str) -> Option<&SearchEngineDefinition> {
+        self.entries.get(id)
+    }
+
+    pub(crate) fn url(&self, id: &str, encoded_query: &str) -> Option<String> {
+        let definition = self.get(id)?;
+        Some(definition.url_template.replace("%s", encoded_query))
+    }
+
+    pub(crate) fn url_for_keyword(&self, keyword: &str, encoded_query: &str) -> Option<String> {
+        let keyword = normalize_engine_keyword(keyword);
+        let definition = self.entries.values().find(|entry| {
+            entry.keyword.as_deref().is_some_and(|registered| {
+                normalize_engine_keyword(registered).eq_ignore_ascii_case(keyword)
+            })
+        })?;
+        Some(definition.url_template.replace("%s", encoded_query))
+    }
+}
+
+fn normalize_engine_keyword(keyword: &str) -> &str {
+    keyword.strip_prefix('!').unwrap_or(keyword)
+}
+
+fn search_engine_registry() -> &'static RwLock<SearchEngineRegistry> {
+    static REGISTRY: OnceLock<RwLock<SearchEngineRegistry>> = OnceLock::new();
+    // Built-in definitions are owned by `lumen.search-engines` so they can be
+    // removed on disable. `SearchEngine::search_url` retains static fallbacks
+    // for old preference values when that plugin is disabled.
+    REGISTRY.get_or_init(|| RwLock::new(SearchEngineRegistry::default()))
+}
+
+#[cfg(test)]
+pub(crate) fn custom_search_url(id: &str, encoded_query: &str) -> Option<String> {
+    search_engine_registry().read().ok()?.url(id, encoded_query)
+}
+
+pub(crate) fn custom_search_url_for_keyword(keyword: &str, encoded_query: &str) -> Option<String> {
+    search_engine_registry()
+        .read()
+        .ok()?
+        .url_for_keyword(keyword, encoded_query)
+}
+
+pub(crate) fn register_owned_search_engine(
+    owner: &str,
+    definition: SearchEngineDefinition,
+) -> Result<(), String> {
+    search_engine_registry()
+        .write()
+        .map_err(|_| "search engine registry lock poisoned".to_string())?
+        .register_owned(owner, definition)
+}
+
+pub(crate) fn unregister_owned_search_engines(owner: &str) -> usize {
+    search_engine_registry()
+        .write()
+        .map(|mut registry| registry.unregister_owner(owner))
+        .unwrap_or_default()
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -151,5 +322,88 @@ mod tests {
         let old =
             serde_json::from_str::<BrowserPreferences>(r#"{"search_engine":"google"}"#).unwrap();
         assert!(old.ad_blocker_enabled);
+    }
+
+    #[test]
+    fn legacy_search_engine_values_resolve_through_the_builtin_registry() {
+        let registry = SearchEngineRegistry::builtins();
+        for (engine, serialized, label, expected_url) in [
+            (
+                SearchEngine::Google,
+                "google",
+                "Google",
+                "https://www.google.com/search?q=rust",
+            ),
+            (
+                SearchEngine::Bing,
+                "bing",
+                "Bing",
+                "https://www.bing.com/search?q=rust",
+            ),
+            (
+                SearchEngine::DuckDuckGo,
+                "duck_duck_go",
+                "DuckDuckGo",
+                "https://duckduckgo.com/?q=rust",
+            ),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&engine).unwrap(),
+                format!("\"{serialized}\"")
+            );
+            let definition = registry.get(serialized).unwrap();
+            assert_eq!(definition.label, label);
+            assert_eq!(engine.search_url("rust"), expected_url);
+            let saved = format!(r#"{{"search_engine":"{serialized}"}}"#);
+            assert_eq!(
+                serde_json::from_str::<BrowserPreferences>(&saved)
+                    .unwrap()
+                    .search_engine,
+                engine
+            );
+        }
+    }
+
+    #[test]
+    fn registry_accepts_additional_template_entries() {
+        let mut registry = SearchEngineRegistry::builtins();
+        registry.register(SearchEngineDefinition {
+            id: "github".into(),
+            label: "GitHub".into(),
+            url_template: "https://github.com/search?q=%s".into(),
+            keyword: Some("!gh".into()),
+        });
+        assert_eq!(
+            registry.url("github", "tabs%20rust").as_deref(),
+            Some("https://github.com/search?q=tabs%20rust")
+        );
+        assert_eq!(
+            registry.get("github").unwrap().keyword.as_deref(),
+            Some("!gh")
+        );
+    }
+
+    #[test]
+    fn pack_search_engine_registration_is_owner_scoped_and_disposable() {
+        let id = format!("pack-test-{}", std::process::id());
+        let owner = "example.test-pack";
+        register_owned_search_engine(
+            owner,
+            SearchEngineDefinition {
+                id: id.clone(),
+                label: "Test Pack Search".into(),
+                url_template: "https://example.test/?q=%s".into(),
+                keyword: Some("!test".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            custom_search_url(&id, "hello").as_deref(),
+            Some("https://example.test/?q=hello")
+        );
+        assert_eq!(unregister_owned_search_engines("another.pack"), 0);
+        assert!(custom_search_url(&id, "hello").is_some());
+        assert_eq!(unregister_owned_search_engines(owner), 1);
+        assert!(custom_search_url(&id, "hello").is_none());
     }
 }

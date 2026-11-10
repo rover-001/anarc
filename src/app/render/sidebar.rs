@@ -24,7 +24,9 @@ impl Lumen {
                 )
             })
             .collect();
-        let stored_split_pair = self.stored_split_pair();
+        let stored_split_pair = crate::plugins::split_view_enabled()
+            .then(|| self.stored_split_pair())
+            .flatten();
         let sidebar_width_f32 = self.sidebar_width_transition.map_or_else(
             || self.effective_sidebar_width(),
             |(from, to, started, _)| {
@@ -84,12 +86,12 @@ impl Lumen {
             }),
         );
 
-        if !self.sidebar_collapsed {
+        if !self.is_sidebar_collapsed() {
             sidebar_content = sidebar_content.child(
                 div()
                     .id("active-space-name")
                     .w_full()
-                    .h(px(TOPBAR_HEIGHT - 24.0 * UI_SCALE))
+                    .h(px(visual::active_topbar_height() - 24.0 * UI_SCALE))
                     .flex()
                     .items_center()
                     .px_1()
@@ -150,12 +152,18 @@ impl Lumen {
                 })
                 .cloned()
                 .collect::<Vec<_>>();
+            let padding_x = visual::SIDEBAR_ROW_PADDING_X;
+            let available_width = (sidebar_width_f32 - 2.0 * padding_x).max(100.0);
+            let gap = 6.0 * UI_SCALE;
+            let tile_w = ((available_width - (FAVORITE_TILES_PER_ROW - 1) as f32 * gap)
+                / FAVORITE_TILES_PER_ROW as f32)
+                .clamp(28.0 * UI_SCALE, 44.0 * UI_SCALE);
             let mut favorites_grid = div()
                 .id("favorites-grid")
                 .w_full()
                 .flex()
                 .flex_wrap()
-                .gap_1();
+                .gap(px(gap));
             if favorite_tabs.is_empty() {
                 favorites_grid = favorites_grid.child(
                     div()
@@ -187,16 +195,20 @@ impl Lumen {
                 favorites_grid = favorites_grid.child(
                     div()
                         .id(format!("favorite-{id}"))
-                        .size(px(FAVORITE_TILE_SIZE))
+                        .w(px(tile_w))
+                        .h(px(tile_w))
                         .relative()
                         .rounded_lg()
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
+                        .active(|tile| tile.opacity(0.88))
                         .when(selected, |tile| tile.bg(rgb(theme.surface)))
-                        .hover(move |tile| tile.bg(rgb(theme.surface_hover)))
-                        .child(tab_list::favicon(favicon.clone()))
+                        .when(!selected, |tile| {
+                            tile.hover(move |tile| tile.bg(rgb(theme.surface_hover)))
+                        })
+                        .child(tab_list::favorite_favicon(favicon.clone()))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.activate_tab_in_active_space(&tile_id);
                             cx.notify();
@@ -625,7 +637,9 @@ impl Lumen {
                                 .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                 .rounded_lg()
                                 .when(group_active, |row| row.bg(rgb(theme.surface)))
-                                .hover(|row| row.bg(rgb(theme.surface_hover)))
+                                .when(!group_active, |row| {
+                                    row.hover(|row| row.bg(rgb(theme.surface_hover)))
+                                })
                                 .child(tab_list::split_favicon(first.2.clone(), second.2.clone()))
                                 .child(
                                     div()
@@ -720,7 +734,9 @@ impl Lumen {
                                         .pr(px(visual::SIDEBAR_ROW_PADDING_X))
                                         .rounded_lg()
                                         .when(member_selected, |row| row.bg(rgb(theme.surface)))
-                                        .hover(|row| row.bg(rgb(theme.surface_hover)))
+                                        .when(!member_selected, |row| {
+                                            row.hover(|row| row.bg(rgb(theme.surface_hover)))
+                                        })
                                         .child(tab_list::favicon(member.2.clone()))
                                         .child(
                                             div()
@@ -867,7 +883,9 @@ impl Lumen {
                                 .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                 .rounded_lg()
                                 .when(selected, |row| row.bg(rgb(theme.surface)))
-                                .hover(|row| row.bg(rgb(theme.surface_hover)))
+                                .when(!selected, |row| {
+                                    row.hover(|row| row.bg(rgb(theme.surface_hover)))
+                                })
                                 .child(tab_list::favicon(favicon.clone()))
                                 .child(
                                     div()
@@ -925,6 +943,7 @@ impl Lumen {
                             {
                                 space.active = Some(tab_id.clone());
                             }
+                            this.emit_plugin_text("tab.activated", tab_id.clone());
                             cx.notify();
                         }))
                         .on_mouse_down(

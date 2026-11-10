@@ -4,12 +4,18 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use adblock::lists::{FilterSet, ParseOptions};
 
+static PLUGIN_ENABLED: AtomicBool = AtomicBool::new(true);
+
+pub(crate) fn set_plugin_enabled(enabled: bool) {
+    PLUGIN_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
 pub struct ShieldState {
-    matcher: SyncSender<MatchRequest>,
+    matcher: SyncSender<MatcherMessage>,
     allowlist: Mutex<HashSet<String>>,
     blocked_by_tab: Mutex<HashMap<String, u64>>,
     enabled: AtomicBool,
@@ -23,10 +29,55 @@ struct MatchRequest {
     reply: SyncSender<bool>,
 }
 
+enum MatcherMessage {
+    Check(MatchRequest),
+    ReplacePackLists(Vec<String>),
+}
+
+static ACTIVE_PACK_FILTER_LISTS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+static SHIELD_INSTANCES: OnceLock<Mutex<Vec<Weak<ShieldState>>>> = OnceLock::new();
+
+fn active_pack_filter_lists() -> &'static Mutex<Vec<String>> {
+    ACTIVE_PACK_FILTER_LISTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn shield_instances() -> &'static Mutex<Vec<Weak<ShieldState>>> {
+    SHIELD_INSTANCES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Replace the complete set of active pack filter rules and fan the snapshot
+/// out to live shield workers. No user-owned or bundled lists are removed.
+pub(crate) fn replace_active_pack_filter_lists(lists: Vec<String>) {
+    if let Ok(mut active) = active_pack_filter_lists().lock() {
+        *active = lists.clone();
+    }
+    let instances = shield_instances().lock().map(|mut instances| {
+        let mut active = Vec::new();
+        instances.retain(|weak| {
+            if let Some(instance) = weak.upgrade() {
+                active.push(instance);
+                true
+            } else {
+                false
+            }
+        });
+        active
+    });
+    if let Ok(instances) = instances {
+        for instance in instances {
+            instance.replace_pack_filter_lists(lists.clone());
+        }
+    }
+}
+
 impl ShieldState {
     pub fn start() -> Arc<Self> {
         let allowlist = read_allowlist();
-        let (matcher, requests) = mpsc::sync_channel::<MatchRequest>(256);
+        let (matcher, requests) = mpsc::sync_channel::<MatcherMessage>(256);
+        let initial_pack_lists = active_pack_filter_lists()
+            .lock()
+            .map(|lists| lists.clone())
+            .unwrap_or_default();
         let state = Arc::new(Self {
             matcher,
             allowlist: Mutex::new(allowlist),
@@ -36,52 +87,49 @@ impl ShieldState {
         if let Err(error) = std::thread::Builder::new()
             .name("lumen-filter-engine".into())
             .spawn(move || {
-                let mut filters = FilterSet::new(false);
-                filters.add_filter_list(
-                    include_str!("../assets/filters/easylist.txt").to_owned(),
-                    ParseOptions::default(),
-                );
-                filters.add_filter_list(
-                    include_str!("../assets/filters/lumen.txt").to_owned(),
-                    ParseOptions::default(),
-                );
-                let user_lists = crate::paths::data_dir().join("filters");
-                if let Ok(entries) = std::fs::read_dir(user_lists) {
-                    let mut paths: Vec<PathBuf> = entries
-                        .filter_map(Result::ok)
-                        .map(|entry| entry.path())
-                        .filter(|path| path.extension().is_some_and(|extension| extension == "txt"))
-                        .collect();
-                    paths.sort();
-                    for path in paths {
-                        match std::fs::read_to_string(&path) {
-                            Ok(text) => {
-                                filters.add_filter_list(text, ParseOptions::default());
-                            }
-                            Err(error) => eprintln!(
-                                "Lumen cannot read filter list {}: {error}",
-                                path.display()
-                            ),
+                let user_lists = read_user_filter_lists();
+                let mut pack_lists = initial_pack_lists;
+                let mut engine = build_filter_engine(&user_lists, &pack_lists);
+                while let Ok(message) = requests.recv() {
+                    match message {
+                        MatcherMessage::Check(request) => {
+                            let blocked = adblock::request::Request::new(
+                                &request.url,
+                                &request.source_url,
+                                &request.resource_type,
+                                &request.method,
+                            )
+                            .ok()
+                            .is_some_and(|request| {
+                                engine.check_network_request(&request).should_block()
+                            });
+                            let _ = request.reply.send(blocked);
+                        }
+                        MatcherMessage::ReplacePackLists(lists) => {
+                            pack_lists = lists;
+                            engine = build_filter_engine(&user_lists, &pack_lists);
                         }
                     }
-                }
-                let engine = adblock::Engine::new_with_filter_set(filters);
-                while let Ok(request) = requests.recv() {
-                    let blocked = adblock::request::Request::new(
-                        &request.url,
-                        &request.source_url,
-                        &request.resource_type,
-                        &request.method,
-                    )
-                    .ok()
-                    .is_some_and(|request| engine.check_network_request(&request).should_block());
-                    let _ = request.reply.send(blocked);
                 }
             })
         {
             eprintln!("Lumen filter engine thread failed to start: {error}");
         }
+        if let Ok(mut instances) = shield_instances().lock() {
+            instances.push(Arc::downgrade(&state));
+        }
         state
+    }
+
+    /// Replace only plugin-provided rules in this worker. Bundled EasyList,
+    /// Lumen's starter list and user filter files are rebuilt alongside them.
+    pub(crate) fn replace_pack_filter_lists(&self, lists: Vec<String>) {
+        if let Err(error) = self
+            .matcher
+            .try_send(MatcherMessage::ReplacePackLists(lists))
+        {
+            eprintln!("Lumen could not queue pack filter update: {error}");
+        }
     }
 
     pub fn should_block(
@@ -92,7 +140,7 @@ impl ShieldState {
         method: &str,
         tab_id: &str,
     ) -> bool {
-        if !self.enabled.load(Ordering::Relaxed) {
+        if !PLUGIN_ENABLED.load(Ordering::Relaxed) || !self.enabled.load(Ordering::Relaxed) {
             return false;
         }
         if let Some(host) = url_host(url)
@@ -111,7 +159,8 @@ impl ShieldState {
             method: method.to_owned(),
             reply,
         };
-        let blocked = self.matcher.send(query).is_ok() && result.recv().unwrap_or(false);
+        let blocked = self.matcher.send(MatcherMessage::Check(query)).is_ok()
+            && result.recv().unwrap_or(false);
         if blocked {
             if let Ok(mut counts) = self.blocked_by_tab.lock() {
                 *counts.entry(tab_id.to_owned()).or_default() += 1;
@@ -160,6 +209,45 @@ impl ShieldState {
     }
 }
 
+fn read_user_filter_lists() -> Vec<String> {
+    let user_lists = crate::paths::data_dir().join("filters");
+    let Ok(entries) = std::fs::read_dir(&user_lists) else {
+        return Vec::new();
+    };
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "txt"))
+        .collect::<Vec<PathBuf>>();
+    paths.sort();
+    paths
+        .into_iter()
+        .filter_map(|path| match std::fs::read_to_string(&path) {
+            Ok(text) => Some(text),
+            Err(error) => {
+                eprintln!("Lumen cannot read filter list {}: {error}", path.display());
+                None
+            }
+        })
+        .collect()
+}
+
+fn build_filter_engine(user_lists: &[String], pack_lists: &[String]) -> adblock::Engine {
+    let mut filters = FilterSet::new(false);
+    filters.add_filter_list(
+        include_str!("../assets/filters/easylist.txt").to_owned(),
+        ParseOptions::default(),
+    );
+    filters.add_filter_list(
+        include_str!("../assets/filters/lumen.txt").to_owned(),
+        ParseOptions::default(),
+    );
+    for text in user_lists.iter().chain(pack_lists) {
+        filters.add_filter_list(text.clone(), ParseOptions::default());
+    }
+    adblock::Engine::new_with_filter_set(filters)
+}
+
 fn allowlist_path() -> PathBuf {
     crate::paths::data_dir().join("shield.json")
 }
@@ -206,15 +294,21 @@ pub fn eligible_for_https(url: &str) -> bool {
 }
 
 pub fn upgrade_http_url(url: &str) -> Option<String> {
-    eligible_for_https(url).then(|| format!("https{}", &url[4..]))
+    (PLUGIN_ENABLED.load(Ordering::Relaxed) && eligible_for_https(url))
+        .then(|| format!("https{}", &url[4..]))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn enable_shield_plugin() {
+        set_plugin_enabled(true);
+    }
+
     #[test]
     fn https_first_upgrades_public_http_hosts_only() {
+        enable_shield_plugin();
         assert_eq!(
             upgrade_http_url("http://example.com/path?q=1"),
             Some("https://example.com/path?q=1".into())
@@ -261,6 +355,7 @@ mod tests {
 
     #[test]
     fn bundled_rules_block_and_increment_per_tab_counts() {
+        enable_shield_plugin();
         let state = ShieldState::start();
         let url = "https://doubleclick.net/ad.js";
         let source = "https://publisher.test/";
@@ -292,7 +387,92 @@ mod tests {
     }
 
     #[test]
+    fn replacing_pack_filters_preserves_bundled_and_user_lists() {
+        let user = vec!["||user-filter.example^".to_owned()];
+        let with_pack = build_filter_engine(&user, &["||pack-filter.example^".to_owned()]);
+        for url in [
+            "https://doubleclick.net/ad.js",
+            "https://user-filter.example/ad.js",
+            "https://pack-filter.example/ad.js",
+        ] {
+            let request =
+                adblock::request::Request::new(url, "https://publisher.test/", "script", "GET")
+                    .unwrap();
+            assert!(
+                with_pack.check_network_request(&request).should_block(),
+                "{url}"
+            );
+        }
+
+        let after_pack_unmount = build_filter_engine(&user, &[]);
+        for url in [
+            "https://doubleclick.net/ad.js",
+            "https://user-filter.example/ad.js",
+        ] {
+            let request =
+                adblock::request::Request::new(url, "https://publisher.test/", "script", "GET")
+                    .unwrap();
+            assert!(
+                after_pack_unmount
+                    .check_network_request(&request)
+                    .should_block(),
+                "{url}"
+            );
+        }
+        let removed = adblock::request::Request::new(
+            "https://pack-filter.example/ad.js",
+            "https://publisher.test/",
+            "script",
+            "GET",
+        )
+        .unwrap();
+        assert!(
+            !after_pack_unmount
+                .check_network_request(&removed)
+                .should_block()
+        );
+    }
+
+    #[test]
+    fn worker_replaces_pack_rules_without_disabling_builtins() {
+        enable_shield_plugin();
+        let state = ShieldState::start();
+        state.replace_pack_filter_lists(vec!["||worker-pack-filter.example^".into()]);
+        assert!(state.should_block(
+            "https://worker-pack-filter.example/ad.js",
+            "https://publisher.test/",
+            "script",
+            "GET",
+            "pack-test"
+        ));
+        assert!(state.should_block(
+            "https://doubleclick.net/ad.js",
+            "https://publisher.test/",
+            "script",
+            "GET",
+            "pack-test"
+        ));
+
+        state.replace_pack_filter_lists(Vec::new());
+        assert!(!state.should_block(
+            "https://worker-pack-filter.example/ad.js",
+            "https://publisher.test/",
+            "script",
+            "GET",
+            "pack-test"
+        ));
+        assert!(state.should_block(
+            "https://doubleclick.net/ad.js",
+            "https://publisher.test/",
+            "script",
+            "GET",
+            "pack-test"
+        ));
+    }
+
+    #[test]
     fn ad_blocker_defaults_on_and_global_toggle_controls_filtering() {
+        enable_shield_plugin();
         let state = ShieldState::start();
         let url = "https://doubleclick.net/ad.js";
         let source = "https://publisher.test/";

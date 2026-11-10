@@ -26,6 +26,9 @@ pub(crate) fn normalize_address_with_engine(input: &str, search_engine: SearchEn
     if input.contains("://") || input.starts_with("about:") {
         return input.to_owned();
     }
+    if let Some(url) = keyword_search_url(input) {
+        return url;
+    }
     if input == "localhost" || input.starts_with("localhost:") || input.contains('.') {
         return format!("https://{input}");
     }
@@ -52,6 +55,17 @@ pub(crate) fn normalize_address_with_engine(input: &str, search_engine: SearchEn
     }
 }
 
+fn keyword_search_url(input: &str) -> Option<String> {
+    let input = input.trim();
+    let mut parts = input.splitn(2, char::is_whitespace);
+    let keyword = parts.next()?.strip_prefix('!')?;
+    let query = parts.next()?.trim();
+    if keyword.is_empty() || query.is_empty() {
+        return None;
+    }
+    crate::settings::custom_search_url_for_keyword(keyword, &encode_search_query(query))
+}
+
 pub(crate) fn submit_address_with_engine(
     space: &mut Space,
     input: &str,
@@ -73,7 +87,9 @@ pub(crate) fn submit_address_with_engine(
     }
     let id = space.active.clone()?;
     let tab = space.tabs.iter_mut().find(|tab| tab.id == id)?;
-    let title = if url.starts_with("https://www.google.com/search?q=")
+    let is_custom_keyword_search = keyword_search_url(input).is_some();
+    let title = if is_custom_keyword_search
+        || url.starts_with("https://www.google.com/search?q=")
         || url.starts_with("https://google.com/search?q=")
         || url.starts_with("https://www.bing.com/search?q=")
         || url.starts_with("https://duckduckgo.com/?q=")
@@ -142,6 +158,7 @@ mod tests {
 
     #[test]
     fn address_normalization_handles_urls_domains_and_search_queries() {
+        crate::shield::set_plugin_enabled(true);
         assert_eq!(normalize_address(""), "");
         assert_eq!(
             normalize_address("https://news.ycombinator.com"),
@@ -168,6 +185,44 @@ mod tests {
         assert_eq!(
             normalize_address("cats & dogs"),
             "https://www.google.com/search?q=cats+%26+dogs"
+        );
+    }
+
+    #[test]
+    fn registered_custom_search_keywords_route_queries_and_unmount_cleanly() {
+        let keyword = format!("lumenphase3{}", std::process::id());
+        let owner = "example.address-pack";
+        crate::settings::register_owned_search_engine(
+            owner,
+            crate::settings::SearchEngineDefinition {
+                id: format!("test-search-{}", std::process::id()),
+                label: "Address Test".into(),
+                url_template: "https://search.example/?q=%s".into(),
+                keyword: Some(format!("!{keyword}")),
+            },
+        )
+        .unwrap();
+
+        let mut space = Space::new("test", "Test", "compass", 0x123456);
+        let (_, url, _) = submit_address_with_engine(
+            &mut space,
+            &format!("!{keyword} two words & more"),
+            SearchEngine::default(),
+        )
+        .unwrap();
+        assert_eq!(url, "https://search.example/?q=two+words+%26+more");
+        assert_eq!(
+            space.tabs[0].title,
+            format!("Search: !{keyword} two words & more")
+        );
+
+        assert_eq!(crate::settings::unregister_owned_search_engines(owner), 1);
+        assert_eq!(
+            normalize_address_with_engine(
+                &format!("!{keyword} two words"),
+                SearchEngine::default()
+            ),
+            format!("https://www.google.com/search?q=%21{keyword}+two+words")
         );
     }
 }

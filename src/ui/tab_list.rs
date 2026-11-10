@@ -26,6 +26,29 @@ pub fn favicon(favicon: Option<Arc<gpui_kit::RenderImage>>) -> gpui_kit::AnyElem
     }
 }
 
+pub fn favorite_favicon(favicon: Option<Arc<gpui_kit::RenderImage>>) -> gpui_kit::AnyElement {
+    if let Some(favicon) = favicon {
+        div()
+            .size(px(20.0 * UI_SCALE))
+            .rounded(px(4.0 * UI_SCALE))
+            .overflow_hidden()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(gpui_kit::img(favicon).size_full())
+            .into_any_element()
+    } else {
+        div()
+            .size(px(20.0 * UI_SCALE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(rgb(0x7e828d))
+            .child(Icon::new(IconName::Globe).size(px(16.0 * UI_SCALE)))
+            .into_any_element()
+    }
+}
+
 /// Shows both panes inside the same fixed-width icon slot used by every sidebar row.
 pub fn split_favicon(
     first: Option<Arc<gpui_kit::RenderImage>>,

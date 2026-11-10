@@ -3,6 +3,10 @@ name = "lumen"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+wasm-plugins = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:url"]
+
 [dependencies]
 gpui-kit = "=0.9.0"
 cef = "=156.4.0"
@@ -17,6 +21,11 @@ async-channel = "=2.5.0"
 futures-lite = "=2.6.1"
 adblock = "=0.13.5"
 rusqlite = { version = "=0.41.1", features = ["bundled"] }
+ring = "=0.17.14"
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
+wasmtime = { version = "=50.0.1", default-features = false, features = ["runtime", "cranelift", "component-model", "std", "wat"], optional = true }
+wasmtime-wasi = { version = "=50.0.1", default-features = false, features = ["p2"], optional = true }
+url = { version = "=2.5.8", optional = true }
 
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }

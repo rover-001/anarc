@@ -172,7 +172,7 @@ Core services, which phase 1 extracts from existing code. Names are stable API k
 | `commands` | `ui/command_palette.rs` + shortcuts | register command, execute, list |
 | `keymap` | `app/actions/shortcuts.rs` | bind, unbind, resolve(key, context) |
 | `ui.slots` | render modules | contribute items to named slots (§4.6) |
-| `storage` | new | per-plugin KV in `$LUMEN_DATA_DIR/plugins/<id>/kv.sqlite` |
+| `storage` | new | per-plugin KV in `$ANARC_DATA_DIR/plugins/<id>/kv.sqlite` |
 | `notify` | new | toast/status messages (styled with existing tokens) |
 
 Events, which map onto existing CEF callbacks and app actions:
@@ -214,9 +214,9 @@ Adding a slot to an existing view is a surgical integration. The slot renders no
 ### 4.7 On-disk layout and config
 
 ```text
-$LUMEN_CONFIG_DIR/plugins.toml          # enabled set + per-plugin config (user-editable)
-$LUMEN_DATA_DIR/plugins/<id>/           # installed third-party plugin (manifest + assets)
-$LUMEN_DATA_DIR/plugins/<id>/kv.sqlite  # plugin private storage
+$ANARC_CONFIG_DIR/plugins.toml          # enabled set + per-plugin config (user-editable)
+$ANARC_DATA_DIR/plugins/<id>/           # installed third-party plugin (manifest + assets)
+$ANARC_DATA_DIR/plugins/<id>/kv.sqlite  # plugin private storage
 ```
 
 ```toml
@@ -253,32 +253,32 @@ Each phase is shippable on its own. **Do not start phase N+1 until phase N's acc
 - **Status**: complete — scaffold and automated checks pass; production kernel modules total 584 lines; existing baseline interactions were owner-confirmed.
 
 ### Phase 1: Kernel in the app, core services extracted
-- [x] Construct `Kernel` in `Lumen::new`, and store it as `pub(super) plugins: plugin::Kernel` (an additive field).
-- [ ] Wrap existing functionality as **service facades** (`tabs`, `spaces`, `navigation`, `engine`, `settings`, `history`, `commands`, `keymap`, `theme`) that delegate to the current `impl Lumen` methods. Do not rewrite them.
-- [ ] Raise the events in §4.4 from the existing call sites. With no listeners, behaviour is identical.
+- [x] Construct the plugin host/kernel in `Lumen::new` and store it on `Lumen`.
+- [x] Wrap existing functionality as **service facades** (`tabs`, `spaces`, `navigation`, `engine`, `settings`, `history`, `commands`, `keymap`, `theme`) that delegate to the current `impl Lumen` methods. Do not rewrite them.
+- [x] Raise the events in §4.4 from the existing call sites. With no listeners, behaviour is identical.
 - [x] Replace the hard-coded `PaletteAction`/`ACTIONS` and shortcut table with **registrations made by a core plugin** that produce the same items, labels, order and keys. Keep `PaletteAction` as the internal command id so existing tests still compile.
 - [x] Add `plugins.toml` load/save (§4.7), with defaults equal to today.
 - **Acceptance**: all existing tests still pass, plus new tests that palette items and shortcuts match a snapshot taken before the change, and a manual smoke run matches the baseline.
-- **Status**: in progress — production kernel construction, core command/keymap registrations, TOML configuration load/save, and initial `address.submit` / `navigation.before` waterfall hooks are wired. Service facades, remaining event call sites, snapshot coverage, and smoke verification remain.
+- **Status**: complete — kernel/services/config and core registrations are in the app; event notifications are wired from app actions and queued CEF callbacks; palette/shortcut snapshot and 104-test suite pass; release build and isolated X11 first-frame smoke pass. Policy-changing CEF hooks remain observational until the typed, deadline-aware decision bridge described in §4.5 is implemented (see `NOTES.md`).
 
 ### Phase 2: Built-ins become toggleable plugins
 Port one at a time, one PR each, in this order (lowest risk first): `stats` → `reader` → `import` → `lifecycle` → `history` → `search-engines` → `shield` → `downloads` page → `split-view`.
 - [ ] Each built-in is a `Plugin` impl in `src/plugins/<name>.rs` that `inject`s what it needs and registers its commands, settings, events and slots.
 - [ ] `search-engines`: turn the `SearchEngine` enum into a registry. The Google/Bing/DuckDuckGo entries ship as built-in registrations, and `browser-preferences.json` keeps deserialising (keep the enum's serde names as ids).
-- [ ] `shield`: expose `request.filter` rule registration, and the existing EasyList + `$LUMEN_DATA_DIR/filters/*.txt` load becomes the plugin's default config.
+- [ ] `shield`: expose `request.filter` rule registration, and the existing EasyList + `$ANARC_DATA_DIR/filters/*.txt` load becomes the plugin's default config.
 - [ ] Disabling a plugin at runtime must fully unwind: commands vanish from the palette, keys unbind, hooks stop, and slot items disappear with no restart.
 - **Acceptance**: for each plugin, a test that enabled = baseline behaviour, a test that disabled = feature cleanly absent, and a test that re-enable works. `--safe-mode` boots.
-- **Status**: not started.
+- **Status**: in progress — all nine optional built-ins register through `PluginHost`, have runtime gates, default-on config behavior, and safe-mode handling. Runtime disable/re-enable and legacy search-engine serde are covered. Remaining: formal `request.filter` registration and fuller per-plugin behavior/config tests.
 
 ### Phase 3: Declarative packs (the biggest user-visible win)
-- [ ] Pack loader: scan `$LUMEN_DATA_DIR/plugins/*/lumen-plugin.toml` with `kind = "pack"` and validate it, rejecting bad packs with a clear error and never crashing.
+- [ ] Pack loader: scan `$ANARC_DATA_DIR/plugins/*/lumen-plugin.toml` with `kind = "pack"` and validate it, rejecting bad packs with a clear error and never crashing.
 - [ ] `[pack.theme]`: `ThemeTokens` overrides (dark/light variants, per-space accent support).
 - [ ] `[[pack.userstyle]]`: `{ match = ["https://*.youtube.com/*"], css = "yt.css", run_at = "document_start" }`, injected via `engine.execute_js` at load. Re-apply on SPA navigations (`page.address`).
 - [ ] `[[pack.userscript]]`: Greasemonkey-style `match/exclude/run_at`, in the page main world. Show a clear install-time warning that userscripts can read the pages they match.
 - [ ] `[pack.keymap]`, `[[pack.search_engine]]` (name, url template with `%s`, keyword/bang), `[[pack.filter_list]]` (local file or URL with refresh interval), and `[pack.layout]` (§4.6 presets).
 - [ ] Hot reload: editing a pack's files re-applies it (file watcher only in `--plugin-dev`; otherwise on toggle).
 - **Acceptance**: sample packs in `examples/plugins/` (a theme, a YouTube userstyle, a vim-like keymap, a search pack with bangs) work end to end, and a broken pack shows an error without breaking startup.
-- **Status**: not started.
+- **Status**: in progress — safe manifest scanning, keymap/search-engine registration, local filter-list application, matched userstyle/userscript injection on `page.load_end`, theme token overrides (`border_hover`, colors, card radius), shell layout presets (`sidebar_side`, `sidebar_collapsed`, `topbar`), and four examples are wired. Remaining: remote filter fetching, SPA/document-start timing, and dev hot reload.
 
 ### Phase 4: Plugin manager UI
 - [ ] Add `SettingsSection::Plugins` (additive enum variant) and render it in `src/ui/app_pages.rs` **using the existing settings-page components and tokens only**.
@@ -287,7 +287,7 @@ Port one at a time, one PR each, in this order (lowest risk first): `stats` → 
 - [ ] Palette commands: "Enable plugin…", "Disable plugin…", "Reload plugins", "Open plugin folder".
 - [ ] **Ask the user before finalising any new visual element** (AGENTS.md §2): present a text mock in the PR or chat first.
 - **Acceptance**: every toggle applies live, survives a restart, and the existing settings sections look pixel-identical.
-- **Status**: not started.
+- **Status**: in progress — approved Plugins settings page, status/error display, live toggles, local folder and signed package review/install, remove, and plugin rows in the Extensions popover are implemented. Remaining: generated config forms, richer enable/disable palette selection and reload, and a manual desktop UI check.
 
 ### Phase 5: WASM plugin runtime
 - [ ] Add `wasmtime` (component model) behind a cargo feature `wasm-plugins` (on by default once stable). Pin exact versions like the rest of `Cargo.toml`.
@@ -297,18 +297,19 @@ Port one at a time, one PR each, in this order (lowest risk first): `stats` → 
 - [ ] Run WASM on a dedicated worker thread; the main thread exchanges messages only.
 - [ ] Add a `lumen-plugin-sdk` crate (Rust guest bindings plus macros) and one example plugin in `examples/plugins/tidy-tabs/`.
 - **Acceptance**: the example builds with `cargo component build`, installs, runs, is denied a permission it didn't request, and is killed on an infinite loop without freezing the UI.
-- **Status**: not started.
+- **Status**: in progress — pinned Wasmtime/WASI dependencies, WIT, guest SDK/example, bounded worker, permission checks, resource/fuel/deadline limits, package scan, and lifecycle cleanup are implemented behind `wasm-plugins`. The adapter currently denies all host service calls and async worker failures are not reflected in manager status; `cargo component` install/run acceptance remains unverified.
 
 ### Phase 6: Web panels
 - [ ] Add `kind = "panel"`: a plugin ships `index.html` + assets served from a custom scheme `lumen-plugin://<id>/` (CEF scheme handler) with its own request context.
 - [ ] Mount panels in the slots `sidebar.panel` and the split pane. Panel chrome (header, border, radius) comes from host tokens.
 - [ ] JS bridge: `window.lumen.*` through `CefMessageRouter`, mirroring the WIT API and checked against the same permissions.
 - [ ] Apply a CSP by default, and allow network access only to the hosts in the manifest.
-- **Acceptance**: an example "notes" panel persists text through `storage`, and closing or disabling it destroys its browser and frees memory (check with `LUMEN_STATS=1`).
-- **Status**: not started.
+- **Acceptance**: an example "notes" panel persists text through `storage`, and closing or disabling it destroys its browser and frees memory (check with `ANARC_STATS=1`).
+- **Status**: in progress — secure `lumen-plugin://` CEF scheme, confined package resources, CSP, HTTPS host restrictions, and plugin mount/dispose registration are implemented. The panel still lacks a dedicated sidebar/split view and `window.lumen` message bridge; no notes example or storage persistence acceptance yet.
 
 ### Phase 7 (optional): Distribution
 - `.lumenplugin` signing (ed25519, publisher key in the manifest), update checks, a git-repo-based index (like the dsh `dsh-plugin` GitHub topic), and import/export of a whole setup (`plugins.toml` plus packs) so people can share their "Lumen config".
+- **Status**: in progress — bounded ZIP inspection, Ed25519 signing/verification, explicit signer review, package install, and export APIs are implemented. Persistent publisher trust, update checks, registry/index, and whole-profile import/export are not implemented.
 
 ---
 
@@ -356,7 +357,7 @@ Token names must exactly match `ThemeTokens` fields. Unknown tokens produce a wa
 6. **Permissions are enforced by the host**, never by trusting the plugin. Denied by default.
 7. **Pin dependencies** with `=x.y.z` like the existing `Cargo.toml`.
 8. **Keep `refactor.md` layering**: plugins → services → app/engine, never plugin → CEF types directly.
-9. **Isolate test runs** with `LUMEN_CONFIG_DIR/LUMEN_DATA_DIR/LUMEN_CACHE_DIR` temp dirs (see README) so no real profile is touched.
+9. **Isolate test runs** with `ANARC_CONFIG_DIR/ANARC_DATA_DIR/ANARC_CACHE_DIR` temp dirs (see README) so no real profile is touched.
 10. **Update this file**: tick checkboxes, set the phase **Status**, and record deviations in `NOTES.md`.
 11. Close every task with a Checkmate status: `done` / `done, unverified: …` / `not done: …` / `blocked: …`.
 

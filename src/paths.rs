@@ -3,11 +3,11 @@
 use std::path::PathBuf;
 
 pub fn config_dir() -> PathBuf {
-    override_or_home("LUMEN_CONFIG_DIR", ".config/lumen")
+    override_or_home("ANARC_CONFIG_DIR", ".config/anarc")
 }
 
 pub fn data_dir() -> PathBuf {
-    override_or_home("LUMEN_DATA_DIR", ".local/share/lumen")
+    override_or_home("ANARC_DATA_DIR", ".local/share/anarc")
 }
 
 pub fn plugin_config_path() -> PathBuf {
@@ -42,7 +42,7 @@ fn profile_from_cef_root(cef_root: PathBuf, space_id: &str) -> PathBuf {
 #[allow(dead_code)]
 pub fn cache_dir() -> PathBuf {
     resolve_cache_dir(
-        std::env::var_os("LUMEN_CACHE_DIR"),
+        std::env::var_os("ANARC_CACHE_DIR"),
         std::env::var_os("XDG_CACHE_HOME"),
         std::env::var_os("HOME"),
         std::env::temp_dir(),
@@ -61,7 +61,7 @@ fn resolve_cache_dir(
             .map(PathBuf::from)
             .or_else(|| home.map(|home| PathBuf::from(home).join(".cache")))
             .unwrap_or(temp_dir)
-            .join("lumen/cef")
+            .join("anarc/cef")
     })
 }
 
@@ -91,11 +91,11 @@ mod tests {
     #[test]
     fn explicit_config_and_data_directories_are_used() {
         assert_eq!(
-            resolve_override_or_home(Some("/tmp/config".into()), None, ".config/lumen"),
+            resolve_override_or_home(Some("/tmp/config".into()), None, ".config/anarc"),
             PathBuf::from("/tmp/config")
         );
         assert_eq!(
-            resolve_override_or_home(Some("/tmp/data".into()), None, ".local/share/lumen"),
+            resolve_override_or_home(Some("/tmp/data".into()), None, ".local/share/anarc"),
             PathBuf::from("/tmp/data")
         );
     }
@@ -103,12 +103,12 @@ mod tests {
     #[test]
     fn config_and_data_defaults_are_under_home() {
         assert_eq!(
-            resolve_override_or_home(None, Some("/home/test".into()), ".config/lumen"),
-            PathBuf::from("/home/test/.config/lumen")
+            resolve_override_or_home(None, Some("/home/test".into()), ".config/anarc"),
+            PathBuf::from("/home/test/.config/anarc")
         );
         assert_eq!(
-            resolve_override_or_home(None, Some("/home/test".into()), ".local/share/lumen"),
-            PathBuf::from("/home/test/.local/share/lumen")
+            resolve_override_or_home(None, Some("/home/test".into()), ".local/share/anarc"),
+            PathBuf::from("/home/test/.local/share/anarc")
         );
     }
 
@@ -134,18 +134,18 @@ mod tests {
                 None,
                 PathBuf::from("/tmp")
             ),
-            PathBuf::from("/home/test/.cache/lumen/cef")
+            PathBuf::from("/home/test/.cache/anarc/cef")
         );
         assert_eq!(
             resolve_cache_dir(None, None, Some("/home/test".into()), PathBuf::from("/tmp")),
-            PathBuf::from("/home/test/.cache/lumen/cef")
+            PathBuf::from("/home/test/.cache/anarc/cef")
         );
     }
 
     #[test]
     fn cef_space_profiles_are_direct_children_of_the_cef_root() {
         let data_dir =
-            resolve_override_or_home(Some("/tmp/lumen-data".into()), None, ".local/share/lumen");
+            resolve_override_or_home(Some("/tmp/lumen-data".into()), None, ".local/share/anarc");
         let cef_root = cef_root_from_data_dir(data_dir);
         let profile = profile_from_cef_root(cef_root.clone(), "personal");
 

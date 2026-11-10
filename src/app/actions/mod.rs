@@ -1,6 +1,8 @@
 mod folders;
 mod navigation;
 mod palette;
+mod panels;
+mod plugins;
 mod resize;
 mod shortcuts;
 mod spaces;
@@ -9,6 +11,35 @@ mod tabs;
 use super::*;
 
 impl Lumen {
+    pub(crate) fn plugin_rows(&self) -> Vec<crate::plugin::PluginRow> {
+        self.plugins.rows()
+    }
+
+    pub(crate) fn set_plugin_enabled(&mut self, id: &str, enabled: bool) -> Result<(), String> {
+        let is_panel = self.plugins.rows().iter().any(|row| {
+            row.descriptor.id == id && row.descriptor.kind == crate::plugin::PluginKind::Panel
+        });
+        self.plugins.set_enabled(id, enabled)?;
+        if is_panel && !enabled {
+            self.stop_panel_browsers(id);
+        }
+        Ok(())
+    }
+
+    pub(super) fn emit_plugin_text(&self, name: &str, value: impl Into<String>) {
+        self.emit_plugin_text_with_mode(name, crate::plugin::EventMode::Emit, value);
+    }
+
+    pub(super) fn emit_plugin_text_with_mode(
+        &self,
+        name: &str,
+        mode: crate::plugin::EventMode,
+        value: impl Into<String>,
+    ) {
+        self.plugins
+            .emit(name, mode, crate::plugin::EventPayload::Text(value.into()));
+    }
+
     pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (mut spaces, active_space, sidebar_width, sidebar_collapsed) =
             if let Some(mut saved) = persist::load_state() {
@@ -65,7 +96,6 @@ impl Lumen {
             }
         }
 
-        let preferences = crate::settings::load_preferences();
         let plugin_config = match crate::plugin::PluginConfig::load() {
             Ok(config) => config,
             Err(error) => {
@@ -73,10 +103,40 @@ impl Lumen {
                 crate::plugin::PluginConfig::default()
             }
         };
-        let mut plugins = crate::plugin::Kernel::new();
-        if let Err(error) = plugins.mount(Box::new(crate::plugin::CorePlugin::new())) {
-            eprintln!("Failed to mount core plugin: {}", error.0);
+        let safe_mode = std::env::args().any(|argument| argument == "--safe-mode");
+        let panel_registry = crate::plugin::new_panel_registry();
+        let mut plugins = crate::plugin::PluginHost::new(plugin_config);
+        plugins.set_safe_mode(safe_mode);
+        if let Err(error) = plugins.mount_core() {
+            eprintln!("Failed to mount core plugin: {error}");
         }
+        crate::plugins::register(&mut plugins);
+        if let Err(error) =
+            crate::plugin::register_packs(&mut plugins, &crate::paths::data_dir().join("plugins"))
+        {
+            eprintln!("Failed to scan plugin packs: {error}");
+        }
+        if let Err(error) = crate::plugin::register_panel_plugins(
+            &mut plugins,
+            &crate::paths::data_dir().join("plugins"),
+            panel_registry.clone(),
+        ) {
+            eprintln!("Failed to scan panel plugins: {error}");
+        }
+        #[cfg(feature = "wasm-plugins")]
+        if let Err(error) = crate::plugin::register_wasm_plugins(
+            &mut plugins,
+            &crate::paths::data_dir().join("plugins"),
+        ) {
+            eprintln!("Failed to scan WASM plugins: {error}");
+        }
+        if let Err(error) = plugins.mount_enabled() {
+            eprintln!("Failed to mount enabled plugins: {error}");
+        }
+        let preferences = plugins
+            .service(crate::plugin::SETTINGS)
+            .expect("core settings service is mounted")
+            .load_preferences();
         let initial_query = std::env::args().skip(1).find(|arg| !arg.starts_with("--"));
         let initial_http_first = initial_query
             .as_deref()
@@ -84,11 +144,10 @@ impl Lumen {
         if let Some(query) = &initial_query
             && let Some(space) = spaces.iter_mut().find(|s| s.id == active_space)
         {
-            let _ = crate::navigation::submit_address_with_engine(
-                space,
-                query,
-                preferences.search_engine,
-            );
+            let _ = plugins
+                .service(crate::plugin::NAVIGATION)
+                .expect("core navigation service is mounted")
+                .submit_address(space, query, preferences.search_engine);
         }
 
         persist::save_state(&spaces, &active_space, sidebar_width, sidebar_collapsed);
@@ -139,6 +198,7 @@ impl Lumen {
             });
 
         let mut engine = crate::engine::Engine::new();
+        engine.set_panel_registry(panel_registry.clone());
         engine.set_ad_blocker_enabled(preferences.ad_blocker_enabled);
         if let Some(url) = initial_http_first
             && let Some(tab_id) = spaces
@@ -149,7 +209,7 @@ impl Lumen {
             engine.navigate_http_first(tab_id, &url);
         }
 
-        Self {
+        let app = Self {
             spaces,
             active_space,
             sidebar_collapsed,
@@ -190,7 +250,10 @@ impl Lumen {
             suggestion_animation_serial: 0,
             selected_suggestion: None,
             recent_searches: history::load_recent_searches(),
-            zoom_levels: load_zooms(),
+            zoom_levels: plugins
+                .service(crate::plugin::SETTINGS)
+                .expect("core settings service is mounted")
+                .load_zooms(),
             #[cfg(all(target_os = "linux", not(test)))]
             active_zoom_target: None,
             show_suggestions: false,
@@ -216,10 +279,18 @@ impl Lumen {
             settings_section: SettingsSection::default(),
             preferences,
             plugins,
-            plugin_config,
+            panel_registry,
+            pending_plugin_review: None,
+            plugin_action_error: None,
             #[cfg(not(test))]
             cef_task_started: false,
-        }
+        };
+        app.plugins.emit(
+            "app.ready",
+            crate::plugin::EventMode::Parallel,
+            crate::plugin::EventPayload::Empty,
+        );
+        app
     }
     pub(crate) fn close_app_page(&mut self) {
         self.app_page = None;
@@ -227,14 +298,19 @@ impl Lumen {
     pub(crate) fn set_settings_section(&mut self, section: SettingsSection) {
         self.settings_section = section;
     }
-    pub(in crate::app) fn active_space(&self) -> &Space {
+    pub(crate) fn active_space(&self) -> &Space {
         self.spaces
             .iter()
             .find(|space| space.id == self.active_space)
             .expect("active space must exist")
     }
     pub(in crate::app) fn effective_sidebar_width(&self) -> f32 {
-        sidebar_width_for(self.sidebar_collapsed, self.sidebar_width)
+        sidebar_width_for(self.is_sidebar_collapsed(), self.sidebar_width)
+    }
+    pub(crate) fn is_sidebar_collapsed(&self) -> bool {
+        crate::plugin::active_layout_preset()
+            .and_then(|preset| preset.sidebar_collapsed)
+            .unwrap_or(self.sidebar_collapsed)
     }
     #[cfg(all(target_os = "linux", not(test)))]
     pub(in crate::app) fn browser_sizes_for_sidebar(
@@ -245,8 +321,9 @@ impl Lumen {
         let bounds = window.bounds();
         let content_width =
             (f32::from(bounds.size.width) - sidebar_width - 2.0 * CONTENT_BEZEL_X).max(100.0);
-        let height = (f32::from(bounds.size.height) - TOPBAR_HEIGHT - CONTENT_BEZEL_BOTTOM)
-            .max(100.0) as i32;
+        let height =
+            (f32::from(bounds.size.height) - visual::active_topbar_height() - CONTENT_BEZEL_BOTTOM)
+                .max(100.0) as i32;
         if let Some(pair) = self.current_split_pair() {
             let (left, right) = split_view::pane_widths(content_width, self.split_ratio);
             vec![
@@ -284,8 +361,9 @@ impl Lumen {
         let pair = self.current_split_pair();
         let bounds = window.bounds();
         let width = f32::from(bounds.size.width);
-        let height = (f32::from(bounds.size.height) - TOPBAR_HEIGHT - CONTENT_BEZEL_BOTTOM)
-            .max(100.0) as i32;
+        let height =
+            (f32::from(bounds.size.height) - visual::active_topbar_height() - CONTENT_BEZEL_BOTTOM)
+                .max(100.0) as i32;
         let sidebar_width = self.effective_sidebar_width();
         let content_width = (width - sidebar_width - CONTENT_BEZEL_X * 2.0).max(100.0);
         let fallback_widths = if pair.is_some() {

@@ -1,6 +1,7 @@
 pub mod app_pages;
 pub mod command_palette;
 pub mod motion;
+pub mod plugin_manager;
 pub mod sidebar;
 pub mod space_switcher;
 pub mod split_view;

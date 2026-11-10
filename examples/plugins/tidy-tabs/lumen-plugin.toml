@@ -1,0 +1,21 @@
+[plugin]
+id = "dev.example.tidy-tabs"
+name = "Tidy Tabs"
+version = "0.1.0"
+api = "1"
+kind = "wasm"
+entry = "lumen_tidy_tabs.wasm"
+description = "Sorts tabs by title while keeping pinned tabs first."
+
+[inject]
+required = ["tabs"]
+
+[permissions]
+tabs = "read-write"
+storage = false
+network = []
+
+[[contributes.commands]]
+id = "tidy-tabs.sort"
+title = "Sort tabs by title"
+palette = true

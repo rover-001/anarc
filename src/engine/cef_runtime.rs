@@ -1,6 +1,10 @@
 use super::*;
 
 impl Engine {
+    pub(crate) fn set_panel_registry(&mut self, registry: crate::plugin::PanelRegistryHandle) {
+        self.panel_packages = registry;
+    }
+
     pub fn new() -> Self {
         let (ui_update_wake, ui_update_receiver) = async_channel::bounded(1);
         Self {
@@ -23,6 +27,7 @@ impl Engine {
             shutdown_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shield: crate::shield::ShieldState::start(),
             https_state: Arc::new(Mutex::new(HttpsFirstState::default())),
+            panel_packages: crate::plugin::new_panel_registry(),
         }
     }
 
@@ -142,5 +147,27 @@ impl Engine {
     }
     pub fn is_initialized(&self) -> bool {
         self.initialized
+    }
+
+    pub(crate) fn register_panel_package(
+        &mut self,
+        package: crate::plugin::PanelPackage,
+    ) -> Result<(), String> {
+        let mut packages = self
+            .panel_packages
+            .lock()
+            .map_err(|_| "panel package registry is unavailable".to_owned())?;
+        if packages.contains_key(&package.id) {
+            return Err(format!("panel is already registered: {}", package.id));
+        }
+        packages.insert(package.id.clone(), package);
+        Ok(())
+    }
+
+    pub(crate) fn unregister_panel_package(&mut self, id: &str) -> bool {
+        self.panel_packages
+            .lock()
+            .ok()
+            .is_some_and(|mut packages| packages.remove(id).is_some())
     }
 }

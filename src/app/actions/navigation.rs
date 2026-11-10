@@ -4,7 +4,10 @@ impl Lumen {
     pub(crate) fn set_ad_blocker_enabled(&mut self, enabled: bool) {
         self.preferences.ad_blocker_enabled = enabled;
         self.engine.set_ad_blocker_enabled(enabled);
-        crate::settings::save_preferences(&self.preferences);
+        self.plugins
+            .service(crate::plugin::SETTINGS)
+            .expect("core settings service is mounted")
+            .save_preferences(&self.preferences);
     }
 
     pub(crate) fn toggle_shield_for_active_tab(&mut self) {
@@ -40,7 +43,12 @@ impl Lumen {
             .tabs
             .iter()
             .find(|tab| tab.id == self.active_tab_id());
-        let Some((tab_id, host)) = tab_id_and_host.map(|tab| (tab.id.clone(), url_host(&tab.url)))
+        let settings = self
+            .plugins
+            .service(crate::plugin::SETTINGS)
+            .expect("core settings service is mounted");
+        let Some((tab_id, host)) =
+            tab_id_and_host.map(|tab| (tab.id.clone(), settings.url_host(&tab.url)))
         else {
             return;
         };
@@ -52,7 +60,7 @@ impl Lumen {
                 let factor = (current + delta).clamp(1.2_f64.powf(-5.0), 1.2_f64.powf(5.0));
                 1.2_f64.powf(visual::zoom_level_for_factor(factor))
             };
-            crate::settings::save_preferences(&self.preferences);
+            settings.save_preferences(&self.preferences);
             return;
         }
         let default_level = visual::zoom_level_for_factor(self.preferences.default_zoom_factor);
@@ -69,19 +77,25 @@ impl Lumen {
             visual::zoom_level_for_factor(factor)
         };
         self.zoom_levels.insert(host, level);
-        save_zooms(&self.zoom_levels);
+        settings.save_zooms(&self.zoom_levels);
         self.engine.set_zoom_level(&tab_id, level);
     }
     pub(crate) fn set_search_engine(&mut self, engine: crate::settings::SearchEngine) {
         self.preferences.search_engine = engine;
-        crate::settings::save_preferences(&self.preferences);
+        self.plugins
+            .service(crate::plugin::SETTINGS)
+            .expect("core settings service is mounted")
+            .save_preferences(&self.preferences);
     }
     pub(crate) fn clear_history(&mut self) {
         self.recent_searches.clear();
         self.suggestions.clear();
         self.suggestion_snapshot.clear();
         self.show_suggestions = false;
-        history::clear_browsing_history();
+        self.plugins
+            .service(crate::plugin::HISTORY)
+            .expect("core history service is mounted")
+            .clear();
     }
     pub(in crate::app) fn navigate(&mut self, cx: &Context<Self>) {
         self.show_suggestions = false;
@@ -90,9 +104,12 @@ impl Lumen {
         let input = self.address.read(cx).value().to_string();
         let input = self.plugin_text_event("address.submit", input);
         let search_engine = self.preferences.search_engine;
+        let navigation = self
+            .plugins
+            .service(crate::plugin::NAVIGATION)
+            .expect("core navigation service is mounted");
         let space = self.active_space_mut();
-        let Some((id, url, http_first)) =
-            crate::navigation::submit_address_with_engine(space, &input, search_engine)
+        let Some((id, url, http_first)) = navigation.submit_address(space, &input, search_engine)
         else {
             return;
         };
@@ -120,9 +137,12 @@ impl Lumen {
         });
         let target = self.plugin_text_event("address.submit", target.to_string());
         let search_engine = self.preferences.search_engine;
+        let navigation = self
+            .plugins
+            .service(crate::plugin::NAVIGATION)
+            .expect("core navigation service is mounted");
         let space = self.active_space_mut();
-        let Some((id, url, http_first)) =
-            crate::navigation::submit_address_with_engine(space, &target, search_engine)
+        let Some((id, url, http_first)) = navigation.submit_address(space, &target, search_engine)
         else {
             return;
         };
@@ -137,7 +157,7 @@ impl Lumen {
         self.save_state();
     }
 
-    fn plugin_text_event(&self, name: &str, value: String) -> String {
+    pub(super) fn plugin_text_event(&self, name: &str, value: String) -> String {
         self.plugins
             .emit(
                 name,
@@ -170,27 +190,34 @@ impl Lumen {
         }
     }
     pub(in crate::app) fn update_suggestions(&mut self, query: &str) {
+        self.emit_plugin_text_with_mode(
+            "address.suggest",
+            crate::plugin::EventMode::Parallel,
+            query.to_owned(),
+        );
         let list = compute_suggestions(query);
         self.show_suggestions = !list.is_empty();
         self.suggestions = list;
         if !query.trim().is_empty() {
-            self.suggestions
-                .extend(
-                    history::search(query, 4)
-                        .into_iter()
-                        .map(|entry| SuggestionItem {
-                            icon_type: "globe".to_string(),
-                            title: if entry.title.is_empty() {
-                                entry.url.clone()
-                            } else {
-                                entry.title
-                            },
-                            target: entry.url,
-                        }),
-                );
+            self.suggestions.extend(
+                self.plugins
+                    .service(crate::plugin::HISTORY)
+                    .expect("core history service is mounted")
+                    .search(query, 4)
+                    .into_iter()
+                    .map(|entry| SuggestionItem {
+                        icon_type: "globe".to_string(),
+                        title: if entry.title.is_empty() {
+                            entry.url.clone()
+                        } else {
+                            entry.title
+                        },
+                        target: entry.url,
+                    }),
+            );
         }
         self.selected_suggestion = None;
-        if query.trim().is_empty() {
+        if query.trim().is_empty() && history::plugin_enabled() {
             self.suggestions
                 .extend(self.recent_searches.iter().map(|query| SuggestionItem {
                     icon_type: "search".to_string(),
@@ -202,6 +229,9 @@ impl Lumen {
         }
     }
     pub(in crate::app) fn remember_search(&mut self, query: &str, url: &str) {
+        if !history::plugin_enabled() {
+            return;
+        }
         let query = query.trim();
         if query.is_empty()
             || (!url.starts_with("https://www.google.com/search?q=")

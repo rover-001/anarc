@@ -232,3 +232,67 @@ fn ordering_ties_break_by_plugin_id_and_panics_fail_only_the_fiber() {
         Some(&FiberState::Failed("controlled panic".into()))
     );
 }
+
+#[test]
+fn core_palette_and_shortcut_registrations_match_the_baseline_snapshot() {
+    let mut kernel = Kernel::new();
+    kernel.mount(Box::new(CorePlugin::new())).unwrap();
+    let contributions = kernel.contributions();
+    let palette = contributions
+        .iter()
+        .filter(|item| item.key == "palette.action")
+        .map(|item| item.value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        palette,
+        [
+            "new-tab",
+            "close-tab",
+            "reopen-closed-tab",
+            "reload",
+            "find-in-page",
+            "zoom-in",
+            "zoom-out",
+            "zoom-reset",
+            "new-space",
+            "enable-plugin",
+            "disable-plugin",
+            "reload-plugins",
+            "open-plugin-folder",
+        ]
+    );
+
+    let shortcuts = contributions
+        .iter()
+        .filter(|item| item.key == "keymap.binding")
+        .map(|item| item.value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shortcuts,
+        [
+            "ctrl+l=focus-address",
+            "ctrl+shift+b=toggle-shield",
+            "ctrl+k=command-palette",
+            "ctrl+f=find-in-page",
+            "ctrl+shift+f=find-in-page",
+            "ctrl+t=new-tab",
+            "ctrl+shift+t=reopen-closed-tab",
+            "ctrl+w=close-tab",
+            "ctrl+tab=next-tab",
+            "ctrl+shift+tab=previous-tab",
+            "ctrl+r=reload",
+            "ctrl+shift+r=hard-reload",
+            "ctrl+==zoom-in",
+            "ctrl+shift+==zoom-in",
+            "ctrl++=zoom-in",
+            "ctrl+shift++=zoom-in",
+            "ctrl+-=zoom-out",
+            "ctrl+shift+-=zoom-out",
+            "ctrl+0=zoom-reset",
+            "ctrl+shift+0=zoom-reset",
+            "ctrl+1..9=activate-tab-number",
+            "ctrl+shift+s=split-view",
+            "ctrl+shift+w=close-window",
+        ]
+    );
+}
