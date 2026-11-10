@@ -1,0 +1,4 @@
+/* Sample only: packs are opt-in and styles run only on matching pages. */
+html {
+  scrollbar-color: #6f7180 #17181d;
+}

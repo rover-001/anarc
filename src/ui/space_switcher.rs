@@ -137,7 +137,6 @@ pub fn add_space_button(theme: SpaceTheme) -> impl IntoElement {
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgb(theme.surface))
         .text_color(rgb(theme.muted))
         .active(|style| style.opacity(0.92))
         .hover(move |style| {

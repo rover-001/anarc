@@ -15,6 +15,14 @@ pub(crate) enum SettingsSection {
     Privacy,
     Downloads,
     Shortcuts,
+    Plugins,
+}
+
+pub(super) struct PendingPluginReview {
+    pub(super) review: crate::ui::plugin_manager::PluginReview,
+    pub(super) source_path: std::path::PathBuf,
+    pub(super) signer_public_key: Option<Vec<u8>>,
+    pub(super) manifest_toml: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -155,9 +163,20 @@ pub(crate) struct Lumen {
     pub(super) plugins_menu_open: bool,
     pub(crate) settings_section: SettingsSection,
     pub(super) preferences: crate::settings::BrowserPreferences,
-    pub(super) plugins: crate::plugin::Kernel,
-    #[allow(dead_code)] // Retained until the plugin manager persists live changes.
-    pub(super) plugin_config: crate::plugin::PluginConfig,
+    pub(super) plugins: crate::plugin::PluginHost,
+    pub(super) panel_registry: crate::plugin::PanelRegistryHandle,
+    pub(super) pending_plugin_review: Option<PendingPluginReview>,
+    pub(super) plugin_action_error: Option<String>,
     #[cfg(not(test))]
     pub(super) cef_task_started: bool,
+}
+
+impl Drop for Lumen {
+    fn drop(&mut self) {
+        self.plugins.emit(
+            "app.quit",
+            crate::plugin::EventMode::Parallel,
+            crate::plugin::EventPayload::Empty,
+        );
+    }
 }

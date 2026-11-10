@@ -1,0 +1,11 @@
+[plugin]
+id = "example.vim-keymap"
+name = "Vim-like Keymap"
+version = "1.0.0"
+api = "1"
+kind = "pack"
+description = "Example key bindings for tab navigation."
+
+[pack.keymap]
+"ctrl-j" = "next-tab"
+"ctrl-k" = "previous-tab"

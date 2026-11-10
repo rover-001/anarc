@@ -5,13 +5,13 @@ use std::{
     fs,
     sync::{
         Mutex, OnceLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant},
 };
 
-static ENABLED: OnceLock<bool> = OnceLock::new();
+static PLUGIN_ENABLED: AtomicBool = AtomicBool::new(false);
 static REPORTER: OnceLock<()> = OnceLock::new();
 static OSR_PAINTS: AtomicU64 = AtomicU64::new(0);
 static UI_RENDERS: AtomicU64 = AtomicU64::new(0);
@@ -21,7 +21,17 @@ static FRAME_COPIES: AtomicU64 = AtomicU64::new(0);
 static BLOCKED_BY_TAB: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
 
 fn enabled() -> bool {
-    *ENABLED.get_or_init(|| std::env::var_os("LUMEN_STATS").is_some_and(|value| value == "1"))
+    PLUGIN_ENABLED.load(Ordering::Relaxed)
+        && std::env::var_os("ANARC_STATS").is_some_and(|value| value == "1")
+}
+
+pub(crate) fn set_plugin_enabled(enabled: bool) {
+    PLUGIN_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn plugin_enabled() -> bool {
+    PLUGIN_ENABLED.load(Ordering::Relaxed)
 }
 
 fn start_reporter() {

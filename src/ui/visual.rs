@@ -70,10 +70,11 @@ pub fn interpolate_theme(from: SpaceTheme, to: SpaceTheme, progress: f32) -> Spa
 pub fn space_theme(accent: u32) -> SpaceTheme {
     let surface = tint_rgb(0x191a1f, accent, 0.18);
     let border = tint_rgb(0x282b33, accent, 0.30);
+    let hover_tint = tint_rgb(0xffffff, accent, 0.35);
     SpaceTheme {
         base: tint_rgb(0x111216, accent, 0.24),
         surface,
-        surface_hover: tint_rgb(surface, 0xffffff, 0.12),
+        surface_hover: tint_rgb(surface, hover_tint, 0.12),
         border,
         border_hover: tint_rgb(border, 0xffffff, 0.16),
         accent,
@@ -235,13 +236,71 @@ mod tests {
         assert_ne!(middle.base, from.base);
         assert_ne!(middle.base, to.base);
     }
+
+    #[test]
+    fn pack_theme_tokens_override_only_values_the_pack_declares() {
+        let original = space_theme(0x9aa6ff);
+        let pack = crate::plugin::ThemePack {
+            mode: Some("dark".into()),
+            tokens: std::collections::BTreeMap::from([
+                ("base".into(), toml::Value::String("#101820".into())),
+                ("accent".into(), toml::Value::Integer(0x336699)),
+            ]),
+            motion: Default::default(),
+        };
+
+        let result = apply_pack_theme_tokens(original, &[pack]);
+        assert_eq!(result.base, 0x101820);
+        assert_eq!(result.accent, 0x336699);
+        assert_eq!(result.surface, original.surface);
+        assert_eq!(result.text, original.text);
+    }
+
+    #[test]
+    fn pack_theme_tokens_override_border_hover() {
+        let original = space_theme(0x9aa6ff);
+        let pack = crate::plugin::ThemePack {
+            mode: None,
+            tokens: std::collections::BTreeMap::from([(
+                "border_hover".into(),
+                toml::Value::String("#123456".into()),
+            )]),
+            motion: Default::default(),
+        };
+
+        let result = apply_pack_theme_tokens(original, &[pack]);
+        assert_eq!(result.border_hover, 0x123456);
+        assert_eq!(result.base, original.base);
+    }
+
+    #[test]
+    fn pack_theme_colors_accept_hex_strings_and_rgb_integers() {
+        assert_eq!(
+            parse_theme_color(&toml::Value::from("#a1b2c3")),
+            Some(0xa1b2c3)
+        );
+        assert_eq!(
+            parse_theme_color(&toml::Value::from(0x123456)),
+            Some(0x123456)
+        );
+        assert_eq!(parse_theme_color(&toml::Value::from("bad-color")), None);
+        assert_eq!(parse_theme_color(&toml::Value::from(0x1_000000)), None);
+    }
 }
 
 /// Derive surfaces and text from the space's appearance and tint controls.
 pub fn theme_for_space(space: &crate::model::Space) -> SpaceTheme {
+    let pack_themes = crate::plugin::active_theme_overrides();
     let mut theme = space_theme_colors(space.color, &space.theme_colors);
-    let light =
-        space.theme_appearance == 1 || (space.theme_appearance == 0 && space.theme_auto_light);
+    let pack_mode = pack_themes
+        .iter()
+        .filter_map(|pack| pack.mode.as_deref())
+        .last();
+    let light = match pack_mode {
+        Some("dark") => false,
+        Some("light") => true,
+        _ => space.theme_appearance == 1 || (space.theme_appearance == 0 && space.theme_auto_light),
+    };
     let base = if light { 0xf1f2f5 } else { 0x111216 };
     theme.base = tint_rgb(base, theme.accent, space.theme_intensity);
     theme.surface = tint_rgb(
@@ -249,12 +308,115 @@ pub fn theme_for_space(space: &crate::model::Space) -> SpaceTheme {
         theme.accent,
         space.theme_intensity * 0.75,
     );
-    theme.surface_hover = tint_rgb(theme.surface, if light { 0x000000 } else { 0xffffff }, 0.10);
+    let hover_tint = if light {
+        tint_rgb(0x000000, theme.accent, 0.25)
+    } else {
+        tint_rgb(0xffffff, theme.accent, 0.35)
+    };
+    theme.surface_hover = tint_rgb(theme.surface, hover_tint, 0.10);
     theme.border = tint_rgb(theme.base, if light { 0x000000 } else { 0xffffff }, 0.16);
     theme.border_hover = tint_rgb(theme.border, theme.accent, 0.30);
     theme.text = if light { 0x20232b } else { 0xe6e7eb };
     theme.muted = if light { 0x575b65 } else { 0x9fa3ae };
+    apply_pack_theme_tokens(theme, &pack_themes)
+}
+
+fn apply_pack_theme_tokens(
+    mut theme: SpaceTheme,
+    packs: &[crate::plugin::ThemePack],
+) -> SpaceTheme {
+    for pack in packs {
+        if let Some(value) = pack.tokens.get("base").and_then(parse_theme_color) {
+            theme.base = value;
+        }
+        if let Some(value) = pack.tokens.get("surface").and_then(parse_theme_color) {
+            theme.surface = value;
+        }
+        if let Some(value) = pack.tokens.get("surface_hover").and_then(parse_theme_color) {
+            theme.surface_hover = value;
+        }
+        if let Some(value) = pack.tokens.get("border").and_then(parse_theme_color) {
+            theme.border = value;
+        }
+        if let Some(value) = pack.tokens.get("border_hover").and_then(parse_theme_color) {
+            theme.border_hover = value;
+        }
+        if let Some(value) = pack.tokens.get("accent").and_then(parse_theme_color) {
+            theme.accent = value;
+        }
+        if let Some(value) = pack.tokens.get("text").and_then(parse_theme_color) {
+            theme.text = value;
+        }
+        if let Some(value) = pack.tokens.get("muted").and_then(parse_theme_color) {
+            theme.muted = value;
+        }
+    }
     theme
+}
+
+pub fn active_layout_preset() -> Option<crate::plugin::LayoutPack> {
+    crate::plugin::active_layout_preset()
+}
+
+pub fn anarc_logo() -> Option<std::sync::Arc<gpui_kit::RenderImage>> {
+    static LOGO: std::sync::OnceLock<Option<std::sync::Arc<gpui_kit::RenderImage>>> =
+        std::sync::OnceLock::new();
+    LOGO.get_or_init(|| {
+        let bytes = include_bytes!("../../assets/anarc_logo.png");
+        let decoded = image::load_from_memory(bytes).ok()?;
+        let mut rgba = decoded.to_rgba8();
+        for pixel in rgba.pixels_mut() {
+            pixel.0.swap(0, 2);
+        }
+        let frame = image::Frame::new(rgba);
+        Some(std::sync::Arc::new(gpui_kit::RenderImage::new(
+            smallvec::smallvec![frame],
+        )))
+    })
+    .clone()
+}
+
+pub fn active_topbar_height() -> f32 {
+    match active_layout_preset()
+        .as_ref()
+        .and_then(|preset| preset.topbar.as_deref())
+    {
+        Some("hidden") => 0.0,
+        Some("compact") => 40.0 * UI_SCALE,
+        _ => TOPBAR_HEIGHT,
+    }
+}
+
+pub fn active_card_radius() -> f32 {
+    let pack_themes = crate::plugin::active_theme_overrides();
+    for pack in pack_themes.iter().rev() {
+        if let Some(val) = pack.tokens.get("card_radius") {
+            if let Some(n) = val
+                .as_float()
+                .or_else(|| val.as_integer().map(|i| i as f64))
+            {
+                return (n as f32) * UI_SCALE;
+            }
+        }
+    }
+    16.0 * UI_SCALE
+}
+
+fn parse_theme_color(value: &toml::Value) -> Option<u32> {
+    if let Some(integer) = value.as_integer() {
+        return u32::try_from(integer)
+            .ok()
+            .filter(|color| *color <= 0x00ff_ffff);
+    }
+    let value = value.as_str()?.trim();
+    let value = value
+        .strip_prefix('#')
+        .or_else(|| value.strip_prefix("0x"))
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+    (value.len() == 6)
+        .then(|| u32::from_str_radix(value, 16).ok())
+        .flatten()
 }
 
 // Reuse the sparse grain texture when only its opacity or the theme colors change.

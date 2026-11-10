@@ -5,7 +5,7 @@ pub(crate) type Disposer = Box<dyn FnOnce()>;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ServiceKey<S: 'static> {
-    name: &'static str,
+    pub(super) name: &'static str,
     marker: PhantomData<fn() -> S>,
 }
 
@@ -20,7 +20,7 @@ impl<S: 'static> ServiceKey<S> {
 
 pub(super) struct ServiceEntry {
     owner: String,
-    value: Rc<dyn Any>,
+    pub(super) value: Rc<dyn Any>,
 }
 
 pub(crate) struct Shared {

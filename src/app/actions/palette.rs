@@ -1,7 +1,7 @@
 use super::super::*;
 
 impl Lumen {
-    pub(in crate::app) fn command_items(&self, query: &str) -> Vec<PaletteItem> {
+    pub(crate) fn command_items(&self, query: &str) -> Vec<PaletteItem> {
         let tabs: Vec<_> = self
             .spaces
             .iter()
@@ -15,7 +15,11 @@ impl Lumen {
                 })
             })
             .collect();
-        let history = history::search(query, 20);
+        let history = self
+            .plugins
+            .service(crate::plugin::HISTORY)
+            .expect("core history service is mounted")
+            .search(query, 20);
         let registered = self
             .plugins
             .contributions()
@@ -28,7 +32,8 @@ impl Lumen {
             .copied()
             .filter(|command| registered.contains(command.id))
             .collect::<Vec<_>>();
-        command_palette::rank_items(query, &tabs, &history, &actions)
+        let plugins = self.plugins.rows();
+        command_palette::rank_items(query, &tabs, &history, &actions, &plugins)
     }
     pub(in crate::app) fn open_command_palette(
         &mut self,
@@ -54,7 +59,7 @@ impl Lumen {
         self.show_command_palette = false;
         self.focus_browser(window, cx);
     }
-    pub(in crate::app) fn execute_palette_item(
+    pub(crate) fn execute_palette_item(
         &mut self,
         item: PaletteItem,
         window: &mut Window,
@@ -67,7 +72,7 @@ impl Lumen {
                     self.spaces.iter_mut().find(|space| space.id == space_id)
                 {
                     if space.tabs.iter().any(|tab| tab.id == tab_id) {
-                        space.active = Some(tab_id);
+                        space.active = Some(tab_id.clone());
                         true
                     } else {
                         false
@@ -76,10 +81,16 @@ impl Lumen {
                     false
                 };
                 if valid {
+                    self.emit_plugin_text("tab.activated", tab_id);
                     self.activate_space_immediate(&space_id, cx);
                 }
             }
             PaletteTarget::History(url) => self.navigate_to(&url, window, cx),
+            PaletteTarget::PluginToggle { id, enabled } => {
+                if let Err(error) = self.set_plugin_enabled(&id, enabled) {
+                    eprintln!("Failed to update plugin {id}: {error}");
+                }
+            }
             PaletteTarget::Action(action) => match action {
                 PaletteAction::NewTab => self.add_tab(),
                 PaletteAction::CloseTab => self.close_active_tab(),
@@ -95,6 +106,21 @@ impl Lumen {
                 PaletteAction::ZoomOut => self.change_zoom(-0.1),
                 PaletteAction::ZoomReset => self.change_zoom(0.0),
                 PaletteAction::NewSpace => self.open_create_space_modal(window, cx),
+                PaletteAction::EnablePlugin | PaletteAction::DisablePlugin => {
+                    self.app_page = Some(AppPage::Settings);
+                    self.settings_section = SettingsSection::Plugins;
+                    self.plugins_menu_open = false;
+                }
+                PaletteAction::ReloadPlugins => {
+                    if let Err(error) = self.reload_plugins() {
+                        eprintln!("Failed to reload plugins: {error}");
+                    }
+                }
+                PaletteAction::OpenPluginFolder => {
+                    if let Err(error) = self.open_plugin_folder() {
+                        eprintln!("Failed to open plugin folder: {error}");
+                    }
+                }
             },
         }
         cx.notify();

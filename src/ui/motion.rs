@@ -16,7 +16,7 @@ pub fn duration(requested: Duration) -> Duration {
 }
 
 pub fn reduced_motion() -> bool {
-    std::env::var_os("LUMEN_REDUCED_MOTION").is_some_and(|value| value == "1")
+    std::env::var_os("ANARC_REDUCED_MOTION").is_some_and(|value| value == "1")
 }
 
 /// Keep values passed to GPUI percentage and opacity APIs inside their valid range.

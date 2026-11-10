@@ -35,6 +35,7 @@ struct EngineEvents {
     fullscreen: Vec<(String, bool)>,
     downloads: Vec<DownloadRecord>,
     created: Vec<(String, Browser)>,
+    plugin_events: Vec<(String, String)>,
 }
 
 fn origin_favicon_url(page_url: &str) -> Option<String> {
@@ -221,7 +222,7 @@ pub fn should_store_favicon(
 }
 
 fn favicon_debug(message: std::fmt::Arguments<'_>) {
-    if std::env::var_os("LUMEN_DEBUG_FAVICON").is_some_and(|value| value == "1") {
+    if std::env::var_os("ANARC_DEBUG_FAVICON").is_some_and(|value| value == "1") {
         eprintln!("Lumen favicon: {message}");
     }
 }
@@ -231,7 +232,7 @@ pub fn log_favicon_row_rendered(tab_id: &str, has_image: bool) {
 }
 
 pub fn detect_system_refresh_rate() -> Option<i32> {
-    if let Ok(val) = std::env::var("LUMEN_FPS")
+    if let Ok(val) = std::env::var("ANARC_FPS")
         && let Ok(fps) = val.parse::<i32>()
         && (30..=360).contains(&fps)
     {
@@ -310,6 +311,12 @@ cef::wrap_app! {
     struct LumenCefApp;
 
     impl App {
+        fn on_register_custom_schemes(&self, registrar: Option<&mut SchemeRegistrar>) {
+            if let Some(registrar) = registrar {
+                panel_scheme::register_panel_scheme(registrar);
+            }
+        }
+
         fn on_before_command_line_processing(
             &self,
             _process_type: Option<&CefString>,
@@ -456,6 +463,7 @@ pub struct Engine {
     shutdown_requested: Arc<std::sync::atomic::AtomicBool>,
     shield: Arc<crate::shield::ShieldState>,
     https_state: Arc<Mutex<HttpsFirstState>>,
+    panel_packages: panel_scheme::PanelRegistry,
 }
 
 fn resize_should_send(
@@ -475,7 +483,7 @@ fn resize_should_send(
 
 fn resize_debug(message: std::fmt::Arguments<'_>) {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *ENABLED.get_or_init(|| std::env::var("LUMEN_DEBUG_RESIZE").as_deref() == Ok("1")) {
+    if *ENABLED.get_or_init(|| std::env::var("ANARC_DEBUG_RESIZE").as_deref() == Ok("1")) {
         eprintln!("[resize-debug] {message}");
     }
 }
@@ -483,6 +491,7 @@ fn resize_debug(message: std::fmt::Arguments<'_>) {
 mod browser;
 mod cef_runtime;
 mod navigation;
+mod panel_scheme;
 
 pub fn windows_key_code_for_key(key: &str) -> i32 {
     match key.to_ascii_lowercase().as_str() {

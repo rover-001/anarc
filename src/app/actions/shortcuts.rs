@@ -1,7 +1,7 @@
 use super::super::*;
 
 impl Lumen {
-    pub(in crate::app) fn cycle_tab(&mut self, reverse: bool) {
+    pub(crate) fn cycle_tab(&mut self, reverse: bool) {
         let Some(space) = self
             .spaces
             .iter_mut()
@@ -22,10 +22,13 @@ impl Lumen {
         } else {
             (current + 1) % space.tabs.len()
         };
-        space.active = Some(space.tabs[next].id.clone());
+        let active_id = space.tabs[next].id.clone();
+        space.active = Some(active_id.clone());
+        let _ = space;
+        self.emit_plugin_text("tab.activated", active_id);
         self.save_state();
     }
-    pub(in crate::app) fn activate_tab_number(&mut self, number: usize) {
+    pub(crate) fn activate_tab_number(&mut self, number: usize) {
         let Some(space) = self
             .spaces
             .iter_mut()
@@ -39,11 +42,14 @@ impl Lumen {
             number.checked_sub(1)
         };
         if let Some(tab) = index.and_then(|index| space.tabs.get(index)) {
-            space.active = Some(tab.id.clone());
+            let active_id = tab.id.clone();
+            space.active = Some(active_id.clone());
+            let _ = space;
+            self.emit_plugin_text("tab.activated", active_id);
             self.save_state();
         }
     }
-    pub(in crate::app) fn is_app_shortcut(key: &str, control: bool, shift: bool) -> bool {
+    pub(crate) fn is_app_shortcut(key: &str, control: bool, shift: bool) -> bool {
         if !control {
             return false;
         }
@@ -73,12 +79,7 @@ impl Lumen {
                 (registered_key == shortcut).then(|| action.to_string())
             })
     }
-    pub(in crate::app) fn handle_shortcut(
-        &mut self,
-        key: &str,
-        control: bool,
-        shift: bool,
-    ) -> bool {
+    pub(crate) fn handle_shortcut(&mut self, key: &str, control: bool, shift: bool) -> bool {
         let Some(action) = self.registered_shortcut_action(key, control, shift) else {
             return false;
         };

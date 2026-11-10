@@ -1,11 +1,17 @@
 //! Runtime policy for keeping inactive CEF browsers within a bounded footprint.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::model::TabState;
 
 pub const DISCARD_AFTER: Duration = Duration::from_secs(30 * 60);
+static PLUGIN_ENABLED: AtomicBool = AtomicBool::new(true);
+
+pub(crate) fn set_plugin_enabled(enabled: bool) {
+    PLUGIN_ENABLED.store(enabled, Ordering::Relaxed);
+}
 
 #[derive(Default)]
 pub struct TabLifecycle {
@@ -48,6 +54,9 @@ impl TabLifecycle {
     }
 
     pub fn discard_expired_many(&mut self, now: Instant, active: &[String]) -> Vec<String> {
+        if !PLUGIN_ENABLED.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
         let expired: Vec<String> = self
             .last_active
             .iter()
@@ -71,6 +80,7 @@ mod tests {
 
     #[test]
     fn discards_only_inactive_live_tabs_after_thirty_minutes() {
+        set_plugin_enabled(true);
         let start = Instant::now();
         let mut lifecycle = TabLifecycle::default();
         lifecycle.opened("old", start);

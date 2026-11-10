@@ -136,10 +136,11 @@ impl Lumen {
         self.theme_transition = None;
     }
 
-    pub(in crate::app) fn activate_space(&mut self, id: &str) {
+    pub(crate) fn activate_space(&mut self, id: &str) {
         if self.active_space == id {
             return;
         }
+        let previous_space = self.active_space.clone();
         if let Some(to_index) = self.spaces.iter().position(|space| space.id == id) {
             let from_index = self
                 .spaces
@@ -202,6 +203,7 @@ impl Lumen {
         }
         self.show_suggestions = false;
         self.active_space = id.to_owned();
+        self.emit_plugin_text("space.switched", format!("{previous_space}\n{id}"));
         self.save_state();
     }
     pub(in crate::app) fn activate_space_immediate(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -216,7 +218,11 @@ impl Lumen {
             viewport.clear_transition_image();
             cx.notify();
         });
+        let previous_space = self.active_space.clone();
         self.active_space = id.to_owned();
+        if previous_space != id {
+            self.emit_plugin_text("space.switched", format!("{previous_space}\n{id}"));
+        }
         self.space_switch_transition = None;
         self.theme_transition = None;
         self.show_suggestions = false;
