@@ -262,6 +262,7 @@ impl Lumen {
                                 .h(px(ADDRESS_BAR_HEIGHT))
                                 .px_3()
                                 .rounded_lg()
+                                .overflow_hidden()
                                 .bg(rgb(theme.surface))
                                 .flex()
                                 .items_center()
@@ -630,6 +631,26 @@ impl Lumen {
                 .unwrap_or_default()
         };
         let closing_suggestions = self.suggestion_closing.as_ref().map(|(_, serial)| *serial);
+        let suggestion_left = (if sidebar_on_right {
+            0.0
+        } else {
+            sidebar_width_f32
+        }) + 16.0 * UI_SCALE
+            + NAV_BUTTON_SIZE * 2.0
+            + 12.0 * UI_SCALE;
+        let suggestion_right = (if sidebar_on_right {
+            sidebar_width_f32
+        } else {
+            0.0
+        }) + 16.0 * UI_SCALE
+            + 36.0 * UI_SCALE
+            + if crate::plugins::downloads_enabled() {
+                36.0 * UI_SCALE
+            } else {
+                0.0
+            };
+        let suggestion_width =
+            (f32::from(window.bounds().size.width) - suggestion_left - suggestion_right).max(1.0);
 
         root = root.when(suggestions_open || closing_suggestions.is_some(), |this| {
             let mut list = div()
@@ -637,14 +658,8 @@ impl Lumen {
                 .occlude()
                 .absolute()
                 .top(px(topbar_height + 4.0 * UI_SCALE))
-                .left(px((if sidebar_on_right {
-                    0.0
-                } else {
-                    sidebar_width_f32
-                }) + 16.0 * UI_SCALE
-                    + NAV_BUTTON_SIZE * 2.0
-                    + 12.0 * UI_SCALE))
-                .w(px(560.0 * UI_SCALE))
+                .left(px(suggestion_left))
+                .w(px(suggestion_width))
                 .bg(rgb(theme.surface))
                 .border_1()
                 .border_color(rgb(theme.border))
@@ -661,6 +676,7 @@ impl Lumen {
                 list = list.child(
                     div()
                         .id(format!("suggestion-item-{idx}"))
+                        .w_full()
                         .px_3()
                         .py_2()
                         .rounded_lg()
@@ -686,7 +702,17 @@ impl Lumen {
                                     _ => Icon::new(IconName::Search),
                                 }),
                         )
-                        .child(div().text_sm().text_color(rgb(theme.text)).child(title))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .text_sm()
+                                .text_color(rgb(theme.text))
+                                .child(title),
+                        )
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.navigate_to(&target, window, cx);
                             cx.notify();
@@ -699,10 +725,10 @@ impl Lumen {
                     format!("autocomplete-suggestions-exit-{serial}"),
                     Animation::new(ui::motion::duration(ui::motion::MOTION_FAST))
                         .with_easing(ui::motion::ease_out_quint),
-                    |panel, progress| {
+                    move |panel, progress| {
                         let remaining = ui::motion::clamp_percentage(1.0 - progress);
                         panel
-                            .w(px(560.0 * UI_SCALE * (0.96 + 0.04 * remaining)))
+                            .w(px(suggestion_width * (0.96 + 0.04 * remaining)))
                             .opacity(remaining)
                     },
                 )
@@ -715,9 +741,9 @@ impl Lumen {
                     ),
                     Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
                         .with_easing(ui::motion::ease_out_quint),
-                    |panel, progress| {
+                    move |panel, progress| {
                         panel
-                            .w(px(560.0 * UI_SCALE * (0.96 + 0.04 * progress)))
+                            .w(px(suggestion_width * (0.96 + 0.04 * progress)))
                             .opacity(ui::motion::clamp_percentage(progress))
                     },
                 )
@@ -737,6 +763,7 @@ impl Lumen {
                     .h(px(36.0 * UI_SCALE))
                     .px_3()
                     .rounded_lg()
+                    .overflow_hidden()
                     .bg(rgb(theme.surface))
                     .border_1()
                     .border_color(rgb(theme.border))
@@ -822,6 +849,7 @@ impl Lumen {
                         .py_3()
                         .border_b_1()
                         .border_color(rgb(theme.border))
+                        .overflow_hidden()
                         .child(
                             Input::new(&self.command_input)
                                 .id("command-palette-input")

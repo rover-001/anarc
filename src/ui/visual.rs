@@ -30,7 +30,7 @@ pub fn sidebar_row_rect(sidebar_width: f32, row_index: usize) -> SidebarRowRect 
     }
 }
 
-pub const DEFAULT_PAGE_ZOOM_FACTOR: f64 = 0.8;
+pub const DEFAULT_PAGE_ZOOM_FACTOR: f64 = 0.7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpaceTheme {
@@ -134,8 +134,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_zoom_is_eighty_percent() {
-        assert!((1.2_f64.powf(default_zoom_level()) - 0.8).abs() < 1e-12);
+    fn default_zoom_is_seventy_percent() {
+        assert!((1.2_f64.powf(default_zoom_level()) - 0.7).abs() < 1e-12);
     }
 
     #[test]

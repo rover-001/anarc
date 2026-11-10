@@ -394,55 +394,24 @@ impl Lumen {
                     cx.listener(|_, _, _, cx| cx.stop_propagation()),
                 );
 
-            if menu.showing_split_targets {
-                if crate::plugins::split_view_enabled() {
-                    panel = panel.child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(theme.muted))
-                            .child("Split with…"),
-                    );
-                    for (id, title, favicon) in tabs {
-                        if id == &target_id {
-                            continue;
-                        }
-                        let other_id = id.clone();
-                        panel = panel.child(
-                            div()
-                                .id(format!("split-target-{id}"))
-                                .px_2()
-                                .py_2()
-                                .rounded_md()
-                                .text_sm()
-                                .text_color(rgb(theme.text))
-                                .hover(move |style| style.bg(rgb(theme.surface_hover)))
-                                .cursor_pointer()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(tab_list::favicon(favicon.clone()))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .overflow_hidden()
-                                        .whitespace_nowrap()
-                                        .text_ellipsis()
-                                        .child(title.clone()),
-                                )
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.choose_split_target(&other_id);
-                                    cx.notify();
-                                })),
-                        );
+            if menu.showing_split_targets && crate::plugins::split_view_enabled() {
+                panel = panel.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(theme.muted))
+                        .child("Split with…"),
+                );
+                for (id, title, favicon) in tabs {
+                    if id == &target_id {
+                        continue;
                     }
-                } else {
-                    let favorite_id = target_id.clone();
+                    let other_id = id.clone();
                     panel = panel.child(
                         div()
-                            .id("ctx-favorite")
+                            .id(format!("split-target-{id}"))
                             .px_2()
                             .py_2()
                             .rounded_md()
@@ -453,166 +422,195 @@ impl Lumen {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(Icon::new(if target_favorite {
-                                IconName::StarOff
-                            } else {
-                                IconName::StarFill
-                            }))
-                            .child(if target_favorite {
-                                "Remove from favorites"
-                            } else {
-                                "Add to favorites"
-                            })
+                            .child(tab_list::favicon(favicon.clone()))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(title.clone()),
+                            )
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.favorite_tab(&favorite_id, !target_favorite);
-                                this.tab_context_menu = None;
-                                cx.notify();
-                            })),
-                    );
-                    let pin_id = target_id.clone();
-                    panel = panel.child(
-                        div()
-                            .id("ctx-pin")
-                            .px_2()
-                            .py_2()
-                            .rounded_md()
-                            .text_sm()
-                            .text_color(rgb(theme.text))
-                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(Icon::new(if target_pinned {
-                                IconName::PinOff
-                            } else {
-                                IconName::Pin
-                            }))
-                            .child(if target_pinned {
-                                "Unpin tab"
-                            } else {
-                                "Pin tab"
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.pin_tab(&pin_id, !target_pinned);
-                                this.tab_context_menu = None;
-                                cx.notify();
-                            })),
-                    );
-                    panel = panel.child(div().h(px(1.0)).mx_1().bg(rgb(theme.border)));
-                    panel = panel.child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(theme.muted))
-                            .child("Folders"),
-                    );
-                    for (folder_id, folder_name) in &target_folders {
-                        if target_folder.as_deref() == Some(folder_id.as_str()) {
-                            continue;
-                        }
-                        let move_id = target_id.clone();
-                        let move_folder = folder_id.clone();
-                        panel = panel.child(
-                            div()
-                                .id(format!("ctx-folder-{folder_id}"))
-                                .px_2()
-                                .py_2()
-                                .rounded_md()
-                                .text_sm()
-                                .text_color(rgb(theme.text))
-                                .hover(move |style| style.bg(rgb(theme.surface_hover)))
-                                .cursor_pointer()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(Icon::new(IconName::Folder))
-                                .child(format!("Move to {folder_name}"))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.move_tab_to_folder(&move_id, &move_folder);
-                                    this.tab_context_menu = None;
-                                    cx.notify();
-                                })),
-                        );
-                    }
-                    if target_folder.is_some() {
-                        let remove_id = target_id.clone();
-                        panel = panel.child(
-                            div()
-                                .id("ctx-remove-folder")
-                                .px_2()
-                                .py_2()
-                                .rounded_md()
-                                .text_sm()
-                                .text_color(rgb(theme.text))
-                                .hover(move |style| style.bg(rgb(theme.surface_hover)))
-                                .cursor_pointer()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(Icon::new(IconName::FolderX))
-                                .child("Remove from folder")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.remove_tab_from_folder(&remove_id);
-                                    this.tab_context_menu = None;
-                                    cx.notify();
-                                })),
-                        );
-                    }
-                    let new_folder_target = target_id.clone();
-                    panel = panel.child(
-                        div()
-                            .id("ctx-new-folder")
-                            .px_2()
-                            .py_2()
-                            .rounded_md()
-                            .text_sm()
-                            .text_color(rgb(theme.text))
-                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(Icon::new(IconName::FolderPlus))
-                            .child("New folder…")
-                            .on_click(cx.listener(
-                                move |this, event: &gpui_kit::ClickEvent, window, cx| {
-                                    this.open_create_folder_modal(
-                                        Some(new_folder_target.clone()),
-                                        event.position(),
-                                        window,
-                                        cx,
-                                    );
-                                    cx.notify();
-                                },
-                            )),
-                    );
-                    panel = panel.child(div().h(px(1.0)).mx_1().bg(rgb(theme.border)));
-                    panel = panel.child(
-                        div()
-                            .id("ctx-split-with")
-                            .px_2()
-                            .py_2()
-                            .rounded_md()
-                            .text_sm()
-                            .text_color(rgb(theme.text))
-                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(Icon::new(IconName::Columns2))
-                            .child("Split with…")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(menu) = &mut this.tab_context_menu {
-                                    menu.showing_split_targets = true;
-                                }
+                                this.choose_split_target(&other_id);
                                 cx.notify();
                             })),
                     );
                 }
+            } else {
+                let favorite_id = target_id.clone();
+                panel = panel.child(
+                    div()
+                        .id("ctx-favorite")
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(theme.text))
+                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(if target_favorite {
+                            IconName::StarOff
+                        } else {
+                            IconName::StarFill
+                        }))
+                        .child(if target_favorite {
+                            "Remove from favorites"
+                        } else {
+                            "Add to favorites"
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.favorite_tab(&favorite_id, !target_favorite);
+                            this.tab_context_menu = None;
+                            cx.notify();
+                        })),
+                );
+                let pin_id = target_id.clone();
+                panel = panel.child(
+                    div()
+                        .id("ctx-pin")
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(theme.text))
+                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(if target_pinned {
+                            IconName::PinOff
+                        } else {
+                            IconName::Pin
+                        }))
+                        .child(if target_pinned {
+                            "Unpin tab"
+                        } else {
+                            "Pin tab"
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.pin_tab(&pin_id, !target_pinned);
+                            this.tab_context_menu = None;
+                            cx.notify();
+                        })),
+                );
+                panel = panel.child(div().h(px(1.0)).mx_1().bg(rgb(theme.border)));
+                panel = panel.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(theme.muted))
+                        .child("Folders"),
+                );
+                for (folder_id, folder_name) in &target_folders {
+                    if target_folder.as_deref() == Some(folder_id.as_str()) {
+                        continue;
+                    }
+                    let move_id = target_id.clone();
+                    let move_folder = folder_id.clone();
+                    panel = panel.child(
+                        div()
+                            .id(format!("ctx-folder-{folder_id}"))
+                            .px_2()
+                            .py_2()
+                            .rounded_md()
+                            .text_sm()
+                            .text_color(rgb(theme.text))
+                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Icon::new(IconName::Folder))
+                            .child(format!("Move to {folder_name}"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.move_tab_to_folder(&move_id, &move_folder);
+                                this.tab_context_menu = None;
+                                cx.notify();
+                            })),
+                    );
+                }
+                if target_folder.is_some() {
+                    let remove_id = target_id.clone();
+                    panel = panel.child(
+                        div()
+                            .id("ctx-remove-folder")
+                            .px_2()
+                            .py_2()
+                            .rounded_md()
+                            .text_sm()
+                            .text_color(rgb(theme.text))
+                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Icon::new(IconName::FolderX))
+                            .child("Remove from folder")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.remove_tab_from_folder(&remove_id);
+                                this.tab_context_menu = None;
+                                cx.notify();
+                            })),
+                    );
+                }
+                let new_folder_target = target_id.clone();
+                panel = panel.child(
+                    div()
+                        .id("ctx-new-folder")
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(theme.text))
+                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(IconName::FolderPlus))
+                        .child("New folder…")
+                        .on_click(cx.listener(
+                            move |this, event: &gpui_kit::ClickEvent, window, cx| {
+                                this.open_create_folder_modal(
+                                    Some(new_folder_target.clone()),
+                                    event.position(),
+                                    window,
+                                    cx,
+                                );
+                                cx.notify();
+                            },
+                        )),
+                );
+                panel = panel.child(div().h(px(1.0)).mx_1().bg(rgb(theme.border)));
+                panel = panel.child(
+                    div()
+                        .id("ctx-split-with")
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(theme.text))
+                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(IconName::Columns2))
+                        .child("Split with…")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(menu) = &mut this.tab_context_menu {
+                                menu.showing_split_targets = true;
+                            }
+                            cx.notify();
+                        })),
+                );
                 if is_split && crate::plugins::split_view_enabled() {
                     panel = panel.child(
                         div()
