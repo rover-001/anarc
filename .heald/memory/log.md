@@ -158,3 +158,19 @@ Removed new-tab welcome element; removed logo from sidebar space header and coll
 ## Session 2026-11-10T10:45:00.459526582+00:00
 
 Audited codebase for secrets, hardened .gitignore, updated README.md with comprehensive installation and CEF setup guides for Linux distributions, created private GitHub repository rover-001/anarc, and pushed all code to origin/main.
+
+## Session 2026-11-10T11:55:20.496892931+00:00
+
+Audited all 60+ files across engine, UI render, plugins, shield, persistence, navigation, and build configurations. Generated exhaustive performance.md categorized into P0-P3 priorities with concrete drop-in code fixes.
+
+## Session 2026-11-10T12:05:55.549119705+00:00
+
+Configured Cargo.toml release profile (opt-level 3, thin LTO, 1 codegen-unit, panic abort, strip symbols), pruned image crate default features, added .cargo/config.toml with native target cpu rustflags, and verified 140/140 tests pass.
+
+## Session 2026-11-10T12:16:40.958615486+00:00
+
+Renamed crate and binary to anarc across Cargo.toml, install.sh, and CLI. Fixed Chromium subprocess launch bug by setting browser_subprocess_path, resources_dir_path, and locales_dir_path in CEF Settings and adding runtime symlinks. Fixed stale page flash on tab close and navigation by cleaning transition frames on blank/unloaded tabs.
+
+## Session 2026-11-10T12:20:51.642219001+00:00
+
+Committed and pushed fixes for Chromium launch on startup, stale page flash on tab close/search, Anarc renaming, and performance optimizations; updated install.sh with dual anarc/lumen symlinks

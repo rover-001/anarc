@@ -67,7 +67,7 @@ fn handle_import_cli() -> bool {
         return false;
     };
     let Some(browser) = args.get(index + 1) else {
-        eprintln!("usage: lumen --import chrome|chromium|brave|edge|all");
+        eprintln!("usage: anarc --import chrome|chromium|brave|edge|all");
         std::process::exit(2);
     };
     if !plugins::import_enabled_from_config() {

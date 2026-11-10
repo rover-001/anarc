@@ -42,12 +42,13 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # --- Locate payload -------------------------------------------------------
-# Release-bundle layout: ./lumen + ./cef_<arch>/ next to this script.
+# Release-bundle layout: ./anarc (or ./lumen) + ./cef_<arch>/ next to this script.
 BUNDLE_BIN=""
 BUNDLE_CEF=""
-if [ -f ./lumen ] && [ -d "./cef_${CEF_ARCH}" ]; then
+if [ -f ./anarc ] && [ -d "./cef_${CEF_ARCH}" ]; then
+    BUNDLE_BIN="./anarc"
+elif [ -f ./lumen ] && [ -d "./cef_${CEF_ARCH}" ]; then
     BUNDLE_BIN="./lumen"
-    BUNDLE_CEF="./cef_${CEF_ARCH}"
 fi
 
 if [ -z "$BUNDLE_BIN" ] && [ "$SKIP_BUILD" -eq 0 ]; then
@@ -61,7 +62,11 @@ if [ -z "$BUNDLE_BIN" ] && [ "$SKIP_BUILD" -eq 0 ]; then
 fi
 
 if [ -z "$BUNDLE_BIN" ]; then
-    BUNDLE_BIN="target/release/lumen"
+    if [ -x "target/release/anarc" ]; then
+        BUNDLE_BIN="target/release/anarc"
+    else
+        BUNDLE_BIN="target/release/lumen"
+    fi
     [ -x "$BUNDLE_BIN" ] || { echo "error: $BUNDLE_BIN not found; build first" >&2; exit 1; }
 fi
 
@@ -70,7 +75,7 @@ if [ -z "$BUNDLE_CEF" ]; then
     if [ -n "${CEF_PATH:-}" ] && [ -d "$CEF_PATH" ]; then
         BUNDLE_CEF="$CEF_PATH"
     else
-        BUNDLE_CEF="$(find target/release/build -maxdepth 3 -type d -name "cef_${CEF_ARCH}" 2>/dev/null | head -1)"
+        BUNDLE_CEF="$(find target/release/build target/debug/build -maxdepth 3 -type d -name "cef_${CEF_ARCH}" 2>/dev/null | head -1)"
     fi
     [ -n "$BUNDLE_CEF" ] && [ -d "$BUNDLE_CEF" ] || {
         echo "error: CEF runtime not found." >&2
@@ -86,8 +91,9 @@ CEF_DIR="$PREFIX/anarc-cef"
 
 echo "==> Installing to $APP_DIR"
 mkdir -p "$APP_DIR/bin" "$BIN_DIR"
-cp "$BUNDLE_BIN" "$APP_DIR/bin/lumen"
-chmod 755 "$APP_DIR/bin/lumen"
+cp "$BUNDLE_BIN" "$APP_DIR/bin/anarc"
+chmod 755 "$APP_DIR/bin/anarc"
+ln -sf anarc "$APP_DIR/bin/lumen"
 
 # CEF runtime: copy only runtime files (skip cmake/, include/, CMakeLists, etc.)
 echo "==> Installing CEF runtime to $CEF_DIR"
@@ -98,12 +104,18 @@ for item in libcef.so libcef_dll chrome-sandbox chrome_100_percent.pak \
     [ -e "$BUNDLE_CEF/$item" ] && cp -r "$BUNDLE_CEF/$item" "$CEF_DIR/"
 done
 
+# Symlink anarc into CEF runtime directory as anarc and chrome so CEF child processes
+# (renderer, gpu, utility) never search system PATH or trigger external /usr/bin/chromium.
+ln -sf "$APP_DIR/bin/anarc" "$CEF_DIR/anarc"
+ln -sf "$APP_DIR/bin/anarc" "$CEF_DIR/chrome"
+
 cat > "$BIN_DIR/anarc" <<EOF
 #!/bin/sh
 export LD_LIBRARY_PATH="$CEF_DIR\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
-exec "$APP_DIR/bin/lumen" "\$@"
+exec "$APP_DIR/bin/anarc" "\$@"
 EOF
 chmod 755 "$BIN_DIR/anarc"
+ln -sf anarc "$BIN_DIR/lumen"
 
 # --- Desktop entry + icon ---------------------------------------------------
 if [ "$NO_DESKTOP" -eq 0 ]; then
