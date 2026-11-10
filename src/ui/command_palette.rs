@@ -1,4 +1,5 @@
 use crate::history::HistoryEntry;
+use crate::plugin::PaletteCommand;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaletteTarget {
@@ -20,6 +21,23 @@ pub enum PaletteAction {
     NewSpace,
 }
 
+impl PaletteAction {
+    pub fn from_plugin_id(id: &str) -> Option<Self> {
+        Some(match id {
+            "new-tab" => Self::NewTab,
+            "close-tab" => Self::CloseTab,
+            "reopen-closed-tab" => Self::ReopenClosedTab,
+            "reload" => Self::Reload,
+            "find-in-page" => Self::FindInPage,
+            "zoom-in" => Self::ZoomIn,
+            "zoom-out" => Self::ZoomOut,
+            "zoom-reset" => Self::ZoomReset,
+            "new-space" => Self::NewSpace,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaletteItem {
     pub title: String,
@@ -37,26 +55,11 @@ pub struct PaletteTab<'a> {
     pub url: &'a str,
 }
 
-const ACTIONS: &[(&str, &str, PaletteAction)] = &[
-    ("New tab", "Action", PaletteAction::NewTab),
-    ("Close tab", "Action", PaletteAction::CloseTab),
-    (
-        "Reopen closed tab",
-        "Action",
-        PaletteAction::ReopenClosedTab,
-    ),
-    ("Reload", "Action", PaletteAction::Reload),
-    ("Find in page", "Action", PaletteAction::FindInPage),
-    ("Zoom in", "Action", PaletteAction::ZoomIn),
-    ("Zoom out", "Action", PaletteAction::ZoomOut),
-    ("Reset zoom", "Action", PaletteAction::ZoomReset),
-    ("New space", "Action", PaletteAction::NewSpace),
-];
-
 pub fn rank_items(
     query: &str,
     tabs: &[PaletteTab<'_>],
     history: &[HistoryEntry],
+    actions: &[PaletteCommand],
 ) -> Vec<PaletteItem> {
     let mut items = Vec::new();
     for tab in tabs {
@@ -93,12 +96,15 @@ pub fn rank_items(
             });
         }
     }
-    for (name, detail, action) in ACTIONS {
-        if let Some(score) = fuzzy_score(query, name) {
+    for command in actions {
+        let Some(action) = PaletteAction::from_plugin_id(command.id) else {
+            continue;
+        };
+        if let Some(score) = fuzzy_score(query, command.title) {
             items.push(PaletteItem {
-                title: (*name).to_string(),
-                detail: (*detail).to_string(),
-                target: PaletteTarget::Action(*action),
+                title: command.title.to_string(),
+                detail: command.detail.to_string(),
+                target: PaletteTarget::Action(action),
                 score: score + 30,
             });
         }
@@ -167,10 +173,10 @@ mod tests {
                 url: "https://gitlab.com",
             },
         ];
-        let items = rank_items("github", &tabs, &[]);
+        let items = rank_items("github", &tabs, &[], crate::plugin::PALETTE_COMMANDS);
         assert_eq!(items[0].title, "GitHub");
         assert!(!items.iter().any(|item| item.title == "GitLab"));
-        let actions = rank_items("new", &[], &[]);
+        let actions = rank_items("new", &[], &[], crate::plugin::PALETTE_COMMANDS);
         assert!(actions.iter().any(|item| item.title == "New tab"));
     }
 

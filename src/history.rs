@@ -89,10 +89,7 @@ where
     Ok(imported)
 }
 
-fn import_visits_in<I>(
-    transaction: &Transaction<'_>,
-    visits: I,
-) -> rusqlite::Result<usize>
+fn import_visits_in<I>(transaction: &Transaction<'_>, visits: I) -> rusqlite::Result<usize>
 where
     I: IntoIterator<Item = (String, String, i64)>,
 {
@@ -190,6 +187,39 @@ fn search_in(connection: &Connection, query: &str, limit: usize) -> Vec<HistoryE
         .unwrap_or_default()
 }
 
+pub fn load_recent_searches() -> Vec<String> {
+    fs::read_to_string(history_path())
+        .ok()
+        .and_then(|data| serde_json::from_str::<Vec<String>>(&data).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|query| !query.trim().is_empty())
+        .take(MAX_RECENT_SEARCHES)
+        .collect()
+}
+
+#[cfg(not(test))]
+pub fn save_recent_searches(searches: &[String]) {
+    let path = history_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let searches: Vec<_> = searches.iter().take(MAX_RECENT_SEARCHES).collect();
+    if let Ok(data) = serde_json::to_vec_pretty(&searches) {
+        let tmp_path = path.with_extension("tmp");
+        if fs::write(&tmp_path, data).is_ok() {
+            let _ = fs::rename(tmp_path, path);
+        }
+    }
+}
+
+pub fn clear_browsing_history() {
+    if let Ok(connection) = open_database() {
+        let _ = connection.execute_batch("DELETE FROM history; DELETE FROM imported_visits;");
+    }
+    let _ = fs::remove_file(history_path());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,9 +265,21 @@ mod tests {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize_database(&connection).unwrap();
         let visits = vec![
-            ("https://example.com/".to_owned(), "Example".to_owned(), 1_000),
-            ("https://example.com/".to_owned(), "Example".to_owned(), 1_000),
-            ("https://example.com/".to_owned(), "Example".to_owned(), 2_000),
+            (
+                "https://example.com/".to_owned(),
+                "Example".to_owned(),
+                1_000,
+            ),
+            (
+                "https://example.com/".to_owned(),
+                "Example".to_owned(),
+                1_000,
+            ),
+            (
+                "https://example.com/".to_owned(),
+                "Example".to_owned(),
+                2_000,
+            ),
         ];
         let transaction = connection.transaction().unwrap();
         assert_eq!(import_visits_in(&transaction, visits.clone()).unwrap(), 2);
@@ -251,31 +293,5 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].visit_count, 2);
         assert_eq!(found[0].visit_time, 2);
-    }
-}
-
-pub fn load_recent_searches() -> Vec<String> {
-    fs::read_to_string(history_path())
-        .ok()
-        .and_then(|data| serde_json::from_str::<Vec<String>>(&data).ok())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|query| !query.trim().is_empty())
-        .take(MAX_RECENT_SEARCHES)
-        .collect()
-}
-
-#[cfg(not(test))]
-pub fn save_recent_searches(searches: &[String]) {
-    let path = history_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let searches: Vec<_> = searches.iter().take(MAX_RECENT_SEARCHES).collect();
-    if let Ok(data) = serde_json::to_vec_pretty(&searches) {
-        let tmp_path = path.with_extension("tmp");
-        if fs::write(&tmp_path, data).is_ok() {
-            let _ = fs::rename(tmp_path, path);
-        }
     }
 }

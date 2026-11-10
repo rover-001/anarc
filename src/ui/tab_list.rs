@@ -32,7 +32,7 @@ pub fn split_favicon(
     second: Option<Arc<gpui_kit::RenderImage>>,
 ) -> gpui_kit::AnyElement {
     let small_favicon = |favicon: Option<Arc<gpui_kit::RenderImage>>| {
-        let image = if let Some(favicon) = favicon {
+        if let Some(favicon) = favicon {
             div()
                 .size(px(7.0 * UI_SCALE))
                 .rounded(px(2.0 * UI_SCALE))
@@ -48,8 +48,7 @@ pub fn split_favicon(
                 .text_color(rgb(0x7e828d))
                 .child(Icon::new(IconName::Globe).size(px(7.0 * UI_SCALE)))
                 .into_any_element()
-        };
-        image
+        }
     };
 
     div()

@@ -9,6 +9,7 @@ cef = "=156.4.0"
 raw-window-handle = "=0.6.2"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.154"
+toml = "=0.8.23"
 x11 = { version = "=2.21.0", features = ["xlib"] }
 image = "=0.25.10"
 smallvec = "=1.16.5"

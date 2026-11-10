@@ -1,3 +1,5 @@
+pub mod rows;
+
 use crate::ui::visual::{self, SpaceTheme};
 use gpui_kit::{FontWeight, assets::IconName, component::Icon, div, prelude::*, px, rgb};
 
