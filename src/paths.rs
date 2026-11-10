@@ -10,6 +10,10 @@ pub fn data_dir() -> PathBuf {
     override_or_home("LUMEN_DATA_DIR", ".local/share/lumen")
 }
 
+pub fn plugin_config_path() -> PathBuf {
+    config_dir().join("plugins.toml")
+}
+
 /// CEF requires request-context cache paths to be direct children of its root cache path.
 pub fn cef_root_dir() -> PathBuf {
     cef_root_from_data_dir(data_dir())
@@ -27,9 +31,7 @@ fn profile_from_cef_root(cef_root: PathBuf, space_id: &str) -> PathBuf {
     let sanitized_id = space_id
         .bytes()
         .map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' => {
-                (byte as char).to_string()
-            }
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' => (byte as char).to_string(),
             _ => format!("%{byte:02X}"),
         })
         .collect::<String>();
@@ -148,10 +150,7 @@ mod tests {
         let profile = profile_from_cef_root(cef_root.clone(), "personal");
 
         assert_eq!(cef_root, PathBuf::from("/tmp/lumen-data/cef"));
-        assert_eq!(
-            profile,
-            PathBuf::from("/tmp/lumen-data/cef/space-personal")
-        );
+        assert_eq!(profile, PathBuf::from("/tmp/lumen-data/cef/space-personal"));
     }
 
     #[test]

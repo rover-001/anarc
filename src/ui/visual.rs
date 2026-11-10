@@ -82,14 +82,33 @@ pub fn space_theme(accent: u32) -> SpaceTheme {
     }
 }
 
+/// Mixes the selected space colors into the accent used by the browser chrome.
+/// The picker keeps each stop separately so users can add and remove colors.
+pub fn space_theme_colors(base: u32, colors: &[u32]) -> SpaceTheme {
+    if colors.is_empty() {
+        return space_theme(base);
+    }
+    let mut total = [0_u32; 3];
+    for color in colors {
+        total[0] += (color >> 16) & 0xff;
+        total[1] += (color >> 8) & 0xff;
+        total[2] += color & 0xff;
+    }
+    let count = colors.len() as u32;
+    let accent = (total[0] / count) << 16 | (total[1] / count) << 8 | (total[2] / count);
+    space_theme(accent)
+}
+
 pub fn zoom_level_for_factor(factor: f64) -> f64 {
     factor.ln() / 1.2_f64.ln()
 }
 
+#[cfg(test)]
 pub fn default_zoom_level() -> f64 {
     zoom_level_for_factor(DEFAULT_PAGE_ZOOM_FACTOR)
 }
 
+#[cfg(test)]
 pub fn zoom_after_delta(saved_level: Option<f64>, delta: f64) -> f64 {
     if delta == 0.0 {
         default_zoom_level()
@@ -212,8 +231,155 @@ mod tests {
         assert_eq!(interpolate_theme(from, to, 0.0), from);
         assert_eq!(interpolate_theme(from, to, 1.0), to);
         let middle = interpolate_theme(from, to, 0.5);
-        assert_eq!(middle.accent, 0x8890d8);
+        assert_eq!(middle.accent, 0x88bfd9);
         assert_ne!(middle.base, from.base);
         assert_ne!(middle.base, to.base);
     }
+}
+
+/// Derive surfaces and text from the space's appearance and tint controls.
+pub fn theme_for_space(space: &crate::model::Space) -> SpaceTheme {
+    let mut theme = space_theme_colors(space.color, &space.theme_colors);
+    let light =
+        space.theme_appearance == 1 || (space.theme_appearance == 0 && space.theme_auto_light);
+    let base = if light { 0xf1f2f5 } else { 0x111216 };
+    theme.base = tint_rgb(base, theme.accent, space.theme_intensity);
+    theme.surface = tint_rgb(
+        if light { 0xffffff } else { 0x191a1f },
+        theme.accent,
+        space.theme_intensity * 0.75,
+    );
+    theme.surface_hover = tint_rgb(theme.surface, if light { 0x000000 } else { 0xffffff }, 0.10);
+    theme.border = tint_rgb(theme.base, if light { 0x000000 } else { 0xffffff }, 0.16);
+    theme.border_hover = tint_rgb(theme.border, theme.accent, 0.30);
+    theme.text = if light { 0x20232b } else { 0xe6e7eb };
+    theme.muted = if light { 0x575b65 } else { 0x9fa3ae };
+    theme
+}
+
+// Reuse the sparse grain texture when only its opacity or the theme colors change.
+// Four bounded entries cover the window, sidebar, picker, and a transition surface.
+thread_local! {
+    static GRAIN_TEXTURES: std::cell::RefCell<Vec<((u32, u32), std::sync::Arc<gpui_kit::RenderImage>)>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
+}
+
+fn grain_texture(
+    width: u32,
+    height: u32,
+    window: &mut gpui_kit::Window,
+) -> std::sync::Arc<gpui_kit::RenderImage> {
+    GRAIN_TEXTURES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let key = (width, height);
+        if let Some(index) = cache.iter().position(|(size, _)| *size == key) {
+            let entry = cache.remove(index);
+            let image = entry.1.clone();
+            cache.push(entry);
+            return image;
+        }
+        let mut pixels = image::RgbaImage::new(width, height);
+        for index in 0..1536_u32 {
+            let hash = index.wrapping_mul(2654435761);
+            let x = ((hash & 65535) as f32 / 65535.0 * width as f32).round() as u32;
+            let y =
+                ((hash.rotate_left(13) & 65535) as f32 / 65535.0 * height as f32).round() as u32;
+            if x < width && y < height {
+                pixels.put_pixel(x, y, image::Rgba([255, 255, 255, 255]));
+            }
+        }
+        let image = std::sync::Arc::new(gpui_kit::RenderImage::new(smallvec::smallvec![
+            image::Frame::new(pixels)
+        ]));
+        if cache.len() == 4 {
+            let (_, retired) = cache.remove(0);
+            let _ = window.drop_image(retired);
+        }
+        cache.push((key, image.clone()));
+        image
+    })
+}
+
+pub fn space_backdrop(space: &crate::model::Space) -> impl gpui_kit::IntoElement {
+    space_backdrop_rounded(space, 0.0)
+}
+
+pub fn space_backdrop_rounded(
+    space: &crate::model::Space,
+    radius: f32,
+) -> impl gpui_kit::IntoElement {
+    use gpui_kit::{
+        Bounds, Corners, ParentElement, Styled, canvas, div, fill, linear_color_stop,
+        linear_gradient, point, prelude::FluentBuilder, px, rgb, size,
+    };
+    let colors = if space.theme_colors.is_empty() {
+        vec![space.color]
+    } else {
+        space.theme_colors.clone()
+    };
+    let intensity = space.theme_intensity;
+    let grain = space.theme_grain;
+    let base =
+        if space.theme_appearance == 1 || (space.theme_appearance == 0 && space.theme_auto_light) {
+            0xf1f2f5
+        } else {
+            0x111216
+        };
+    let gradient = canvas(
+        |_, _, _| (),
+        move |area, _, window, _| {
+            let segments = colors.len().saturating_sub(1).max(1);
+            let height = f32::from(area.size.height) / segments as f32;
+            for index in 0..segments {
+                let from = tint_rgb(base, colors[index], intensity);
+                let to = tint_rgb(base, colors[(index + 1).min(colors.len() - 1)], intensity);
+                let mut quad = fill(
+                    Bounds::new(
+                        area.origin + point(px(0.0), px(index as f32 * height)),
+                        size(area.size.width, px(height)),
+                    ),
+                    linear_gradient(
+                        180.0,
+                        linear_color_stop(rgb(from), 0.0),
+                        linear_color_stop(rgb(to), 1.0),
+                    ),
+                );
+                quad.corner_radii = Corners {
+                    top_left: px(if index == 0 { radius } else { 0.0 }),
+                    top_right: px(if index == 0 { radius } else { 0.0 }),
+                    bottom_left: px(if index + 1 == segments { radius } else { 0.0 }),
+                    bottom_right: px(if index + 1 == segments { radius } else { 0.0 }),
+                };
+                window.paint_quad(quad);
+            }
+        },
+    )
+    .absolute()
+    .inset_0();
+    let texture = canvas(
+        |_, _, _| (),
+        move |area, _, window, _| {
+            // Cap each allocation at 16 MiB even on unusually large windows.
+            let width = (f32::from(area.size.width).ceil() as u32).clamp(1, 2048);
+            let height = (f32::from(area.size.height).ceil() as u32).clamp(1, 2048);
+            let image = grain_texture(width, height, window);
+            let _ = window.paint_image(area, area, px(radius).into(), image, 0, false);
+        },
+    )
+    .absolute()
+    .inset_0();
+    div()
+        .absolute()
+        .inset_0()
+        .child(gradient)
+        .when(grain > 0.01, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .opacity((grain * 0.48).clamp(0.0, 0.48))
+                    .child(texture),
+            )
+        })
 }

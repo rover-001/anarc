@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex};
 
@@ -11,6 +12,7 @@ pub struct ShieldState {
     matcher: SyncSender<MatchRequest>,
     allowlist: Mutex<HashSet<String>>,
     blocked_by_tab: Mutex<HashMap<String, u64>>,
+    enabled: AtomicBool,
 }
 
 struct MatchRequest {
@@ -29,11 +31,16 @@ impl ShieldState {
             matcher,
             allowlist: Mutex::new(allowlist),
             blocked_by_tab: Mutex::new(HashMap::new()),
+            enabled: AtomicBool::new(true),
         });
         if let Err(error) = std::thread::Builder::new()
             .name("lumen-filter-engine".into())
             .spawn(move || {
                 let mut filters = FilterSet::new(false);
+                filters.add_filter_list(
+                    include_str!("../assets/filters/easylist.txt").to_owned(),
+                    ParseOptions::default(),
+                );
                 filters.add_filter_list(
                     include_str!("../assets/filters/lumen.txt").to_owned(),
                     ParseOptions::default(),
@@ -85,6 +92,9 @@ impl ShieldState {
         method: &str,
         tab_id: &str,
     ) -> bool {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return false;
+        }
         if let Some(host) = url_host(url)
             && self
                 .allowlist
@@ -118,6 +128,14 @@ impl ShieldState {
             .unwrap_or_default()
     }
 
+    pub fn enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Relaxed);
+    }
+
     pub fn toggle_site(&self, host: &str) -> bool {
         let host = host.to_ascii_lowercase();
         let Ok(mut allowlist) = self.allowlist.lock() else {
@@ -133,6 +151,12 @@ impl ShieldState {
             eprintln!("Lumen cannot save shield settings: {error}");
         }
         enabled
+    }
+
+    pub fn site_protection_enabled(&self, host: &str) -> bool {
+        self.allowlist
+            .lock()
+            .is_ok_and(|allowlist| !allowlist.contains(&host.to_ascii_lowercase()))
     }
 }
 
@@ -250,5 +274,34 @@ mod tests {
             started.elapsed().as_secs_f64() * 1_000_000.0 / 500.0
         );
         assert_eq!(state.blocked_counts().get("tab-a"), Some(&501));
+    }
+
+    #[test]
+    fn bundled_easylist_blocks_ad_scripts_beyond_the_starter_rules() {
+        let engine = adblock::Engine::new_with_list_text(
+            include_str!("../assets/filters/easylist.txt").to_owned(),
+        );
+        let request = adblock::request::Request::new(
+            "https://ads.google.com/google_adsense-banner.js",
+            "https://publisher.test/",
+            "script",
+            "GET",
+        )
+        .unwrap();
+        assert!(engine.check_network_request(&request).should_block());
+    }
+
+    #[test]
+    fn ad_blocker_defaults_on_and_global_toggle_controls_filtering() {
+        let state = ShieldState::start();
+        let url = "https://doubleclick.net/ad.js";
+        let source = "https://publisher.test/";
+        assert!(state.enabled());
+        assert!(state.should_block(url, source, "script", "GET", "tab-a"));
+
+        state.set_enabled(false);
+        assert!(!state.should_block(url, source, "script", "GET", "tab-a"));
+        state.set_enabled(true);
+        assert!(state.should_block(url, source, "script", "GET", "tab-a"));
     }
 }
