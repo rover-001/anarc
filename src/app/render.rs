@@ -90,6 +90,9 @@ impl Render for Lumen {
                                 && let Some((tab_id, url)) = payload.split_once('\n')
                             {
                                 this.inject_pack_assets(tab_id, url);
+                                if this.engine.ad_blocker_enabled() && crate::shield::is_youtube_url(url) {
+                                    this.engine.execute_script(tab_id, crate::shield::youtube_ad_shield_script());
+                                }
                             }
                             let mode = match event.as_str() {
                                 "address.suggest" => crate::plugin::EventMode::Parallel,

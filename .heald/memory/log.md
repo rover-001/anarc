@@ -182,3 +182,7 @@ Diagnosed and resolved heavy website and scroll lag on hianime.at/home across 5 
 ## Session 2026-11-10T13:17:14.822147743+00:00
 
 Fixed heavy-site scroll/network lag (adblock query cache 189x speedup, CEF GPU rasterization & zero copy flags, frame edge color 1Hz throttling, subpixel scroll accumulator); fixed ghost closing tab animation bug on blank tabs and anchored exit animations to root sidebar coordinates; enabled sidebar right-click context menu across empty canvas, tabs zone, and root container; eliminated all compiler & clippy warnings; added performance.md to .gitignore, purged it from git commit history, and pushed cleanly to origin/main.
+
+## Session 2026-11-10T13:17:29.425297069+00:00
+
+Pushed finalized memory logs to remote main.

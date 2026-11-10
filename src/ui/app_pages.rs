@@ -899,7 +899,7 @@ fn downloads_content(downloads: Vec<DownloadRecord>, theme: SpaceTheme) -> gpui_
     div().w_full().h_full().p_5().child(body).into_any_element()
 }
 
-fn format_bytes(bytes: i64) -> String {
+pub(crate) fn format_bytes(bytes: i64) -> String {
     let bytes = bytes.max(0) as f64;
     if bytes >= 1024.0 * 1024.0 {
         format!("{:.1} MB", bytes / (1024.0 * 1024.0))

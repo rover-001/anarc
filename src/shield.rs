@@ -334,6 +334,65 @@ pub fn upgrade_http_url(url: &str) -> Option<String> {
         .then(|| format!("https{}", &url[4..]))
 }
 
+pub fn is_youtube_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains("youtube.com") || lower.contains("youtu.be")
+}
+
+pub fn youtube_ad_shield_script() -> &'static str {
+    r#"(()=>{
+if(window.__anarc_ublock_yt)return;
+window.__anarc_ublock_yt=true;
+try{
+const s=document.createElement('style');
+s.id='anarc-ublock-yt';
+s.textContent=`
+.video-ads, .ytp-ad-module, .ytp-ad-overlay-container, .ytp-ad-player-overlay,
+.ytp-ad-action-interstitial, .ytp-ad-skip-button-slot, .ytp-ad-preview-container,
+ytd-ad-slot-renderer, #masthead-ad, ytd-banner-promo-renderer,
+ytd-in-feed-ad-layout-renderer, ytd-promoted-video-renderer,
+ytd-display-ad-renderer, #player-ads, ytd-statement-banner-renderer,
+ytd-popup-container:has(ytd-enforcement-message-view-model),
+tp-yt-paper-dialog:has(#feedback), .ytd-merch-shelf-renderer,
+#companion, .ad-showing{display:none!important}
+`;
+(document.head||document.documentElement).appendChild(s);
+
+function scrub(obj){
+if(!obj||typeof obj!=='object')return;
+delete obj.adPlacements;
+delete obj.playerAds;
+delete obj.adSlots;
+if(obj.playbackTracking)delete obj.playbackTracking.adPlacements;
+}
+if(window.ytInitialPlayerResponse)scrub(window.ytInitialPlayerResponse);
+
+function skipAds(){
+const mp=document.getElementById('movie_player')||document.querySelector('.html5-video-player');
+const isAd=mp&&(mp.classList.contains('ad-showing')||mp.classList.contains('ad-interrupting'));
+const v=document.querySelector('video.html5-main-video')||document.querySelector('video');
+if(isAd||document.querySelector('.ytp-ad-module:not(:empty)')){
+if(v&&!isNaN(v.duration)&&isFinite(v.duration)&&v.duration>0){
+v.muted=true;
+v.playbackRate=16.0;
+v.currentTime=v.duration;
+}
+const btns=document.querySelectorAll('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button, .ytp-ad-skip-button-container button');
+btns.forEach(b=>b&&b.click());
+}
+const dialogs=document.querySelectorAll('tp-yt-paper-dialog, ytd-enforcement-message-view-model');
+dialogs.forEach(d=>{
+const b=d.querySelector('yt-button-shape button, #dismiss-button');
+if(b)b.click();
+});
+}
+setInterval(skipAds,200);
+const ob=new MutationObserver(skipAds);
+ob.observe(document.body||document.documentElement,{childList:true,subtree:true});
+}catch(e){}
+})();"#
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,6 +563,21 @@ mod tests {
             "GET",
             "pack-test"
         ));
+    }
+
+    #[test]
+    fn youtube_url_detection_matches_domains() {
+        assert!(is_youtube_url("https://www.youtube.com/watch?v=123"));
+        assert!(is_youtube_url("https://youtu.be/123"));
+        assert!(!is_youtube_url("https://example.com/watch?v=123"));
+    }
+
+    #[test]
+    fn youtube_ad_shield_script_contains_ad_classes_and_skip_logic() {
+        let script = youtube_ad_shield_script();
+        assert!(script.contains(".ytp-ad-module"));
+        assert!(script.contains("skipAds"));
+        assert!(script.contains("playbackRate=16.0"));
     }
 
     #[test]

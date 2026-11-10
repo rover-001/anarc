@@ -8,3 +8,14 @@
 ||adsrvr.org^
 ||adsafeprotected.com^
 ||scorecardresearch.com^
+||youtube.com/pagead/*
+||youtube.com/api/stats/ads*
+||youtube.com/ptracking*
+||youtube.com/youtubei/v1/log_event*
+||youtube.com/youtubei/v1/player/ad*
+||youtube.com/get_midroll_info*
+||googleads.g.doubleclick.net^
+||static.doubleclick.net^
+||pubads.g.doubleclick.net^
+||adservice.google.com^
+||pagead2.googlesyndication.com^

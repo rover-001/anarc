@@ -276,6 +276,7 @@ impl Lumen {
             fullscreen_window_was_fullscreen: None,
             app_page: None,
             plugins_menu_open: false,
+            dismissed_download_toast_id: None,
             settings_section: SettingsSection::default(),
             preferences,
             plugins,

@@ -6,6 +6,7 @@ title: "Memory Index"
 
 | Title | Type | Date | Tags | Summary |
 | :--- | :--- | :--- | :--- | :--- |
+| **Download handler fix and uBlock Origin integration with YouTube ad shield** (`download-handler-fix-and-ublock-origin-integration-with-youtube-ad-shield.md`) | `decision` | 2026-11-10 | - | Implemented can_download=1 and on_before_download=1 in Lu... |
 | **Sidebar right-click context menu and blank tab close animation fix** (`sidebar-right-click-context-menu-and-blank-tab-close-animation-fix.md`) | `decision` | 2026-11-10 | - | Fixed sidebar canvas right-click context menu by attachin... |
 | **Eliminate heavy site scroll and network stutter on hianime** (`eliminate-heavy-site-scroll-and-network-stutter-on-hianime.md`) | `decision` | 2026-11-10 | - | Diagnosed lag on heavy media/ad-heavy sites (such as hian... |
 | **Fix Chromium subprocess launch and transition frame flash, complete Anarc rename** (`fix-chromium-subprocess-launch-and-transition-frame-flash-complete-anarc-rename.md`) | `decision` | 2026-11-10 | - | Renamed package to anarc in Cargo.toml and install script... |
