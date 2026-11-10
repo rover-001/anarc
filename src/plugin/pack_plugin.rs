@@ -457,8 +457,7 @@ mod tests {
         fs::write(base.join("style.css"), "body { color: red; }").unwrap();
         fs::create_dir_all(base.join("filters")).unwrap();
         fs::write(base.join("filters/list.txt"), "||ads.example^").unwrap();
-        let loaded = LoadedPack::load(&base).unwrap();
-        loaded
+        LoadedPack::load(&base).unwrap()
     }
 
     const SIMPLE: &str = "[plugin]\nid='example.test'\nname='Test'\nversion='1.0.0'\napi='1'\nkind='pack'\n[pack.keymap]\n'ctrl-j'='tabs.next'\n[[pack.search_engine]]\nid='test-search'\nname='Test Search'\nurl='https://search.example/?q=%s'\n";

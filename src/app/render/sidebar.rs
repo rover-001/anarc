@@ -68,6 +68,25 @@ impl Lumen {
                         cx.notify();
                     }
                 }),
+            )
+            .on_mouse_down(
+                gpui_kit::MouseButton::Right,
+                cx.listener(|this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                    if this.is_sidebar_collapsed() {
+                        return;
+                    }
+                    let (x, y, width, height) = tab_context_menu_position(event, window);
+                    this.sidebar_context_menu = Some(SidebarContextMenu {
+                        x,
+                        y,
+                        width,
+                        height,
+                    });
+                    this.space_context_menu = None;
+                    this.theme_editor = None;
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
             );
         if !self.is_sidebar_collapsed() {
             sidebar_content = sidebar_content.child(
@@ -991,7 +1010,7 @@ impl Lumen {
                 );
             }
 
-            if let Some((closing_space, closing_tab, closing_index, started, serial)) =
+            let closing_tab_element = if let Some((closing_space, closing_tab, closing_index, started, serial)) =
                 &self.closing_tab
                 && closing_space == &active_space_id
                 && started.elapsed() < ui::motion::MOTION_FAST
@@ -1004,7 +1023,7 @@ impl Lumen {
                     *closing_index,
                 );
                 let row_rect = visual::sidebar_row_rect(sidebar_width_f32, row_index);
-                regular_tabs = regular_tabs.child(
+                Some(
                     div()
                         .id(format!("closing-tab-{}-{serial}", closing_tab.id))
                         .absolute()
@@ -1038,8 +1057,10 @@ impl Lumen {
                                     .opacity(remaining)
                             },
                         ),
-                );
-            }
+                )
+            } else {
+                None
+            };
 
             // Dropping a tab anywhere in the regular list removes it from the
             // favorites, pinned, or folder sections.
@@ -1058,6 +1079,22 @@ impl Lumen {
                     .when(has_regular_tabs, |zone| {
                         zone.min_h(px(visual::TAB_ROW_HEIGHT))
                     })
+                    .on_mouse_down(
+                        gpui_kit::MouseButton::Right,
+                        cx.listener(|this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                            let (x, y, width, height) = tab_context_menu_position(event, window);
+                            this.sidebar_context_menu = Some(SidebarContextMenu {
+                                x,
+                                y,
+                                width,
+                                height,
+                            });
+                            this.space_context_menu = None;
+                            this.theme_editor = None;
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    )
                     .drag_over::<TabDrag>(move |style, _, _, _| style.bg(rgb(theme.surface)))
                     .on_drop::<TabDrag>(cx.listener(|this, drag: &TabDrag, _window, cx| {
                         this.clear_tab_section(&drag.tab_id);
@@ -1066,6 +1103,10 @@ impl Lumen {
                     }))
                     .child(regular_tabs),
             );
+
+            if let Some(el) = closing_tab_element {
+                sidebar_content = sidebar_content.child(el);
+            }
 
             sidebar_content = sidebar_content.child(
                 div()
@@ -1096,7 +1137,23 @@ impl Lumen {
                 div()
                     .id("sidebar-empty-space")
                     .flex_1()
-                    .min_h(px(8.0 * UI_SCALE)),
+                    .min_h(px(8.0 * UI_SCALE))
+                    .on_mouse_down(
+                        gpui_kit::MouseButton::Right,
+                        cx.listener(|this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                            let (x, y, width, height) = tab_context_menu_position(event, window);
+                            this.sidebar_context_menu = Some(SidebarContextMenu {
+                                x,
+                                y,
+                                width,
+                                height,
+                            });
+                            this.space_context_menu = None;
+                            this.theme_editor = None;
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    ),
             );
 
             // Bottom bar with Settings, Space Switcher (icons like Arc), and Downloads

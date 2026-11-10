@@ -4,7 +4,7 @@
 //! unmounting anything. The app host must persist the returned config and then
 //! apply `ToggleAction` through `Kernel::mount`/`Kernel::unmount`.
 
-use super::config::{PluginConfig, PluginEntry};
+use super::config::PluginConfig;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,7 +113,7 @@ impl PluginManagerModel {
         config
             .plugins
             .entry(id.to_owned())
-            .or_insert_with(PluginEntry::default)
+            .or_default()
             .enabled = Some(enabled);
 
         Ok(match (was_enabled, enabled) {

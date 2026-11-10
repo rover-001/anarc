@@ -78,6 +78,10 @@ impl Space {
     }
 }
 
+fn default_theme_intensity() -> f32 {
+    0.24
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,8 +113,4 @@ mod tests {
         assert_eq!(decoded.folders[0].name, "Work");
         assert_eq!(decoded.tabs[0].folder.as_deref(), Some("folder-1"));
     }
-}
-
-fn default_theme_intensity() -> f32 {
-    0.24
 }

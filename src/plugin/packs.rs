@@ -109,6 +109,7 @@ pub(crate) struct Userscript {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum RunAt {
     DocumentStart,
     #[default]

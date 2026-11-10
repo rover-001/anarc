@@ -48,7 +48,7 @@ cef::wrap_scheme_handler_factory! {
             let response = package
                 .as_ref()
                 .and_then(|package| package.response(&url, &method).ok())
-                .unwrap_or_else(|| blocked_panel_response());
+                .unwrap_or_else(blocked_panel_response);
             Some(PanelResourceHandler::new(Arc::new(response), Arc::new(Mutex::new(0))))
         }
     }

@@ -51,6 +51,8 @@ pub struct WebViewport {
     cursor: i32,
     fullscreen: bool,
     theme: SpaceTheme,
+    scroll_accum_x: f32,
+    scroll_accum_y: f32,
 }
 
 impl WebViewport {
@@ -76,6 +78,8 @@ impl WebViewport {
             cursor: 0,
             fullscreen: false,
             theme: space_theme(0x9aa6ff),
+            scroll_accum_x: 0.0,
+            scroll_accum_y: 0.0,
         }
     }
 
@@ -93,6 +97,8 @@ impl WebViewport {
         drag_edge_color: Option<u32>,
     ) {
         if self.tab_id != tab_id {
+            self.scroll_accum_x = 0.0;
+            self.scroll_accum_y = 0.0;
             self.resize_source_image = None;
             self.resize_frame_handoff = ResizeFrameHandoff::default();
             // Only cross-fade when the incoming tab already has a rendered frame.
@@ -196,6 +202,15 @@ impl WebViewport {
 #[cfg(test)]
 fn browser_point(position: gpui_kit::Point<gpui_kit::Pixels>, sidebar_width: f32) -> (i32, i32) {
     browser_point_in_pane(position, sidebar_width, 0.0, false)
+}
+
+fn step_scroll_accum(accum: &mut f32, delta: f32) -> i32 {
+    *accum += delta;
+    let step = accum.trunc() as i32;
+    if step != 0 {
+        *accum -= step as f32;
+    }
+    step
 }
 
 fn browser_point_in_pane(
@@ -523,25 +538,29 @@ impl Render for WebViewport {
                     })
                     .ok();
             }))
-            .on_scroll(cx.listener(move |_, event: &gpui_kit::ScrollEvent, _, cx| {
+            .on_scroll(cx.listener(move |this, event: &gpui_kit::ScrollEvent, _, cx| {
                 let (x, y) =
                     browser_point_in_pane(event.position, scroll_sidebar, pane_offset, fullscreen);
                 let (dx, dy) = match event.delta {
                     gpui_kit::ScrollDelta::Pixels(p) => (f32::from(p.x), f32::from(p.y)),
                     gpui_kit::ScrollDelta::Lines(l) => (l.x * 40.0, l.y * 40.0),
                 };
-                parent_scroll
-                    .update(cx, |this, _| {
-                        this.engine.send_mouse_wheel(
-                            &tab_id_scroll,
-                            x,
-                            y,
-                            dx as i32,
-                            dy as i32,
-                            &event.modifiers,
-                        )
-                    })
-                    .ok();
+                let step_x = step_scroll_accum(&mut this.scroll_accum_x, dx);
+                let step_y = step_scroll_accum(&mut this.scroll_accum_y, dy);
+                if step_x != 0 || step_y != 0 {
+                    parent_scroll
+                        .update(cx, |this, _| {
+                            this.engine.send_mouse_wheel(
+                                &tab_id_scroll,
+                                x,
+                                y,
+                                step_x,
+                                step_y,
+                                &event.modifiers,
+                            )
+                        })
+                        .ok();
+                }
             }));
 
         let transition_id = self.transition_id;
@@ -764,5 +783,16 @@ mod tests {
             browser_point_in_pane(position, 320.0, 100.0, false),
             (96, 27)
         );
+    }
+
+    #[test]
+    fn scroll_accumulator_preserves_subpixel_deltas_across_events() {
+        let mut accum = 0.0f32;
+        assert_eq!(step_scroll_accum(&mut accum, 0.4), 0);
+        assert!((accum - 0.4).abs() < 1e-5);
+        assert_eq!(step_scroll_accum(&mut accum, 0.7), 1);
+        assert!((accum - 0.1).abs() < 1e-5);
+        assert_eq!(step_scroll_accum(&mut accum, -1.3), -1);
+        assert!((accum - (-0.2)).abs() < 1e-5);
     }
 }

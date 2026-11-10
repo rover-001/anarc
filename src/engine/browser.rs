@@ -23,6 +23,7 @@ impl Engine {
                 height: height.max(1),
                 image: None,
                 edge_color: None,
+                last_edge_color_instant: None,
                 dirty: false,
                 root_dirty: false,
                 title: None,
@@ -475,7 +476,6 @@ impl Engine {
                 modifiers: cef_mouse_modifiers(modifiers),
             };
             host.send_mouse_wheel_event(Some(&event), delta_x, delta_y);
-            let _ = self.ui_update_wake.try_send(());
         }
     }
 }

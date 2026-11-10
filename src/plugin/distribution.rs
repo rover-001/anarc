@@ -597,12 +597,12 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 
 fn decode_hex(value: &str) -> Result<Vec<u8>, PackageError> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err(PackageError("invalid hex in signature metadata".into()));
     }
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>().0.iter()
         .map(|chunk| {
             let high = hex_nibble(chunk[0])?;
             let low = hex_nibble(chunk[1])?;

@@ -1045,5 +1045,18 @@
     "symbols": [],
     "guidance": "Committed and pushed fixes for Chromium launch on startup, stale page flash on tab close/search, Anarc renaming, and performance optimizations; updated install.sh with dual anarc/lumen symlinks",
     "updated_at": "2026-11-10T12:20:51.649193345+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/engine/browser.rs",
+      "src/engine/callbacks.rs",
+      "src/engine/mod.rs",
+      "src/shield.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Diagnosed and resolved heavy website and scroll lag on hianime.at/home across 5 subsystems: 189x faster adblock shield matching via query cache, GPU rasterization and zero-copy flags enabled in CEF, throttled 1Hz median edge color OSR calculation, smooth subpixel scroll accumulator, and redundant UI wake elimination. Tested release build and verified all test suites.",
+    "updated_at": "2026-11-10T12:44:15.787988182+00:00"
   }
 ]

@@ -228,6 +228,28 @@ fn closing_a_non_active_tab_by_id_preserves_the_active_tab(cx: &mut gpui::TestAp
 }
 
 #[gpui::test]
+fn closing_an_empty_tab_does_not_trigger_closing_ghost_animation(cx: &mut gpui::TestAppContext) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        // Tab-1 is about:blank
+        assert!(app.close_tab_by_id("tab-1"));
+        assert!(app.closing_tab.is_none(), "closing an empty blank tab must not set closing_tab");
+
+        // Now set a real url on the new tab
+        let active_id = app.active_tab_id().to_string();
+        app.active_space_mut().tabs.iter_mut().find(|t| t.id == active_id).unwrap().url = "https://example.com".into();
+        assert!(app.close_tab_by_id(&active_id));
+        assert!(app.closing_tab.is_some(), "closing a real tab must record closing_tab");
+    });
+}
+
+#[gpui::test]
 fn closing_a_split_member_exits_split_and_selects_its_partner(cx: &mut gpui::TestAppContext) {
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
