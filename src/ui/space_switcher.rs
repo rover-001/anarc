@@ -187,6 +187,25 @@ pub fn downloads_button(theme: SpaceTheme) -> impl IntoElement {
         .child(Icon::new(IconName::Download))
 }
 
+pub fn plugins_button(theme: SpaceTheme) -> impl IntoElement {
+    div()
+        .id("plugins-button")
+        .size(px(28.0 * UI_SCALE))
+        .rounded_lg()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(rgb(theme.muted))
+        .active(|style| style.opacity(0.92))
+        .hover(move |style| {
+            style
+                .bg(rgb(theme.surface_hover))
+                .text_color(rgb(theme.text))
+        })
+        .cursor_pointer()
+        .child(Icon::new(IconName::Puzzle))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

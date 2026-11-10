@@ -8,6 +8,12 @@ pub struct Tab {
     #[serde(default)]
     pub favicon_path: Option<String>,
     pub pinned: bool,
+    /// Favorite tabs live in the Arc-style grid at the top of the sidebar.
+    #[serde(default)]
+    pub favorite: bool,
+    /// Folder that owns this tab in the sidebar, if any.
+    #[serde(default)]
+    pub folder: Option<String>,
     pub last_active: u64,
     pub scroll_y: f64,
     pub state: TabState,
@@ -21,6 +27,8 @@ impl Tab {
             url: url.into(),
             favicon_path: None,
             pinned: false,
+            favorite: false,
+            folder: None,
             last_active: 0,
             scroll_y: 0.0,
             state: TabState::Discarded,

@@ -162,10 +162,10 @@ fn collect_bookmarks(node: &Value, folders: Vec<String>, output: &mut Vec<Bookma
         return;
     }
     let mut child_folders = folders;
-    if let Some(name) = node.get("name").and_then(Value::as_str) {
-        if !name.is_empty() {
-            child_folders.push(name.to_owned());
-        }
+    if let Some(name) = node.get("name").and_then(Value::as_str)
+        && !name.is_empty()
+    {
+        child_folders.push(name.to_owned());
     }
     if let Some(children) = node.get("children").and_then(Value::as_array) {
         for child in children {

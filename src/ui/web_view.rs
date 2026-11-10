@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use gpui_kit::{Animation, AnimationExt as _, Context, Render, Window, div, prelude::*, px, rgb};
 
+use crate::app::{CARD_RADIUS, CONTENT_BEZEL_X, Lumen};
 use crate::ui::{
     split_view::frame_logical_size,
     visual::{SpaceTheme, TOPBAR_HEIGHT, space_theme},
 };
-use crate::{CONTENT_BEZEL_X, Lumen};
 
 /// Crossfading old->new frame on drag release made centred pages visibly bounce
 /// sideways; with live resizing the final frame differs by a few pixels, so swap directly.
@@ -47,6 +47,7 @@ pub struct WebViewport {
     transition_waiting_for_image: bool,
     retired_images: Vec<Arc<gpui_kit::RenderImage>>,
     cursor: i32,
+    fullscreen: bool,
     theme: SpaceTheme,
 }
 
@@ -71,10 +72,12 @@ impl WebViewport {
             transition_waiting_for_image: false,
             retired_images: Vec::new(),
             cursor: 0,
+            fullscreen: false,
             theme: space_theme(0x9aa6ff),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn set_frame(
         &mut self,
         tab_id: String,
@@ -133,6 +136,7 @@ impl WebViewport {
         self.drag_edge_color = drag_edge_color;
     }
 
+    #[cfg(not(test))]
     pub fn set_content(
         &mut self,
         tab_id: String,
@@ -155,20 +159,36 @@ impl WebViewport {
     pub fn set_theme(&mut self, theme: SpaceTheme) {
         self.theme = theme;
     }
+
+    pub fn set_fullscreen(&mut self, fullscreen: bool) {
+        self.fullscreen = fullscreen;
+    }
+
+    /// Drops the previous tab's frame before an immediate cross-space jump.
+    pub fn clear_transition_image(&mut self) {
+        self.image = None;
+        self.previous_image = None;
+        self.resize_source_image = None;
+        self.transition_tab = None;
+        self.transition_waiting_for_image = false;
+        self.transition_cleanup_scheduled = false;
+    }
 }
 
 #[cfg(test)]
 fn browser_point(position: gpui_kit::Point<gpui_kit::Pixels>, sidebar_width: f32) -> (i32, i32) {
-    browser_point_in_pane(position, sidebar_width, 0.0)
+    browser_point_in_pane(position, sidebar_width, 0.0, false)
 }
 
 fn browser_point_in_pane(
     position: gpui_kit::Point<gpui_kit::Pixels>,
     sidebar_width: f32,
     pane_offset: f32,
+    fullscreen: bool,
 ) -> (i32, i32) {
     let x = (f32::from(position.x) - sidebar_width - CONTENT_BEZEL_X - pane_offset).max(0.0) as i32;
-    let y = (f32::from(position.y) - TOPBAR_HEIGHT).max(0.0) as i32;
+    let top = if fullscreen { 0.0 } else { TOPBAR_HEIGHT };
+    let y = (f32::from(position.y) - top).max(0.0) as i32;
     (x, y)
 }
 
@@ -214,6 +234,7 @@ impl Render for WebViewport {
         let sidebar_right_up = self.sidebar_width;
         let sidebar_middle_down = self.sidebar_width;
         let sidebar_middle_up = self.sidebar_width;
+        let fullscreen = self.fullscreen;
 
         let mut viewport = div()
             .id("web-view-viewport")
@@ -221,7 +242,7 @@ impl Render for WebViewport {
             .track_focus(&self.focus_handle)
             .size_full()
             .bg(rgb(self.drag_edge_color.unwrap_or(self.theme.surface)))
-            .rounded(px(crate::CARD_RADIUS))
+            .rounded(px(if fullscreen { 0.0 } else { CARD_RADIUS }))
             .overflow_hidden()
             .cursor(match self.cursor {
                 1 => gpui_kit::CursorStyle::IBeam,
@@ -295,7 +316,12 @@ impl Render for WebViewport {
                 cx.listener(move |_, event: &gpui_kit::MouseDownEvent, window, cx| {
                     let parent = parent_down.clone();
                     let tab_id = tab_id_down.clone();
-                    let (x, y) = browser_point_in_pane(event.position, down_sidebar, pane_offset);
+                    let (x, y) = browser_point_in_pane(
+                        event.position,
+                        down_sidebar,
+                        pane_offset,
+                        fullscreen,
+                    );
                     parent
                         .update(cx, |this, cx| {
                             this.set_focused_pane(pane_index);
@@ -317,7 +343,8 @@ impl Render for WebViewport {
             .on_mouse_up(
                 gpui_kit::MouseButton::Left,
                 cx.listener(move |_, event: &gpui_kit::MouseUpEvent, _, cx| {
-                    let (x, y) = browser_point_in_pane(event.position, up_sidebar, pane_offset);
+                    let (x, y) =
+                        browser_point_in_pane(event.position, up_sidebar, pane_offset, fullscreen);
                     parent_up
                         .update(cx, |this, _| {
                             this.engine.send_mouse_click(
@@ -336,8 +363,12 @@ impl Render for WebViewport {
             .on_mouse_down(
                 gpui_kit::MouseButton::Right,
                 cx.listener(move |_, event: &gpui_kit::MouseDownEvent, window, cx| {
-                    let (x, y) =
-                        browser_point_in_pane(event.position, sidebar_right_down, pane_offset);
+                    let (x, y) = browser_point_in_pane(
+                        event.position,
+                        sidebar_right_down,
+                        pane_offset,
+                        fullscreen,
+                    );
                     parent_right_down
                         .update(cx, |this, cx| {
                             this.set_focused_pane(pane_index);
@@ -359,8 +390,12 @@ impl Render for WebViewport {
             .on_mouse_up(
                 gpui_kit::MouseButton::Right,
                 cx.listener(move |_, event: &gpui_kit::MouseUpEvent, _, cx| {
-                    let (x, y) =
-                        browser_point_in_pane(event.position, sidebar_right_up, pane_offset);
+                    let (x, y) = browser_point_in_pane(
+                        event.position,
+                        sidebar_right_up,
+                        pane_offset,
+                        fullscreen,
+                    );
                     parent_right_up
                         .update(cx, |this, _| {
                             this.engine.send_mouse_click(
@@ -379,8 +414,12 @@ impl Render for WebViewport {
             .on_mouse_down(
                 gpui_kit::MouseButton::Middle,
                 cx.listener(move |_, event: &gpui_kit::MouseDownEvent, window, cx| {
-                    let (x, y) =
-                        browser_point_in_pane(event.position, sidebar_middle_down, pane_offset);
+                    let (x, y) = browser_point_in_pane(
+                        event.position,
+                        sidebar_middle_down,
+                        pane_offset,
+                        fullscreen,
+                    );
                     parent_middle_down
                         .update(cx, |this, cx| {
                             this.set_focused_pane(pane_index);
@@ -401,8 +440,12 @@ impl Render for WebViewport {
             .on_mouse_up(
                 gpui_kit::MouseButton::Middle,
                 cx.listener(move |_, event: &gpui_kit::MouseUpEvent, _, cx| {
-                    let (x, y) =
-                        browser_point_in_pane(event.position, sidebar_middle_up, pane_offset);
+                    let (x, y) = browser_point_in_pane(
+                        event.position,
+                        sidebar_middle_up,
+                        pane_offset,
+                        fullscreen,
+                    );
                     parent_middle_up
                         .update(cx, |this, _| {
                             this.engine.send_mouse_click(
@@ -436,7 +479,12 @@ impl Render for WebViewport {
             )
             .on_mouse_move(
                 cx.listener(move |_, event: &gpui_kit::MouseMoveEvent, _, cx| {
-                    let (x, y) = browser_point_in_pane(event.position, move_sidebar, pane_offset);
+                    let (x, y) = browser_point_in_pane(
+                        event.position,
+                        move_sidebar,
+                        pane_offset,
+                        fullscreen,
+                    );
                     parent_move
                         .update(cx, |this, _| {
                             this.engine
@@ -454,7 +502,8 @@ impl Render for WebViewport {
                     .ok();
             }))
             .on_scroll(cx.listener(move |_, event: &gpui_kit::ScrollEvent, _, cx| {
-                let (x, y) = browser_point_in_pane(event.position, scroll_sidebar, pane_offset);
+                let (x, y) =
+                    browser_point_in_pane(event.position, scroll_sidebar, pane_offset, fullscreen);
                 let (dx, dy) = match event.delta {
                     gpui_kit::ScrollDelta::Pixels(p) => (f32::from(p.x), f32::from(p.y)),
                     gpui_kit::ScrollDelta::Lines(l) => (l.x * 40.0, l.y * 40.0),
@@ -509,7 +558,7 @@ impl Render for WebViewport {
                         .left_0()
                         .w(px(width))
                         .h(px(height))
-                        .rounded(px(crate::CARD_RADIUS))
+                        .rounded(px(CARD_RADIUS))
                         .overflow_hidden()
                         .with_animation(
                             format!("web-view-outgoing-{transition_id}"),
@@ -521,11 +570,7 @@ impl Render for WebViewport {
                                 element.opacity(crate::ui::motion::clamp_percentage(1.0 - progress))
                             },
                         )
-                        .child(
-                            gpui_kit::img(image)
-                                .size_full()
-                                .rounded(px(crate::CARD_RADIUS)),
-                        ),
+                        .child(gpui_kit::img(image).size_full().rounded(px(CARD_RADIUS))),
                 );
             }
         } else if self.transition_waiting_for_image
@@ -545,13 +590,9 @@ impl Render for WebViewport {
                         .left_0()
                         .w(px(width))
                         .h(px(height))
-                        .rounded(px(crate::CARD_RADIUS))
+                        .rounded(px(CARD_RADIUS))
                         .overflow_hidden()
-                        .child(
-                            gpui_kit::img(image)
-                                .size_full()
-                                .rounded(px(crate::CARD_RADIUS)),
-                        ),
+                        .child(gpui_kit::img(image).size_full().rounded(px(CARD_RADIUS))),
                 );
             }
         } else if self.transition_tab.as_deref() == Some(self.tab_id.as_str()) {
@@ -571,13 +612,9 @@ impl Render for WebViewport {
                 .left_0()
                 .w(px(width))
                 .h(px(height))
-                .rounded(px(crate::CARD_RADIUS))
+                .rounded(px(CARD_RADIUS))
                 .overflow_hidden()
-                .child(
-                    gpui_kit::img(image)
-                        .size_full()
-                        .rounded(px(crate::CARD_RADIUS)),
-                );
+                .child(gpui_kit::img(image).size_full().rounded(px(CARD_RADIUS)));
             let current = if transitioning {
                 current
                     .with_animation(
@@ -601,7 +638,7 @@ impl Render for WebViewport {
         // dividers are moving. Use a rounded border ring whose inner edge
         // matches the pane's corner arc; the pane's rectangular clip trims
         // the rest of each ring.
-        let radius = crate::CARD_RADIUS;
+        let radius = CARD_RADIUS;
         let ring_size = px(radius * 3.0);
         let ring_offset = px(-radius);
         let outer_corner_radius = px(radius * 2.0);
@@ -701,6 +738,9 @@ mod tests {
     #[test]
     fn pane_coordinates_are_local_to_the_selected_viewport() {
         let position = gpui_kit::point(px(520.0), px(72.0));
-        assert_eq!(browser_point_in_pane(position, 320.0, 100.0), (96, 27));
+        assert_eq!(
+            browser_point_in_pane(position, 320.0, 100.0, false),
+            (96, 27)
+        );
     }
 }

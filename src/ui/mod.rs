@@ -1,3 +1,4 @@
+pub mod app_pages;
 pub mod command_palette;
 pub mod motion;
 pub mod sidebar;

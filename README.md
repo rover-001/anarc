@@ -48,7 +48,7 @@ export LD_LIBRARY_PATH="$CEF_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 Then run `cargo run --release` from this directory. The CEF package version and binary distribution must match. On Wayland, use an XWayland session (`--ozone-platform=x11`); window embedding currently uses the Linux X11 native child-window path. Do not use `--single-process`.
 
-The address field currently uses the visible **Go** button to submit. CEF page title/favicon callbacks, popups, downloads, keyboard shortcuts, and independent per-space request contexts are not wired yet.
+The address field uses the visible **Go** button or Enter to submit. Lumen updates tab titles and favicons from CEF callbacks, routes user-requested popups to tabs, blocks unsolicited popups, records downloads, and applies app keyboard shortcuts. The built-in Ad blocker uses EasyList plus Lumen's starter rules and can be controlled from the puzzle-piece button beside Downloads. It is not the uBlock Origin extension. Spaces have independent CEF request contexts. Session state, recent searches, history, lifecycle discarding, and runtime statistics are implemented in the modules listed below.
 
 ## Dependencies
 
@@ -56,9 +56,20 @@ The manifest pins `gpui-kit` 0.9.0, CEF 156.4.0, raw-window-handle 0.6.2, x11 2.
 
 ## Project layout
 
-- `src/ui/`: sidebar, spaces, tab list, and command palette view
-- `src/engine/`: browser-engine boundary
-- `src/model/`: serializable Space and Tab types
-- `src/lifecycle.rs`: future freeze/discard policy
-- `src/stats.rs`: future process and startup statistics
-- `src/persist.rs`: future session persistence
+- `src/main.rs`: CLI import handling and GPUI/CEF process bootstrap
+- `src/app/state.rs`: session state and modal/menu state
+- `src/app/actions/`: tab, space, folder, navigation, shortcut, palette, and resize actions
+- `src/app/render.rs`: root composition and CEF scheduling
+- `src/app/render/sidebar.rs`: sidebar composition and sidebar event wiring
+- `src/app/render/shell.rs`: top bar, address bar, content frame, and resize interactions
+- `src/app/render/context_menus.rs` and `src/app/render/dialogs.rs`: context menus and modal content
+- `src/navigation/`: address normalization, submission, suggestions, and selection policy
+- `src/model/`: serializable Space, Folder, SplitPair, and Tab types
+- `src/ui/`: reusable sidebar rows, app pages, spaces, tab list, command palette, split view, and web viewport components
+- `src/engine/`: stable engine API plus CEF runtime, browser, navigation, and callback modules
+- `src/persist.rs`: session serialization and restore
+- `src/history.rs`: recent searches and SQLite visit history
+- `src/lifecycle.rs`: freeze/discard policy for inactive tabs
+- `src/stats.rs`: startup, render, paint, and process statistics
+- `src/import.rs`: browser profile, bookmark, and history import
+- `src/paths.rs`: configuration, data, cache, and CEF profile paths
