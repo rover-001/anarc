@@ -152,18 +152,12 @@ impl Lumen {
                 })
                 .cloned()
                 .collect::<Vec<_>>();
-            let padding_x = visual::SIDEBAR_ROW_PADDING_X;
-            let available_width = (sidebar_width_f32 - 2.0 * padding_x).max(100.0);
-            let gap = 6.0 * UI_SCALE;
-            let tile_w = ((available_width - (FAVORITE_TILES_PER_ROW - 1) as f32 * gap)
-                / FAVORITE_TILES_PER_ROW as f32)
-                .clamp(28.0 * UI_SCALE, 44.0 * UI_SCALE);
             let mut favorites_grid = div()
                 .id("favorites-grid")
                 .w_full()
                 .flex()
                 .flex_wrap()
-                .gap(px(gap));
+                .gap_1();
             if favorite_tabs.is_empty() {
                 favorites_grid = favorites_grid.child(
                     div()
@@ -195,20 +189,16 @@ impl Lumen {
                 favorites_grid = favorites_grid.child(
                     div()
                         .id(format!("favorite-{id}"))
-                        .w(px(tile_w))
-                        .h(px(tile_w))
+                        .size(px(FAVORITE_TILE_SIZE))
                         .relative()
                         .rounded_lg()
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
-                        .active(|tile| tile.opacity(0.88))
                         .when(selected, |tile| tile.bg(rgb(theme.surface)))
-                        .when(!selected, |tile| {
-                            tile.hover(move |tile| tile.bg(rgb(theme.surface_hover)))
-                        })
-                        .child(tab_list::favorite_favicon(favicon.clone()))
+                        .hover(move |tile| tile.bg(rgb(theme.surface_hover)))
+                        .child(tab_list::favicon(favicon.clone()))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.activate_tab_in_active_space(&tile_id);
                             cx.notify();

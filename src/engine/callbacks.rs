@@ -284,8 +284,11 @@ cef::wrap_download_image_callback! {
                 return;
             }
 
+            // Decode every available scale and keep the largest image so
+            // favicons render at the highest resolution the site provides.
             let mut decoded_buffer: Option<image::ImageBuffer<image::Rgba<u8>, Vec<u8>>> = None;
-            for scale in [1.0f32, 2.0, 0.0] {
+            let mut decoded_pixels = 0u64;
+            for scale in [2.0f32, 1.0, 0.0] {
                 if let Some(png) = favicon_image.as_png(scale, 1, None, None) {
                     let size = png.size();
                     if size > 0 && size <= 512 * 1024 {
@@ -293,35 +296,38 @@ cef::wrap_download_image_callback! {
                         let copied = png.data(Some(&mut bytes), 0).min(size);
                         bytes.truncate(copied);
                         if let Ok(decoded) = image::load_from_memory(&bytes) {
-                            decoded_buffer = Some(decoded.to_rgba8());
-                            break;
+                            let rgba = decoded.to_rgba8();
+                            let pixels = u64::from(rgba.width()) * u64::from(rgba.height());
+                            if pixels > decoded_pixels {
+                                decoded_pixels = pixels;
+                                decoded_buffer = Some(rgba);
+                            }
                         }
                     }
                 }
-            }
 
-            if decoded_buffer.is_none() {
-                for scale in [1.0f32, 2.0, 0.0] {
-                    let mut pw: ::std::os::raw::c_int = 0;
-                    let mut ph: ::std::os::raw::c_int = 0;
-                    if let Some(bitmap) = favicon_image.as_bitmap(
-                        scale,
-                        ColorType::RGBA_8888,
-                        AlphaType::PREMULTIPLIED,
-                        Some(&mut pw),
-                        Some(&mut ph),
-                    ) {
-                        let size = bitmap.size();
-                        let expected = (pw as usize) * (ph as usize) * 4;
-                        if pw > 0 && ph > 0 && size >= expected {
-                            let mut bytes = vec![0u8; size];
-                            bitmap.data(Some(&mut bytes), 0);
-                            bytes.truncate(expected);
-                            if let Some(img_buffer) =
-                                image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(pw as u32, ph as u32, bytes)
-                            {
+                let mut pw: ::std::os::raw::c_int = 0;
+                let mut ph: ::std::os::raw::c_int = 0;
+                if let Some(bitmap) = favicon_image.as_bitmap(
+                    scale,
+                    ColorType::RGBA_8888,
+                    AlphaType::PREMULTIPLIED,
+                    Some(&mut pw),
+                    Some(&mut ph),
+                ) {
+                    let size = bitmap.size();
+                    let expected = (pw as usize) * (ph as usize) * 4;
+                    if pw > 0 && ph > 0 && size >= expected {
+                        let mut bytes = vec![0u8; size];
+                        bitmap.data(Some(&mut bytes), 0);
+                        bytes.truncate(expected);
+                        if let Some(img_buffer) =
+                            image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(pw as u32, ph as u32, bytes)
+                        {
+                            let pixels = u64::from(img_buffer.width()) * u64::from(img_buffer.height());
+                            if pixels > decoded_pixels {
+                                decoded_pixels = pixels;
                                 decoded_buffer = Some(img_buffer);
-                                break;
                             }
                         }
                     }
@@ -583,7 +589,7 @@ cef::wrap_display_handler! {
             host.download_image(
                 Some(&CefString::from(url.as_str())),
                 1,
-                64,
+                256,
                 0,
                 Some(&mut callback),
             );
@@ -703,7 +709,7 @@ cef::wrap_display_handler! {
                     host.download_image(
                         Some(&CefString::from(favicon_url.as_str())),
                         1,
-                        64,
+                        256,
                         0,
                         Some(&mut callback),
                     );
