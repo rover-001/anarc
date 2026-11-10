@@ -178,3 +178,7 @@ Committed and pushed fixes for Chromium launch on startup, stale page flash on t
 ## Session 2026-11-10T12:44:15.778247557+00:00
 
 Diagnosed and resolved heavy website and scroll lag on hianime.at/home across 5 subsystems: 189x faster adblock shield matching via query cache, GPU rasterization and zero-copy flags enabled in CEF, throttled 1Hz median edge color OSR calculation, smooth subpixel scroll accumulator, and redundant UI wake elimination. Tested release build and verified all test suites.
+
+## Session 2026-11-10T13:17:14.822147743+00:00
+
+Fixed heavy-site scroll/network lag (adblock query cache 189x speedup, CEF GPU rasterization & zero copy flags, frame edge color 1Hz throttling, subpixel scroll accumulator); fixed ghost closing tab animation bug on blank tabs and anchored exit animations to root sidebar coordinates; enabled sidebar right-click context menu across empty canvas, tabs zone, and root container; eliminated all compiler & clippy warnings; added performance.md to .gitignore, purged it from git commit history, and pushed cleanly to origin/main.
