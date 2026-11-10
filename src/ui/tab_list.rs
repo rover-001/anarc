@@ -26,6 +26,23 @@ pub fn favicon(favicon: Option<Arc<gpui_kit::RenderImage>>) -> gpui_kit::AnyElem
     }
 }
 
+/// Favorite tiles show a star placeholder when a tab has no favicon, matching
+/// the pin glyph used by the pinned section.
+pub fn favorite_favicon(image: Option<Arc<gpui_kit::RenderImage>>) -> gpui_kit::AnyElement {
+    if image.is_some() {
+        favicon(image)
+    } else {
+        div()
+            .size(px(20.0 * UI_SCALE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(rgb(0x7e828d))
+            .child(Icon::new(IconName::StarFill).size(px(16.0 * UI_SCALE)))
+            .into_any_element()
+    }
+}
+
 /// Shows both panes inside the same fixed-width icon slot used by every sidebar row.
 pub fn split_favicon(
     first: Option<Arc<gpui_kit::RenderImage>>,
