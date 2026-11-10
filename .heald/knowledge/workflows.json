@@ -1089,5 +1089,25 @@
     "symbols": [],
     "guidance": "Fixed heavy-site scroll/network lag (adblock query cache 189x speedup, CEF GPU rasterization & zero copy flags, frame edge color 1Hz throttling, subpixel scroll accumulator); fixed ghost closing tab animation bug on blank tabs and anchored exit animations to root sidebar coordinates; enabled sidebar right-click context menu across empty canvas, tabs zone, and root container; eliminated all compiler & clippy warnings; added performance.md to .gitignore, purged it from git commit history, and pushed cleanly to origin/main.",
     "updated_at": "2026-11-10T13:17:14.824606363+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/app/actions/mod.rs",
+      "src/app/render.rs",
+      "src/app/render/context_menus.rs",
+      "src/app/render/shell.rs",
+      "src/app/state.rs",
+      "src/app/tests.rs",
+      "src/engine/browser.rs",
+      "src/engine/callbacks.rs",
+      "src/engine/navigation.rs",
+      "src/shield.rs",
+      "src/ui/app_pages.rs",
+      "src/ui/space_switcher.rs"
+    ],
+    "symbols": [],
+    "guidance": "Fixed browser downloads (CEF can_download and on_before_download set to 1 with ui_update_wake dispatch), added top-right download active indicator badge and live progress notification card. Pre-installed uBlock Origin with YouTube ad tracking filters and client-side SPA ad-stripping scriptlet for complete YouTube video & banner ad elimination; added Manage Extensions navigation to Settings -> Plugins.",
+    "updated_at": "2026-11-10T13:41:51.368856253+00:00"
   }
 ]
