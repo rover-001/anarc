@@ -1,7 +1,7 @@
 use super::*;
 
 impl Lumen {
-    pub(super) fn render_context_menus(
+    pub(in crate::app) fn render_context_menus(
         &mut self,
         theme: visual::SpaceTheme,
         tabs: &[(
@@ -50,10 +50,22 @@ impl Lumen {
                     div()
                         .px_2()
                         .py_1()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme.muted))
-                        .child("Extensions"),
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(theme.muted))
+                                .child("Extensions"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(theme.muted))
+                                .child("1 active"),
+                        ),
                 )
                 .child(
                     div()
@@ -67,16 +79,15 @@ impl Lumen {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(Icon::new(IconName::Shield))
+                        .child(Icon::new(IconName::Shield).text_color(rgb(if ad_blocker_enabled { 0x76d7b2 } else { theme.muted })))
                         .child(
-                            div().flex_1().flex().flex_col().child("Ad blocker").child(
+                            div().flex_1().flex().flex_col().child("uBlock Origin (Built-in)").child(
                                 div()
                                     .text_xs()
                                     .text_color(rgb(theme.muted))
-                                    .child("Blocks ads and trackers"),
+                                    .child("Blocks ads, popups & YouTube video ads"),
                             ),
                         )
-                        .child(if ad_blocker_enabled { "On" } else { "Off" })
                         .child(
                             div()
                                 .id("ad-blocker-toggle-switch")
@@ -108,8 +119,171 @@ impl Lumen {
                                     cx.notify();
                                 })),
                         ),
+                )
+                .child(
+                    div()
+                        .id("manage-extensions-btn")
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(theme.text))
+                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(IconName::Puzzle))
+                        .child(
+                            div().flex_1().flex().flex_col().child("Manage extensions & plugins").child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(theme.muted))
+                                    .child("Install packs, userstyles & userscripts"),
+                            ),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.plugins_menu_open = false;
+                            this.settings_section = SettingsSection::Plugins;
+                            this.app_page = Some(AppPage::Settings);
+                            cx.notify();
+                        })),
                 );
             overlays.push(dismiss.child(panel).into_any_element());
+        }
+        let downloads = self.engine.downloads();
+        if let Some(latest) = downloads.last() {
+            let is_active = !latest.complete && !latest.canceled;
+            let show_toast = (is_active || latest.complete)
+                && self.dismissed_download_toast_id != Some(latest.id)
+                && self.app_page != Some(AppPage::Downloads);
+
+            if show_toast {
+                let filename = latest
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "download".to_owned());
+                let download_id = latest.id;
+                let is_complete = latest.complete;
+                let pct = if latest.total_bytes > 0 {
+                    (latest.received_bytes as f32 / latest.total_bytes as f32).clamp(0.0, 1.0)
+                } else if is_complete {
+                    1.0
+                } else {
+                    0.0
+                };
+                let status_text = if is_complete {
+                    "Download complete · Saved to ~/Downloads".to_string()
+                } else if latest.total_bytes > 0 {
+                    format!(
+                        "Downloading... {} / {}",
+                        ui::app_pages::format_bytes(latest.received_bytes),
+                        ui::app_pages::format_bytes(latest.total_bytes)
+                    )
+                } else {
+                    format!("Downloading... {}", ui::app_pages::format_bytes(latest.received_bytes))
+                };
+                let bar_width = 250.0 * UI_SCALE;
+                let fill_width = (bar_width * pct).max(if is_active { 4.0 } else { 0.0 });
+
+                let toast = div()
+                    .id("download-toast")
+                    .occlude()
+                    .absolute()
+                    .top(px(TOPBAR_HEIGHT + 4.0 * UI_SCALE))
+                    .right(px(8.0 * UI_SCALE))
+                    .w(px(280.0 * UI_SCALE))
+                    .bg(rgb(theme.surface))
+                    .border_1()
+                    .border_color(rgb(if is_active { theme.accent } else { theme.border }))
+                    .rounded_xl()
+                    .p_3()
+                    .shadow_lg()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.app_page = Some(AppPage::Downloads);
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .w_full()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        Icon::new(IconName::Download)
+                                            .text_color(rgb(if is_complete { 0x76d7b2 } else { theme.accent })),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(rgb(theme.text))
+                                            .child(if is_complete { "Download Complete" } else { "Download Started" }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("dismiss-download-toast")
+                                    .px_1()
+                                    .py_0p5()
+                                    .rounded_md()
+                                    .hover(move |s| s.bg(rgb(theme.surface_hover)))
+                                    .text_color(rgb(theme.muted))
+                                    .text_xs()
+                                    .child("✕")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.dismissed_download_toast_id = Some(download_id);
+                                        cx.stop_propagation();
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(theme.text))
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(filename),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(if is_complete { 0x76d7b2 } else { theme.muted }))
+                            .child(status_text),
+                    )
+                    .when(!is_complete, |parent| {
+                        parent.child(
+                            div()
+                                .w(px(bar_width))
+                                .h(px(4.0 * UI_SCALE))
+                                .rounded_full()
+                                .bg(rgb(theme.border))
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .rounded_full()
+                                        .bg(rgb(theme.accent))
+                                        .w(px(fill_width)),
+                                ),
+                        )
+                    });
+
+                overlays.push(toast.into_any_element());
+            }
         }
         if let Some(menu) = &self.sidebar_context_menu {
             let x = menu.x;

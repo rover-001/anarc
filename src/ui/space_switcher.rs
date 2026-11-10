@@ -167,15 +167,16 @@ pub fn settings_button(theme: SpaceTheme) -> impl IntoElement {
         .child(Icon::new(IconName::Settings))
 }
 
-pub fn downloads_button(theme: SpaceTheme) -> impl IntoElement {
-    div()
+pub fn downloads_button(theme: SpaceTheme, is_downloading: bool) -> impl IntoElement {
+    let mut btn = div()
         .id("downloads-button")
+        .relative()
         .size(px(28.0 * UI_SCALE))
         .rounded_lg()
         .flex()
         .items_center()
         .justify_center()
-        .text_color(rgb(theme.muted))
+        .text_color(rgb(if is_downloading { theme.accent } else { theme.muted }))
         .active(|style| style.opacity(0.92))
         .hover(move |style| {
             style
@@ -183,7 +184,24 @@ pub fn downloads_button(theme: SpaceTheme) -> impl IntoElement {
                 .text_color(rgb(theme.text))
         })
         .cursor_pointer()
-        .child(Icon::new(IconName::Download))
+        .child(Icon::new(IconName::Download));
+
+    if is_downloading {
+        btn = btn.child(
+            div()
+                .id("download-active-badge")
+                .absolute()
+                .top(px(2.0))
+                .right(px(2.0))
+                .size(px(7.0 * UI_SCALE))
+                .rounded_full()
+                .bg(rgb(theme.accent))
+                .border_1()
+                .border_color(rgb(theme.base)),
+        );
+    }
+
+    btn
 }
 
 pub fn plugins_button(theme: SpaceTheme) -> impl IntoElement {
