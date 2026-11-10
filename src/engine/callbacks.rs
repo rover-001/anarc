@@ -8,6 +8,8 @@ cef::wrap_load_handler! {
     pub(super) struct LumenLoadHandler {
         shared: Arc<Mutex<BrowserSharedState>>,
         https_state: Arc<Mutex<HttpsFirstState>>,
+        events: Arc<Mutex<EngineEvents>>,
+        tab_id: String,
     }
 
     impl LoadHandler {
@@ -41,6 +43,12 @@ cef::wrap_load_handler! {
                             host.set_zoom_level(zoom.clamp(-5.0, 5.0));
                         }
             let url = CefStringUtf16::from(&frame.url()).to_string();
+            if let Ok(mut events) = self.events.lock() {
+                events.plugin_events.push((
+                    "page.load_end".to_string(),
+                    format!("{}\n{url}", self.tab_id),
+                ));
+            }
             if let Ok(mut state) = self.https_state.lock() {
                 clear_https_upgrade(&mut state, &url);
             }
@@ -108,6 +116,7 @@ cef::wrap_resource_request_handler! {
     pub(super) struct LumenResourceRequestHandler {
         shield: Arc<crate::shield::ShieldState>,
         tab_id: String,
+        panel_packages: super::panel_scheme::PanelRegistry,
     }
 
     impl ResourceRequestHandler {
@@ -121,6 +130,15 @@ cef::wrap_resource_request_handler! {
             let (Some(frame), Some(request)) = (frame, request) else { return ReturnValue::CONTINUE; };
             let source = CefStringUtf16::from(&frame.url()).to_string();
             let url = CefStringUtf16::from(&request.url()).to_string();
+            if source.starts_with("lumen-plugin://")
+                && !super::panel_scheme::allowed_panel_network_request(
+                    &source,
+                    &url,
+                    &self.panel_packages,
+                )
+            {
+                return ReturnValue::CANCEL;
+            }
             let method = CefStringUtf16::from(&request.method()).to_string();
             let resource_type = match request.resource_type() {
                 ResourceType::MAIN_FRAME => "document",
@@ -149,6 +167,8 @@ cef::wrap_request_handler! {
         shield: Arc<crate::shield::ShieldState>,
         tab_id: String,
         https_state: Arc<Mutex<HttpsFirstState>>,
+        events: Arc<Mutex<EngineEvents>>,
+        panel_packages: super::panel_scheme::PanelRegistry,
     }
 
     impl RequestHandler {
@@ -163,6 +183,12 @@ cef::wrap_request_handler! {
             let (Some(frame), Some(request)) = (frame, request) else { return 0; };
             if frame.is_main() == 0 { return 0; }
             let url = CefStringUtf16::from(&request.url()).to_string();
+            if let Ok(mut events) = self.events.lock() {
+                events.plugin_events.push((
+                    "navigation.before".to_string(),
+                    format!("{}\n{url}", self.tab_id),
+                ));
+            }
             if let Some(upgraded) = crate::shield::upgrade_http_url(&url) {
                 let host = crate::shield::url_host(&url).unwrap_or_default();
                 let skip = self.https_state.lock().is_ok_and(|state| state.fallback_hosts.contains(&host));
@@ -188,13 +214,19 @@ cef::wrap_request_handler! {
             _request_initiator: Option<&CefString>,
             _disable_default_handling: Option<&mut i32>,
         ) -> Option<ResourceRequestHandler> {
-            Some(LumenResourceRequestHandler::new(self.shield.clone(), self.tab_id.clone()))
+            Some(LumenResourceRequestHandler::new(
+                self.shield.clone(),
+                self.tab_id.clone(),
+                self.panel_packages.clone(),
+            ))
         }
     }
 }
 
 cef::wrap_context_menu_handler! {
-    pub(super) struct LumenContextMenuHandler;
+    pub(super) struct LumenContextMenuHandler {
+        events: Arc<Mutex<EngineEvents>>,
+    }
 
     impl ContextMenuHandler {
         fn on_before_context_menu(
@@ -204,6 +236,12 @@ cef::wrap_context_menu_handler! {
             _params: Option<&mut ContextMenuParams>,
             model: Option<&mut MenuModel>,
         ) {
+            if let Ok(mut events) = self.events.lock() {
+                events.plugin_events.push((
+                    "context_menu.build".to_string(),
+                    "page".to_string(),
+                ));
+            }
             // CEF's OSR menu paints use PET_POPUP, which this client intentionally ignores.
             if let Some(model) = model {
                 model.clear();
@@ -499,6 +537,11 @@ cef::wrap_display_handler! {
                 favicon_debug(format_args!("no valid icon URL for tab={}", self.tab_id));
                 return;
             };
+            if let Ok(mut events) = self.events.lock() {
+                events
+                    .plugin_events
+                    .push(("page.favicon".to_string(), self.tab_id.clone()));
+            }
             favicon_debug(format_args!("URL found tab={} url={url}", self.tab_id));
             if url.starts_with("data:image/")
                 && let Some(comma) = url.find(',') {
@@ -556,6 +599,12 @@ cef::wrap_display_handler! {
                 }
                 state.dirty = true;
                 state.root_dirty = true;
+                drop(state);
+                if let Ok(mut events) = self.events.lock() {
+                    events
+                        .plugin_events
+                        .push(("page.title".to_string(), self.tab_id.clone()));
+                }
             }
         }
 
@@ -598,6 +647,11 @@ cef::wrap_display_handler! {
                 let is_main_frame = frame.as_ref().is_some_and(|frame| frame.is_main() != 0);
                 if !is_main_frame {
                     return;
+                }
+                if let Ok(mut events) = self.events.lock() {
+                    events
+                        .plugin_events
+                        .push(("page.address".to_string(), self.tab_id.clone()));
                 }
                 let new_host = crate::shield::url_host(&page_url);
                 if let Ok(mut state) = self.shared.lock() {
@@ -683,7 +737,7 @@ cef::wrap_life_span_handler! {
             if let Some(host) = browser.host() {
                 host.set_windowless_frame_rate(self.frame_rate);
                 host.set_zoom_level(self.initial_zoom_level.clamp(-5.0, 5.0));
-                if std::env::var_os("LUMEN_STATS").is_some_and(|value| value == "1") {
+                if std::env::var_os("ANARC_STATS").is_some_and(|value| value == "1") {
                     eprintln!("Lumen CEF OSR frame rate: {} fps", host.windowless_frame_rate());
                 }
             }
@@ -787,6 +841,10 @@ cef::wrap_download_handler! {
                 canceled: false,
             };
             if let Some(events) = events.as_mut() {
+                events.plugin_events.push((
+                    "download.before".to_string(),
+                    format!("{}\n{}", record.path.display(), record.url),
+                ));
                 events.downloads.push(record.clone());
             }
             drop(events);
@@ -856,7 +914,9 @@ fn unique_download_path(name: &str, reserved: &[DownloadRecord]) -> PathBuf {
 }
 
 cef::wrap_permission_handler! {
-    pub(super) struct LumenPermissionHandler;
+    pub(super) struct LumenPermissionHandler {
+        events: Arc<Mutex<EngineEvents>>,
+    }
 
     impl PermissionHandler {
         fn on_request_media_access_permission(
@@ -867,6 +927,12 @@ cef::wrap_permission_handler! {
             _permissions: u32,
             callback: Option<&mut MediaAccessCallback>,
         ) -> i32 {
+            if let Ok(mut events) = self.events.lock() {
+                events.plugin_events.push((
+                    "permission.request".to_string(),
+                    format!("{}\nmedia", _origin.map(ToString::to_string).unwrap_or_default()),
+                ));
+            }
             if let Some(callback) = callback { callback.cont(0); }
             1
         }
@@ -879,6 +945,12 @@ cef::wrap_permission_handler! {
             _permissions: u32,
             callback: Option<&mut PermissionPromptCallback>,
         ) -> i32 {
+            if let Ok(mut events) = self.events.lock() {
+                events.plugin_events.push((
+                    "permission.request".to_string(),
+                    format!("{}\npermission", _origin.map(ToString::to_string).unwrap_or_default()),
+                ));
+            }
             if let Some(callback) = callback { callback.cont(PermissionRequestResult::DENY); }
             1
         }

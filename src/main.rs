@@ -8,6 +8,7 @@ mod navigation;
 mod paths;
 mod persist;
 mod plugin;
+mod plugins;
 mod reader;
 mod settings;
 mod shield;
@@ -44,12 +45,19 @@ fn main() {
             gpui_kit::open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: Some(gpui_kit::TitlebarOptions {
+                        title: Some("Anarc".into()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 },
                 cx,
-                |window, cx| cx.new(|cx| app::Lumen::new(window, cx)),
+                |window, cx| {
+                    window.set_window_title("Anarc");
+                    cx.new(|cx| app::Lumen::new(window, cx))
+                },
             )
-            .expect("open Lumen window");
+            .expect("open Anarc window");
         });
 }
 
@@ -62,6 +70,10 @@ fn handle_import_cli() -> bool {
         eprintln!("usage: lumen --import chrome|chromium|brave|edge|all");
         std::process::exit(2);
     };
+    if !plugins::import_enabled_from_config() {
+        eprintln!("The import plugin is disabled in plugins.toml");
+        std::process::exit(2);
+    }
     match import::import(browser) {
         Ok(summary) => {
             println!(

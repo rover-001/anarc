@@ -1,6 +1,13 @@
 use super::*;
 
 impl Engine {
+    pub fn take_plugin_events(&self) -> Vec<(String, String)> {
+        self.events
+            .lock()
+            .map(|mut events| std::mem::take(&mut events.plugin_events))
+            .unwrap_or_default()
+    }
+
     pub fn take_popups(&self) -> Vec<(String, String)> {
         self.events
             .lock()

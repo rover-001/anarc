@@ -26,6 +26,7 @@ pub fn new_tab_button(theme: SpaceTheme) -> impl IntoElement {
         .rounded_lg()
         .text_sm()
         .text_color(rgb(theme.text))
+        .cursor_pointer()
         .active(|style| style.opacity(0.92))
         .hover(move |style| style.bg(rgb(theme.surface_hover)))
         .child(

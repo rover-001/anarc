@@ -16,7 +16,7 @@ impl Lumen {
                 from + (to - from) * ui::motion::ease_out_quint(progress)
             },
         );
-        let collapsing = !self.sidebar_collapsed;
+        let collapsing = !self.is_sidebar_collapsed();
         let target = if collapsing {
             SIDEBAR_COLLAPSED_WIDTH
         } else {

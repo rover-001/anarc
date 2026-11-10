@@ -1,5 +1,5 @@
 use super::{
-    context::{Disposer, PluginCtx, Shared},
+    context::{Disposer, PluginCtx, ServiceKey, Shared},
     event::{EventMode, EventPayload},
     fiber::{Fiber, FiberState},
     manifest::{Manifest, Plugin, PluginError},
@@ -64,6 +64,10 @@ impl Kernel {
         self.mounted.get(id).map(|mounted| &mounted.fiber.state)
     }
 
+    pub(crate) fn is_active(&self, id: &str) -> bool {
+        self.state(id) == Some(&FiberState::Active)
+    }
+
     pub(crate) fn unmount(&mut self, id: &str) {
         if !self.mounted.contains_key(id) {
             return;
@@ -103,6 +107,14 @@ impl Kernel {
 
     pub(crate) fn contributions(&self) -> Vec<super::Contribution> {
         self.shared.contributions.borrow().clone()
+    }
+
+    pub(crate) fn service<S: std::any::Any>(&self, key: ServiceKey<S>) -> Option<Rc<S>> {
+        self.shared
+            .services
+            .borrow()
+            .get(key.name)
+            .and_then(|entry| entry.value.clone().downcast::<S>().ok())
     }
 
     pub(crate) fn emit(
@@ -174,6 +186,16 @@ impl Kernel {
                 dispose_all(disposers);
                 mounted.fiber.state = FiberState::Failed(panic_message(panic));
             }
+        }
+    }
+}
+
+impl Drop for Kernel {
+    fn drop(&mut self) {
+        let mut ids = self.mounted.keys().cloned().collect::<Vec<_>>();
+        ids.sort_by(|left, right| right.cmp(left));
+        for id in ids {
+            self.unmount(&id);
         }
     }
 }

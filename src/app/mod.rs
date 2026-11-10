@@ -4,7 +4,8 @@ use crate::model::{Folder, Space, SplitPair, Tab, TabState};
 pub(crate) use crate::navigation::{
     SuggestionItem, compute_suggestions, move_suggestion_selection,
 };
-use crate::settings::{load_zooms, save_zooms, url_host};
+#[cfg(not(test))]
+use crate::settings::url_host;
 use crate::ui::command_palette::{self, PaletteAction, PaletteItem, PaletteTab, PaletteTarget};
 use crate::ui::sidebar::rows::{TabDrag, TabDragGhost, section_tab_row, tab_context_menu_position};
 use crate::ui::split_view::{self, DIVIDER_HIT_WIDTH, DIVIDER_WIDTH};
@@ -161,13 +162,12 @@ fn sidebar_width_for(collapsed: bool, width: f32) -> f32 {
 }
 
 /// Number of favorite tiles per sidebar row.
-/// Arc-style favorite tile size.
-const FAVORITE_TILE_SIZE: f32 = 30.0 * UI_SCALE;
+const FAVORITE_TILES_PER_ROW: usize = 4;
 
 #[cfg(all(target_os = "linux", not(test)))]
 fn resize_debug(message: std::fmt::Arguments<'_>) {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *ENABLED.get_or_init(|| std::env::var("LUMEN_DEBUG_RESIZE").as_deref() == Ok("1")) {
+    if *ENABLED.get_or_init(|| std::env::var("ANARC_DEBUG_RESIZE").as_deref() == Ok("1")) {
         eprintln!("[resize-debug] {message}");
     }
 }

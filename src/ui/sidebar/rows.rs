@@ -102,7 +102,9 @@ pub(crate) fn section_tab_row(
                 .when(selected && show_selection_background, |row| {
                     row.bg(rgb(theme.surface))
                 })
-                .hover(|row| row.bg(rgb(theme.surface_hover)))
+                .when(!(selected && show_selection_background), |row| {
+                    row.hover(|row| row.bg(rgb(theme.surface_hover)))
+                })
                 .child(tab_list::favicon(favicon))
                 .child(
                     div()

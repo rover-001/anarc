@@ -32,13 +32,13 @@ impl Render for Lumen {
         if !self.cef_task_started {
             self.cef_task_started = true;
             let refresh_rate = engine::frame_rate_for_refresh(_window.refresh_interval(cx));
-            if std::env::var_os("LUMEN_STATS").is_some_and(|value| value == "1") {
+            if std::env::var_os("ANARC_STATS").is_some_and(|value| value == "1") {
                 eprintln!("Lumen OSR requested frame rate: {refresh_rate} fps");
             }
             self.engine.set_windowless_frame_rate(refresh_rate);
             // Synthetic input for repeatable OSR benchmarks on Wayland, where X11
             // window automation cannot target this GPUI window.
-            if std::env::var_os("LUMEN_AUTOSCROLL").is_some_and(|value| value == "1") {
+            if std::env::var_os("ANARC_AUTOSCROLL").is_some_and(|value| value == "1") {
                 cx.spawn(async move |this, cx| {
                     cx.background_executor()
                         .timer(std::time::Duration::from_secs(5))
@@ -85,6 +85,23 @@ impl Render for Lumen {
                             eprintln!("Lumen CEF startup failed: {error}");
                             return None;
                         }
+                        for (event, payload) in this.engine.take_plugin_events() {
+                            if event == "page.load_end"
+                                && let Some((tab_id, url)) = payload.split_once('\n')
+                            {
+                                this.inject_pack_assets(tab_id, url);
+                            }
+                            let mode = match event.as_str() {
+                                "address.suggest" => crate::plugin::EventMode::Parallel,
+                                "navigation.before" => crate::plugin::EventMode::Waterfall,
+                                "popup.before" => crate::plugin::EventMode::Bail,
+                                "download.before" => crate::plugin::EventMode::Waterfall,
+                                "context_menu.build" => crate::plugin::EventMode::Serial,
+                                "permission.request" => crate::plugin::EventMode::Bail,
+                                _ => crate::plugin::EventMode::Emit,
+                            };
+                            this.emit_plugin_text_with_mode(&event, mode, payload);
+                        }
                         if this.engine.take_created_browsers() {
                             let active = this.active_tab_id().to_owned();
                             this.engine.set_visible(&active);
@@ -106,10 +123,13 @@ impl Render for Lumen {
                             }
                             cx.notify();
                         }
-                        let visible_ids = this.current_split_pair().map_or_else(
-                            || vec![this.active_tab_id().to_string()],
-                            |pair| vec![pair.first, pair.second],
-                        );
+                        let visible_ids = crate::plugins::split_view_enabled()
+                            .then(|| this.current_split_pair())
+                            .flatten()
+                            .map_or_else(
+                                || vec![this.active_tab_id().to_string()],
+                                |pair| vec![pair.first, pair.second],
+                            );
                         let visible_refs =
                             visible_ids.iter().map(String::as_str).collect::<Vec<_>>();
                         let (has_updates, has_root_updates) =
@@ -215,7 +235,11 @@ impl Render for Lumen {
             }
         }
 
-        let expired_tabs = self.engine.discard_inactive();
+        let expired_tabs = if self.plugins.is_active("lumen.lifecycle") {
+            self.engine.discard_inactive()
+        } else {
+            Vec::new()
+        };
         if !expired_tabs.is_empty() {
             for space in &mut self.spaces {
                 for tab in &mut space.tabs {
@@ -223,6 +247,9 @@ impl Render for Lumen {
                         tab.state = TabState::Discarded;
                     }
                 }
+            }
+            for tab_id in expired_tabs {
+                self.emit_plugin_text("tab.discarded", tab_id);
             }
         }
 
@@ -366,7 +393,7 @@ impl Render for Lumen {
         let content_h = if browser_fullscreen {
             height.max(100.0) as i32
         } else {
-            (height - TOPBAR_HEIGHT - CONTENT_BEZEL_BOTTOM).max(100.0) as i32
+            (height - visual::active_topbar_height() - CONTENT_BEZEL_BOTTOM).max(100.0) as i32
         };
 
         #[cfg(all(target_os = "linux", not(test)))]

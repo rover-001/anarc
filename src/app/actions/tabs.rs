@@ -26,6 +26,8 @@ impl Lumen {
             .find(|space| space.id == self.active_space)
         {
             space.active = Some(tab_id.to_owned());
+            let _ = space;
+            self.emit_plugin_text("tab.activated", tab_id.to_owned());
         }
     }
 
@@ -179,7 +181,7 @@ impl Lumen {
         }
         self.reorder_tab_relative(tab_id, target_id, after);
     }
-    pub(in crate::app) fn add_tab(&mut self) {
+    pub(crate) fn add_tab(&mut self) {
         self.show_suggestions = false;
         self.address_editing = false;
         self.reset_address_for_tab_change = true;
@@ -193,9 +195,10 @@ impl Lumen {
         space.tabs.push(tab);
         space.active = Some(id.clone());
         self.added_tab = Some((self.active_space.clone(), id, Instant::now()));
+        self.emit_plugin_text("tab.created", self.active_tab_id().to_owned());
         self.save_state();
     }
-    pub(in crate::app) fn close_active_tab(&mut self) {
+    pub(crate) fn close_active_tab(&mut self) {
         let active_id = self.focused_tab_id().to_owned();
         if active_id.is_empty() {
             self.add_tab();
@@ -227,6 +230,7 @@ impl Lumen {
         let was_active = space.active.as_deref() == Some(tab_id);
         let closing_space_id = space.id.clone();
         let closing_snapshot = space.tabs[index].clone();
+        let closed_tab_id = closing_snapshot.id.clone();
         let split_other = space.split.as_ref().and_then(|pair| {
             if pair.first == tab_id {
                 Some(pair.second.clone())
@@ -275,6 +279,7 @@ impl Lumen {
             Instant::now(),
             self.closing_tab_serial,
         ));
+        self.emit_plugin_text("tab.closed", closed_tab_id);
         self.save_state();
         true
     }
@@ -376,6 +381,9 @@ impl Lumen {
         self.save_state();
     }
     pub(in crate::app) fn split_tabs(&mut self, first: &str, second: &str) -> bool {
+        if !crate::plugins::split_view_enabled() {
+            return false;
+        }
         if first == second
             || !self.active_space().tabs.iter().any(|tab| tab.id == first)
             || !self.active_space().tabs.iter().any(|tab| tab.id == second)
@@ -425,7 +433,7 @@ impl Lumen {
         self.tab_context_menu = None;
         self.save_state();
     }
-    pub(in crate::app) fn reopen_closed_tab(&mut self) {
+    pub(crate) fn reopen_closed_tab(&mut self) {
         let Some((space_id, tab)) = self.recently_closed_tabs.pop() else {
             return;
         };
@@ -445,6 +453,20 @@ impl Lumen {
         self.save_state();
     }
     pub(in crate::app) fn open_popup_tab(&mut self, space_id: &str, url: String) {
+        let url = match self
+            .plugins
+            .emit(
+                "popup.before",
+                crate::plugin::EventMode::Bail,
+                crate::plugin::EventPayload::Text(url.clone()),
+            )
+            .into_iter()
+            .next()
+        {
+            Some(crate::plugin::EventPayload::Flag(true)) => return,
+            Some(crate::plugin::EventPayload::Text(redirected)) => redirected,
+            _ => url,
+        };
         {
             let Some(space) = self.spaces.iter_mut().find(|space| space.id == space_id) else {
                 return;
@@ -455,6 +477,7 @@ impl Lumen {
             space.tabs.push(tab);
             space.active = Some(id);
         }
+        self.emit_plugin_text("tab.created", self.active_tab_id().to_owned());
         self.activate_space(space_id);
         self.save_state();
     }

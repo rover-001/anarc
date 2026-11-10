@@ -24,6 +24,9 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         }
     });
     let (spaces, active_space) = create_default_space();
+    let panel_registry = crate::plugin::new_panel_registry();
+    let mut engine = engine::Engine::new();
+    engine.set_panel_registry(panel_registry.clone());
     Lumen {
         spaces,
         active_space,
@@ -77,7 +80,7 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         #[cfg(all(target_os = "linux", not(test)))]
         active_zoom_target: None,
         show_suggestions: false,
-        engine: engine::Engine::new(),
+        engine,
         space_modal: None,
         space_context_menu: None,
         sidebar_context_menu: None,
@@ -99,13 +102,15 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         settings_section: SettingsSection::default(),
         preferences: Default::default(),
         plugins: {
-            let mut plugins = crate::plugin::Kernel::new();
-            plugins
-                .mount(Box::new(crate::plugin::CorePlugin::new()))
-                .expect("core plugin mounts");
+            let mut plugins = crate::plugin::PluginHost::new(Default::default());
+            plugins.mount_core().expect("core plugin mounts");
+            crate::plugins::register(&mut plugins);
+            plugins.mount_enabled().expect("built-ins mount");
             plugins
         },
-        plugin_config: Default::default(),
+        panel_registry,
+        pending_plugin_review: None,
+        plugin_action_error: None,
         #[cfg(not(test))]
         cef_task_started: false,
     }
@@ -139,6 +144,28 @@ fn browser_tab_shortcuts_work_from_focused_address_bar(cx: &mut gpui::TestAppCon
     view.read_with(cx, |app, _| assert_eq!(app.active_tab_id(), "tab-1"));
     dispatch_test_key(cx, handle, "ctrl-shift-t");
     view.read_with(cx, |app, _| assert_eq!(app.active_tab_id(), "tab-2"));
+}
+
+#[gpui::test]
+fn plugin_settings_and_extensions_menu_render_without_nested_entity_reads(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (handle, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.app_page = Some(AppPage::Settings);
+        app.settings_section = SettingsSection::Plugins;
+        app.plugins_menu_open = true;
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.draw(cx).clear(cx);
+    })
+    .unwrap();
 }
 
 #[gpui::test]

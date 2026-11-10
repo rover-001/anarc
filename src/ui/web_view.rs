@@ -3,9 +3,11 @@ use std::sync::Arc;
 use gpui_kit::{Animation, AnimationExt as _, Context, Render, Window, div, prelude::*, px, rgb};
 
 use crate::app::{CARD_RADIUS, CONTENT_BEZEL_X, Lumen};
+#[cfg(test)]
+use crate::ui::visual::TOPBAR_HEIGHT;
 use crate::ui::{
     split_view::frame_logical_size,
-    visual::{SpaceTheme, TOPBAR_HEIGHT, space_theme},
+    visual::{SpaceTheme, active_topbar_height, space_theme},
 };
 
 /// Crossfading old->new frame on drag release made centred pages visibly bounce
@@ -187,7 +189,11 @@ fn browser_point_in_pane(
     fullscreen: bool,
 ) -> (i32, i32) {
     let x = (f32::from(position.x) - sidebar_width - CONTENT_BEZEL_X - pane_offset).max(0.0) as i32;
-    let top = if fullscreen { 0.0 } else { TOPBAR_HEIGHT };
+    let top = if fullscreen {
+        0.0
+    } else {
+        active_topbar_height()
+    };
     let y = (f32::from(position.y) - top).max(0.0) as i32;
     (x, y)
 }

@@ -1,0 +1,12 @@
+[plugin]
+id = "example.youtube-clean"
+name = "YouTube Clean"
+version = "1.0.0"
+api = "1"
+kind = "pack"
+description = "A small userstyle example."
+
+[[pack.userstyle]]
+match = ["https://www.youtube.com/*"]
+css = "styles/youtube.css"
+run_at = "document_start"

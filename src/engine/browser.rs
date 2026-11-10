@@ -64,13 +64,20 @@ impl Engine {
                 initial_zoom_level,
             );
             let download_handler = LumenDownloadHandler::new(self.events.clone());
-            let permission_handler = LumenPermissionHandler::new();
-            let load_handler = LumenLoadHandler::new(shared.clone(), self.https_state.clone());
-            let context_menu_handler = LumenContextMenuHandler::new();
+            let permission_handler = LumenPermissionHandler::new(self.events.clone());
+            let load_handler = LumenLoadHandler::new(
+                shared.clone(),
+                self.https_state.clone(),
+                self.events.clone(),
+                id.to_owned(),
+            );
+            let context_menu_handler = LumenContextMenuHandler::new(self.events.clone());
             let request_handler = LumenRequestHandler::new(
                 self.shield.clone(),
                 id.to_owned(),
                 self.https_state.clone(),
+                self.events.clone(),
+                self.panel_packages.clone(),
             );
             let mut client = LumenClient::new(
                 render_handler,
@@ -97,6 +104,7 @@ impl Engine {
                 };
 
                 if let Some(ctx) = cef::request_context_create_context(Some(&settings), None) {
+                    panel_scheme::register_panel_factory(&ctx, self.panel_packages.clone());
                     self.contexts.insert(space_id.to_string(), ctx);
                 }
             }

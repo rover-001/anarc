@@ -1,5 +1,17 @@
 //! Reader-mode script assembly.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static PLUGIN_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_plugin_enabled(enabled: bool) {
+    PLUGIN_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub(crate) fn is_plugin_enabled() -> bool {
+    PLUGIN_ENABLED.load(Ordering::Relaxed)
+}
+
 const READABILITY: &str = include_str!("../assets/Readability.js");
 
 /// Builds the script that toggles the active document into a readable article view.

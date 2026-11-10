@@ -1,0 +1,100 @@
+package lumen:plugin@1.0.0;
+
+interface host {
+    record tab {
+        id: string,
+        title: string,
+        url: string,
+        active: bool,
+        pinned: bool,
+    }
+
+    record space {
+        id: string,
+        name: string,
+    }
+
+    record history-entry {
+        url: string,
+        title: string,
+        visits: u64,
+        last-visited-unix-ms: u64,
+    }
+
+    record command-contribution {
+        id: string,
+        title: string,
+        description: option<string>,
+    }
+
+    record keybinding-contribution {
+        command-id: string,
+        key: string,
+        when: option<string>,
+    }
+
+    record slot-item {
+        slot: string,
+        id: string,
+        label: string,
+        command-id: string,
+    }
+
+    record http-response {
+        status: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    // Each call is checked against the installed plugin's requested permissions.
+    list-tabs: func() -> result<list<tab>, string>;
+    open-tab: func(url: string) -> result<string, string>;
+    close-tab: func(tab-id: string) -> result<_, string>;
+    activate-tab: func(tab-id: string) -> result<_, string>;
+    move-tab: func(tab-id: string, index: u32) -> result<_, string>;
+
+    list-spaces: func() -> result<list<space>, string>;
+    switch-space: func(space-id: string) -> result<_, string>;
+
+    navigate: func(tab-id: string, url: string) -> result<_, string>;
+    reload: func(tab-id: string) -> result<_, string>;
+
+    search-history: func(query: string, limit: u32) -> result<list<history-entry>, string>;
+    clear-history: func() -> result<_, string>;
+
+    storage-get: func(key: string) -> result<option<list<u8>>, string>;
+    storage-set: func(key: string, value: list<u8>) -> result<_, string>;
+    storage-delete: func(key: string) -> result<_, string>;
+
+    notify: func(message: string) -> result<_, string>;
+    contribute-command: func(command: command-contribution) -> result<_, string>;
+    contribute-keybinding: func(binding: keybinding-contribution) -> result<_, string>;
+    contribute-slot-item: func(item: slot-item) -> result<_, string>;
+
+    // The host enforces the manifest's network host allowlist for this request.
+    http-request: func(method: string, url: string, headers: list<tuple<string, string>>, body: list<u8>) -> result<http-response, string>;
+}
+
+interface guest {
+    record manifest {
+        id: string,
+        version: string,
+        api: string,
+        requested-permissions: list<string>,
+    }
+
+    record event {
+        name: string,
+        payload: string,
+    }
+
+    get-manifest: func() -> manifest;
+    apply: func(config: string) -> result<_, string>;
+    on-event: func(event: event) -> result<option<string>, string>;
+    run-command: func(command-id: string) -> result<_, string>;
+}
+
+world lumen-plugin {
+    import host;
+    export guest;
+}

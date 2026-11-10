@@ -7,7 +7,7 @@ use crate::app::SettingsSection;
 use crate::app::{AppPage, Lumen};
 use crate::engine::DownloadRecord;
 use crate::settings::SearchEngine;
-use crate::ui::visual::{SpaceTheme, UI_SCALE};
+use crate::ui::visual::{self, SpaceTheme, UI_SCALE};
 
 #[allow(clippy::too_many_arguments)] // Settings receives the current page state and its controls.
 pub fn render(
@@ -20,6 +20,9 @@ pub fn render(
     settings_section: SettingsSection,
     search_engine: SearchEngine,
     active_space_color: u32,
+    plugin_rows: Vec<crate::plugin::PluginRow>,
+    pending_plugin_review: Option<crate::ui::plugin_manager::PluginReview>,
+    plugin_action_error: Option<String>,
     cx: &mut Context<Lumen>,
 ) -> gpui_kit::AnyElement {
     let (title, icon) = match page {
@@ -36,6 +39,9 @@ pub fn render(
             search_engine,
             active_space_color,
             downloads.clone(),
+            plugin_rows,
+            pending_plugin_review,
+            plugin_action_error,
             cx,
         ),
         AppPage::Downloads => downloads_content(downloads, theme),
@@ -61,11 +67,24 @@ pub fn render(
                     div()
                         .flex()
                         .items_center()
-                        .gap_2()
+                        .gap_2p5()
                         .text_lg()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(Icon::new(icon))
-                        .child(title),
+                        .child(visual::anarc_logo().map_or_else(
+                            || Icon::new(icon).into_any_element(),
+                            |logo| {
+                                div()
+                                    .size(px(22.0 * UI_SCALE))
+                                    .flex_shrink_0()
+                                    .child(gpui_kit::img(logo).size_full())
+                                    .into_any_element()
+                            },
+                        ))
+                        .child(if page == AppPage::Settings {
+                            "Anarc Settings"
+                        } else {
+                            title
+                        }),
                 )
                 .child(
                     div()
@@ -76,12 +95,13 @@ pub fn render(
                         .items_center()
                         .justify_center()
                         .text_color(rgb(theme.muted))
+                        .cursor_pointer()
+                        .active(|style| style.opacity(0.88))
                         .hover(move |style| {
                             style
                                 .bg(rgb(theme.surface_hover))
                                 .text_color(rgb(theme.text))
                         })
-                        .cursor_pointer()
                         .child(Icon::new(IconName::X))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.close_app_page();
@@ -109,6 +129,9 @@ fn settings_content(
     search_engine: SearchEngine,
     _active_space_color: u32,
     downloads: Vec<DownloadRecord>,
+    plugin_rows: Vec<crate::plugin::PluginRow>,
+    pending_plugin_review: Option<crate::ui::plugin_manager::PluginReview>,
+    plugin_action_error: Option<String>,
     cx: &mut Context<Lumen>,
 ) -> gpui_kit::AnyElement {
     let tabs = div()
@@ -175,6 +198,16 @@ fn settings_content(
                 this.set_settings_section(SettingsSection::Shortcuts);
                 cx.notify();
             }),
+        ))
+        .child(settings_tab(
+            "Plugins",
+            SettingsSection::Plugins,
+            selected_section,
+            theme,
+            cx.listener(|this, _, _, cx| {
+                this.set_settings_section(SettingsSection::Plugins);
+                cx.notify();
+            }),
         ));
 
     let content = match selected_section {
@@ -187,14 +220,33 @@ fn settings_content(
                     cx.notify();
                 }),
             );
-            setting_card(
-                "Browsing data",
-                "History and search suggestions",
-                "Remove visited pages and saved address-bar searches.",
-                clear_button,
-                theme,
-            )
-            .into_any_element()
+            div()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(setting_card(
+                    "About",
+                    "Anarc Browser",
+                    "Fast, customisable, private web browser built with Rust and GPUI.",
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .children(visual::anarc_logo().map(|logo| {
+                            div()
+                                .size(px(32.0 * UI_SCALE))
+                                .child(gpui_kit::img(logo).size_full())
+                        })),
+                    theme,
+                ))
+                .child(setting_card(
+                    "Browsing data",
+                    "History and search suggestions",
+                    "Remove visited pages and saved address-bar searches.",
+                    clear_button,
+                    theme,
+                ))
+                .into_any_element()
         }
         SettingsSection::Appearance => {
             let zoom_controls = div()
@@ -371,6 +423,13 @@ fn settings_content(
             theme,
         )
         .into_any_element(),
+        SettingsSection::Plugins => plugin_manager_content(
+            theme,
+            plugin_rows,
+            pending_plugin_review,
+            plugin_action_error,
+            cx,
+        ),
     };
 
     div()
@@ -392,6 +451,212 @@ fn settings_content(
         .into_any_element()
 }
 
+fn plugin_manager_content(
+    theme: SpaceTheme,
+    plugin_rows: Vec<crate::plugin::PluginRow>,
+    pending_review: Option<crate::ui::plugin_manager::PluginReview>,
+    feedback: Option<String>,
+    cx: &mut Context<Lumen>,
+) -> gpui_kit::AnyElement {
+    use std::rc::Rc;
+
+    let entity = cx.entity();
+    if let Some(review) = pending_review {
+        let cancel_entity = entity.clone();
+        let on_cancel: crate::ui::plugin_manager::ActionCallback = Rc::new(move |_, _, app| {
+            app.update_entity(&cancel_entity, |this, cx| {
+                let result = this.confirm_plugin_install(false);
+                this.set_plugin_action_error(result.err());
+                cx.notify();
+            });
+        });
+        let install_entity = entity.clone();
+        let on_install: crate::ui::plugin_manager::ActionCallback = Rc::new(move |_, _, app| {
+            app.update_entity(&install_entity, |this, cx| {
+                let result = this.confirm_plugin_install(true);
+                this.set_plugin_action_error(result.err());
+                cx.notify();
+            });
+        });
+        return crate::ui::plugin_manager::render_permission_review(
+            &review, theme, on_cancel, on_install,
+        );
+    }
+    let toggle_entity = entity.clone();
+    let on_toggle: crate::ui::plugin_manager::ToggleCallback =
+        Rc::new(move |id, enabled, _, _, app| {
+            app.update_entity(&toggle_entity, |this, cx| {
+                let result = this.set_plugin_enabled(&id, enabled);
+                this.set_plugin_action_error(
+                    result
+                        .err()
+                        .map(|error| format!("Failed to update plugin {id}: {error}")),
+                );
+                cx.notify();
+            });
+        });
+    let plugin_dir = crate::paths::data_dir().join("plugins");
+    let install_entity = entity.clone();
+    let on_install: crate::ui::plugin_manager::InstallCallback =
+        Rc::new(move |source, _, _, app| {
+            let entity = install_entity.clone();
+            app.update_entity(&entity, move |_this, cx| {
+                cx.spawn(async move |this, cx| {
+                    let picked = cx
+                        .background_executor()
+                        .spawn(async move { pick_plugin_path(source) })
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        match picked {
+                            Ok(Some(path)) => {
+                                let result = this.install_plugin_path(&path, source);
+                                this.set_plugin_action_error(result.err().map(|error| {
+                                    format!("Failed to inspect plugin {}: {error}", path.display())
+                                }));
+                            }
+                            Ok(None) => {}
+                            Err(error) => this.set_plugin_action_error(Some(format!(
+                                "Plugin picker failed: {error}"
+                            ))),
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+            });
+        });
+    let remove_entity = entity.clone();
+    let on_remove: crate::ui::plugin_manager::PluginActionCallback =
+        Rc::new(move |id, _, _, app| {
+            let entity = remove_entity.clone();
+            app.update_entity(&entity, move |this, cx| {
+                let result = this.remove_plugin(&id);
+                this.set_plugin_action_error(
+                    result
+                        .err()
+                        .map(|error| format!("Failed to remove plugin {id}: {error}")),
+                );
+                cx.notify();
+            });
+        });
+    let open_dir = plugin_dir;
+    let open_dir_entity = entity.clone();
+    let on_open_plugin_folder: crate::ui::plugin_manager::ActionCallback =
+        Rc::new(move |_, _, app| {
+            let result = std::fs::create_dir_all(&open_dir)
+                .map_err(|error| {
+                    format!(
+                        "Failed to create plugin directory {}: {error}",
+                        open_dir.display()
+                    )
+                })
+                .and_then(|()| open_local_directory(&open_dir));
+            let entity = open_dir_entity.clone();
+            app.update_entity(&entity, move |this, cx| {
+                this.set_plugin_action_error(result.err());
+                cx.notify();
+            });
+        });
+
+    crate::ui::plugin_manager::render(
+        &plugin_rows,
+        &[],
+        feedback.as_deref(),
+        theme,
+        on_toggle,
+        on_remove,
+        on_install,
+        on_open_plugin_folder,
+    )
+}
+
+fn pick_plugin_path(
+    source: crate::ui::plugin_manager::InstallSource,
+) -> Result<Option<std::path::PathBuf>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+
+        let title = match source {
+            crate::ui::plugin_manager::InstallSource::Folder => "Select plugin folder",
+            crate::ui::plugin_manager::InstallSource::Package => "Select plugin package",
+        };
+        let zenity_args = match source {
+            crate::ui::plugin_manager::InstallSource::Folder => {
+                vec!["--file-selection", "--directory", "--title", title]
+            }
+            crate::ui::plugin_manager::InstallSource::Package => vec![
+                "--file-selection",
+                "--title",
+                title,
+                "--file-filter=Anarc plugins | *.anarcplugin *.lumenplugin",
+            ],
+        };
+        match Command::new("zenity").args(zenity_args).output() {
+            Ok(output) => return picker_output(output),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("could not start zenity: {error}")),
+        }
+
+        let (kdialog_mode, filter) = match source {
+            crate::ui::plugin_manager::InstallSource::Folder => ("--getexistingdirectory", ""),
+            crate::ui::plugin_manager::InstallSource::Package => {
+                ("--getopenfilename", "*.anarcplugin *.lumenplugin")
+            }
+        };
+        let mut command = Command::new("kdialog");
+        command.arg(kdialog_mode);
+        if !filter.is_empty() {
+            command.arg("").arg(filter);
+        }
+        command.arg("--title").arg(title);
+        match command.output() {
+            Ok(output) => return picker_output(output),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("could not start kdialog: {error}")),
+        }
+
+        Err("No file chooser is installed. Install zenity or kdialog to select plugins.".into())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = source;
+        Err("Plugin installation picker is currently available on Linux only.".into())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn picker_output(output: std::process::Output) -> Result<Option<std::path::PathBuf>, String> {
+    use std::os::unix::process::ExitStatusExt;
+    if output.status.success() {
+        let selected = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if selected.is_empty() {
+            return Ok(None);
+        }
+        return Ok(Some(selected.into()));
+    }
+    if output.status.code() == Some(1) || output.status.signal() == Some(1) {
+        return Ok(None);
+    }
+    Err(format!("file chooser exited with {}", output.status))
+}
+
+fn open_local_directory(path: &std::path::Path) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    let result = std::process::Command::new("xdg-open").arg(path).spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(path).spawn();
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("explorer").arg(path).spawn();
+    result.map(|_| ()).map_err(|error| {
+        format!(
+            "Failed to open plugin directory {}: {error}",
+            path.display()
+        )
+    })
+}
+
 fn settings_tab(
     label: &'static str,
     section: SettingsSection,
@@ -403,7 +668,7 @@ fn settings_tab(
     div()
         .id(format!("settings-tab-{label}"))
         .px_3()
-        .py_2()
+        .py_1p5()
         .rounded_md()
         .bg(rgb(if selected {
             theme.accent
@@ -411,9 +676,17 @@ fn settings_tab(
             theme.surface
         }))
         .text_xs()
+        .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(if selected { theme.base } else { theme.text }))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(theme.surface_hover)))
+        .active(|style| style.opacity(0.88))
+        .hover(move |style| {
+            if selected {
+                style
+            } else {
+                style.bg(rgb(theme.surface_hover))
+            }
+        })
         .child(label)
         .on_click(on_click)
 }
