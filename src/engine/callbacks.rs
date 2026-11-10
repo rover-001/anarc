@@ -809,6 +809,7 @@ cef::wrap_life_span_handler! {
                     self.space_id.clone(),
                     if url.is_empty() { "about:blank".to_owned() } else { url },
                 ));
+                let _ = self.paint_wake.try_send(());
             }
             1
         }
@@ -830,9 +831,19 @@ mod popup_tests {
 cef::wrap_download_handler! {
     pub(super) struct LumenDownloadHandler {
         events: Arc<Mutex<EngineEvents>>,
+        ui_update_wake: async_channel::Sender<()>,
     }
 
     impl DownloadHandler {
+        fn can_download(
+            &self,
+            _browser: Option<&mut Browser>,
+            _url: Option<&CefString>,
+            _request_method: Option<&CefString>,
+        ) -> i32 {
+            1
+        }
+
         fn on_before_download(
             &self,
             _browser: Option<&mut Browser>,
@@ -870,8 +881,9 @@ cef::wrap_download_handler! {
             }
             drop(events);
             callback.cont(Some(&cef_path), 0);
+            let _ = self.ui_update_wake.try_send(());
             eprintln!("Lumen download started: {} -> {}", record.url, record.path.display());
-            0
+            1
         }
 
         fn on_download_updated(
@@ -891,6 +903,7 @@ cef::wrap_download_handler! {
                     record.total_bytes = total;
                     record.complete = complete;
                     record.canceled = canceled;
+                    let _ = self.ui_update_wake.try_send(());
                     if complete || canceled {
                         eprintln!("Lumen download {}: {} ({}/{})", if complete { "complete" } else { "failed" }, record.path.display(), received, total);
                     } else {

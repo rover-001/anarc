@@ -99,6 +99,7 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         fullscreen_window_was_fullscreen: None,
         app_page: None,
         plugins_menu_open: false,
+        dismissed_download_toast_id: None,
         settings_section: SettingsSection::default(),
         preferences: Default::default(),
         plugins: {
@@ -246,6 +247,47 @@ fn closing_an_empty_tab_does_not_trigger_closing_ghost_animation(cx: &mut gpui::
         app.active_space_mut().tabs.iter_mut().find(|t| t.id == active_id).unwrap().url = "https://example.com".into();
         assert!(app.close_tab_by_id(&active_id));
         assert!(app.closing_tab.is_some(), "closing a real tab must record closing_tab");
+    });
+}
+
+#[gpui::test]
+fn download_toast_and_button_active_when_downloading(cx: &mut gpui::TestAppContext) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, cx| {
+        let theme = crate::ui::visual::theme_for_space(app.active_space());
+        assert!(app.engine.downloads().is_empty());
+        let initial_overlays = app.render_context_menus(theme, &[], cx);
+        assert_eq!(initial_overlays.len(), 0);
+
+        // Simulate an active download starting
+        app.engine.push_download_test(crate::engine::DownloadRecord {
+            id: 101,
+            url: "https://example.com/archive.tar.gz".into(),
+            path: std::path::PathBuf::from("/home/rover/Downloads/archive.tar.gz"),
+            received_bytes: 512,
+            total_bytes: 4096,
+            complete: false,
+            canceled: false,
+        });
+
+        assert_eq!(app.engine.downloads().len(), 1);
+        let active = app.engine.downloads().iter().any(|d| !d.complete && !d.canceled);
+        assert!(active);
+
+        // Context menus should now render the download toast overlay
+        let overlays = app.render_context_menus(theme, &[], cx);
+        assert_eq!(overlays.len(), 1, "download toast overlay should be rendered when downloading");
+
+        // Dismissing the toast should prevent it from rendering
+        app.dismissed_download_toast_id = Some(101);
+        let overlays_after_dismiss = app.render_context_menus(theme, &[], cx);
+        assert_eq!(overlays_after_dismiss.len(), 0, "dismissed download toast must not render");
     });
 }
 

@@ -306,14 +306,23 @@ impl Lumen {
                                 })),
                         )
                         .when(crate::plugins::downloads_enabled(), |row| {
+                            let is_downloading = self
+                                .engine
+                                .downloads()
+                                .iter()
+                                .any(|d| !d.complete && !d.canceled);
                             row.child(
                                 div()
                                     .id("downloads-btn")
                                     .cursor_pointer()
                                     .active(|style| style.opacity(0.92))
-                                    .child(space_switcher::downloads_button(theme))
+                                    .child(space_switcher::downloads_button(theme, is_downloading))
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.app_page = Some(AppPage::Downloads);
+                                        this.app_page = if this.app_page == Some(AppPage::Downloads) {
+                                            None
+                                        } else {
+                                            Some(AppPage::Downloads)
+                                        };
                                         cx.notify();
                                     })),
                             )

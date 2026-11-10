@@ -64,7 +64,8 @@ impl Engine {
                 self.windowless_frame_rate,
                 initial_zoom_level,
             );
-            let download_handler = LumenDownloadHandler::new(self.events.clone());
+            let download_handler =
+                LumenDownloadHandler::new(self.events.clone(), self.ui_update_wake.clone());
             let permission_handler = LumenPermissionHandler::new(self.events.clone());
             let load_handler = LumenLoadHandler::new(
                 shared.clone(),

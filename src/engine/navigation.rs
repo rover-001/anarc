@@ -26,6 +26,12 @@ impl Engine {
             .map(|events| events.downloads.clone())
             .unwrap_or_default()
     }
+    #[cfg(test)]
+    pub(crate) fn push_download_test(&self, record: DownloadRecord) {
+        if let Ok(mut events) = self.events.lock() {
+            events.downloads.push(record);
+        }
+    }
     pub fn go_back(&self, tab_id: &str) {
         if let Some(browser) = self.browsers.get(tab_id).map(|entry| entry.browser.clone())
             && browser.can_go_back() != 0
