@@ -115,6 +115,63 @@ LD_LIBRARY_PATH="${CEF_PATH:-$HOME/.local/share/cef}${LD_LIBRARY_PATH:+:$LD_LIBR
 
 ---
 
+## Desktop Install (Linux)
+
+**Easy way:** run the installer script — it builds (or uses a bundled binary), installs the CEF runtime, wrapper, icon, and desktop entry:
+
+```sh
+./install.sh
+```
+
+Options: `--prefix DIR`, `--skip-build`, `--no-desktop-entry`. It also works next to a prebuilt release bundle (`lumen` + `cef_linux_x86_64/` + `anarc_logo.png`) with no Rust toolchain needed.
+
+**Manual way:** to install Anarc so it appears in your application launcher:
+
+```sh
+# 1. Build
+cargo build --release
+
+# 2. Install the CEF runtime (skip build-only files like cmake/, include/)
+CEF_SRC="$(find target/release/build -type d -name cef_linux_x86_64 | head -1)"
+mkdir -p "$HOME/.local/share/anarc-cef"
+cd "$CEF_SRC"
+cp -r libcef.so libcef_dll chrome-sandbox chrome_100_percent.pak chrome_200_percent.pak \
+    icudtl.dat resources.pak v8_context_snapshot.bin vk_swiftshader_icd.json \
+    libvk_swiftshader.so libvulkan.so.1 locales "$HOME/.local/share/anarc-cef/"
+
+# 3. Install the binary and a wrapper that sets LD_LIBRARY_PATH
+mkdir -p "$HOME/.local/share/anarc/bin" "$HOME/.local/bin"
+cp target/release/lumen "$HOME/.local/share/anarc/bin/lumen"
+cat > "$HOME/.local/bin/anarc" <<'WRAPPER'
+#!/bin/sh
+export LD_LIBRARY_PATH="$HOME/.local/share/anarc-cef${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$HOME/.local/share/anarc/bin/lumen" "$@"
+WRAPPER
+chmod +x "$HOME/.local/bin/anarc"
+
+# 4. Icon + desktop entry
+mkdir -p "$HOME/.local/share/icons/hicolor/256x256/apps" "$HOME/.local/share/applications" "$HOME/.local/share/pixmaps"
+magick assets/anarc_logo.png -resize 256x256 "$HOME/.local/share/icons/hicolor/256x256/apps/anarc.png"  # or just `cp` the PNG as-is
+cp "$HOME/.local/share/icons/hicolor/256x256/apps/anarc.png" "$HOME/.local/share/pixmaps/anarc.png"
+cat > "$HOME/.local/share/applications/anarc.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Anarc
+Comment=Anarc browser
+Exec=anarc
+Icon=anarc
+Terminal=false
+Categories=Network;WebBrowser;
+StartupNotify=true
+DESKTOP
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+```
+
+If the icon does not appear in your launcher, restart your shell/panel or re-login so it rescans icons and desktop entries. To update later, repeat steps 1–3.
+
+---
+
 ## Configuration & Paths
 
 Anarc stores its runtime state according to XDG base directory specifications (or custom environment variables):
