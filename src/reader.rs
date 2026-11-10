@@ -1,8 +1,12 @@
 //! Reader-mode script assembly.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 
 static PLUGIN_ENABLED: AtomicBool = AtomicBool::new(false);
+static TOGGLE_SCRIPT: OnceLock<String> = OnceLock::new();
 
 pub(crate) fn set_plugin_enabled(enabled: bool) {
     PLUGIN_ENABLED.store(enabled, Ordering::Relaxed);
@@ -15,9 +19,11 @@ pub(crate) fn is_plugin_enabled() -> bool {
 const READABILITY: &str = include_str!("../assets/Readability.js");
 
 /// Builds the script that toggles the active document into a readable article view.
-pub fn toggle_script() -> String {
-    format!(
-        r#"(()=>{{
+pub fn toggle_script() -> &'static str {
+    TOGGLE_SCRIPT
+        .get_or_init(|| {
+            format!(
+                r#"(()=>{{
 if(window.__lumenReaderActive){{location.reload();return;}}
 try{{
 {READABILITY}
@@ -51,7 +57,9 @@ document.head.append(style);
 window.__lumenReaderActive=true;
 }}catch(error){{console.error("Lumen reader mode failed",error);}}
 }})();"#
-    )
+            )
+        })
+        .as_str()
 }
 
 #[cfg(test)]

@@ -977,5 +977,73 @@
     "symbols": [],
     "guidance": "Removed new-tab welcome element; removed logo from sidebar space header and collapsed sidebar; removed solid background from logo asset producing clean transparent RGBA PNG.",
     "updated_at": "2026-11-10T10:35:32.660001268+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/app/actions/shortcuts.rs",
+      "src/app/render/context_menus.rs",
+      "src/app/render/shell.rs",
+      "src/app/render/sidebar.rs",
+      "src/ui/tab_list.rs",
+      "src/ui/visual.rs"
+    ],
+    "symbols": [],
+    "guidance": "Audited all 60+ files across engine, UI render, plugins, shield, persistence, navigation, and build configurations. Generated exhaustive performance.md categorized into P0-P3 priorities with concrete drop-in code fixes.",
+    "updated_at": "2026-11-10T11:55:20.500994630+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/app/actions/shortcuts.rs",
+      "src/app/render/context_menus.rs",
+      "src/app/render/shell.rs",
+      "src/app/render/sidebar.rs",
+      "src/navigation/suggestions.rs",
+      "src/reader.rs",
+      "src/stats.rs",
+      "src/ui/tab_list.rs",
+      "src/ui/visual.rs"
+    ],
+    "symbols": [],
+    "guidance": "Configured Cargo.toml release profile (opt-level 3, thin LTO, 1 codegen-unit, panic abort, strip symbols), pruned image crate default features, added .cargo/config.toml with native target cpu rustflags, and verified 140/140 tests pass.",
+    "updated_at": "2026-11-10T12:05:55.556461715+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/app/actions/shortcuts.rs",
+      "src/app/render/context_menus.rs",
+      "src/app/render/shell.rs",
+      "src/app/render/sidebar.rs",
+      "src/engine/cef_runtime.rs",
+      "src/history.rs",
+      "src/main.rs",
+      "src/navigation/suggestions.rs",
+      "src/reader.rs",
+      "src/stats.rs",
+      "src/ui/tab_list.rs",
+      "src/ui/visual.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Renamed crate and binary to anarc across Cargo.toml, install.sh, and CLI. Fixed Chromium subprocess launch bug by setting browser_subprocess_path, resources_dir_path, and locales_dir_path in CEF Settings and adding runtime symlinks. Fixed stale page flash on tab close and navigation by cleaning transition frames on blank/unloaded tabs.",
+    "updated_at": "2026-11-10T12:16:40.970453475+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/app/render/shell.rs",
+      "src/engine/cef_runtime.rs",
+      "src/history.rs",
+      "src/main.rs",
+      "src/navigation/suggestions.rs",
+      "src/reader.rs",
+      "src/stats.rs",
+      "src/ui/web_view.rs"
+    ],
+    "symbols": [],
+    "guidance": "Committed and pushed fixes for Chromium launch on startup, stale page flash on tab close/search, Anarc renaming, and performance optimizations; updated install.sh with dual anarc/lumen symlinks",
+    "updated_at": "2026-11-10T12:20:51.649193345+00:00"
   }
 ]

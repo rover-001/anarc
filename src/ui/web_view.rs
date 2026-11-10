@@ -95,11 +95,21 @@ impl WebViewport {
         if self.tab_id != tab_id {
             self.resize_source_image = None;
             self.resize_frame_handoff = ResizeFrameHandoff::default();
-            self.previous_image = self.image.clone().or_else(|| self.previous_image.clone());
-            self.transition_id = self.transition_id.wrapping_add(1);
-            self.transition_tab = Some(tab_id.clone());
-            self.transition_cleanup_scheduled = false;
-            self.transition_waiting_for_image = image.is_none() && self.previous_image.is_some();
+            // Only cross-fade when the incoming tab already has a rendered frame.
+            // When opening a new tab, blank page, or waiting for a fresh navigation,
+            // never preserve or flash the previous tab's content.
+            if image.is_some() {
+                self.previous_image = self.image.clone();
+                self.transition_id = self.transition_id.wrapping_add(1);
+                self.transition_tab = Some(tab_id.clone());
+                self.transition_cleanup_scheduled = false;
+                self.transition_waiting_for_image = false;
+            } else {
+                self.previous_image = None;
+                self.transition_tab = None;
+                self.transition_waiting_for_image = false;
+                self.transition_cleanup_scheduled = false;
+            }
         } else if self
             .resize_frame_handoff
             .target_frame_arrived(drag_edge_color.is_some())
@@ -147,10 +157,16 @@ impl WebViewport {
         retired_images: Vec<Arc<gpui_kit::RenderImage>>,
     ) {
         if self.tab_id != tab_id {
-            self.previous_image = self.image.clone();
-            self.transition_id = self.transition_id.wrapping_add(1);
-            self.transition_tab = Some(tab_id.clone());
-            self.transition_cleanup_scheduled = false;
+            if image.is_some() {
+                self.previous_image = self.image.clone();
+                self.transition_id = self.transition_id.wrapping_add(1);
+                self.transition_tab = Some(tab_id.clone());
+                self.transition_cleanup_scheduled = false;
+            } else {
+                self.previous_image = None;
+                self.transition_tab = None;
+                self.transition_cleanup_scheduled = false;
+            }
         }
         self.tab_id = tab_id;
         self.image = image;

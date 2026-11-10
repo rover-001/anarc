@@ -49,11 +49,36 @@ impl Engine {
         let cache_root = crate::paths::cef_root_dir();
         std::fs::create_dir_all(&cache_root)
             .map_err(|error| format!("cannot create CEF cache directory: {error}"))?;
+
+        let current_exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("anarc"));
+        let exe_dir = current_exe.parent().unwrap_or_else(|| std::path::Path::new("."));
+
+        // Locate CEF runtime resources (resources.pak, locales/)
+        // Priority:
+        // 1. Next to the current executable (target/debug, target/release, or unified installation)
+        // 2. Directory in LD_LIBRARY_PATH (e.g. $PREFIX/anarc-cef)
+        // 3. Fallback to executable directory
+        let cef_resources_dir = if exe_dir.join("resources.pak").exists() {
+            exe_dir.to_path_buf()
+        } else if let Ok(ld_path) = std::env::var("LD_LIBRARY_PATH") {
+            ld_path
+                .split(':')
+                .map(std::path::PathBuf::from)
+                .find(|p| p.join("resources.pak").exists())
+                .unwrap_or_else(|| exe_dir.to_path_buf())
+        } else {
+            exe_dir.to_path_buf()
+        };
+        let locales_dir = cef_resources_dir.join("locales");
+
         let settings = Settings {
             no_sandbox: 1,
             external_message_pump: 0,
             multi_threaded_message_loop: 1,
             windowless_rendering_enabled: 1,
+            browser_subprocess_path: CefString::from(current_exe.to_string_lossy().as_ref()),
+            resources_dir_path: CefString::from(cef_resources_dir.to_string_lossy().as_ref()),
+            locales_dir_path: CefString::from(locales_dir.to_string_lossy().as_ref()),
             locale: CefString::from("en-US"),
             user_agent: CefString::from(
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
