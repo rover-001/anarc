@@ -195,6 +195,7 @@ pub(crate) fn render_permission_review(
 ///
 /// `on_toggle` receives the plugin id and requested enabled state. The host
 /// must apply the returned action to the plugin kernel and persist config.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render(
     rows: &[PluginRow],
     details: &[(&str, PluginDetails)],

@@ -174,3 +174,7 @@ Renamed crate and binary to anarc across Cargo.toml, install.sh, and CLI. Fixed 
 ## Session 2026-11-10T12:20:51.642219001+00:00
 
 Committed and pushed fixes for Chromium launch on startup, stale page flash on tab close/search, Anarc renaming, and performance optimizations; updated install.sh with dual anarc/lumen symlinks
+
+## Session 2026-11-10T12:44:15.778247557+00:00
+
+Diagnosed and resolved heavy website and scroll lag on hianime.at/home across 5 subsystems: 189x faster adblock shield matching via query cache, GPU rasterization and zero-copy flags enabled in CEF, throttled 1Hz median edge color OSR calculation, smooth subpixel scroll accumulator, and redundant UI wake elimination. Tested release build and verified all test suites.

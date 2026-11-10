@@ -3,9 +3,10 @@ use gpui_kit::{Bounds, Pixels, canvas, fill, point, size};
 use std::{cell::Cell, rc::Rc};
 
 type PickerBounds = Rc<Cell<[Bounds<Pixels>; 3]>>;
+type DotGridTextureEntry = ((u32, u32, u32), std::sync::Arc<gpui_kit::RenderImage>);
 
 thread_local! {
-    static DOT_GRID_TEXTURES: std::cell::RefCell<Vec<((u32, u32, u32), std::sync::Arc<gpui_kit::RenderImage>)>> = const {
+    static DOT_GRID_TEXTURES: std::cell::RefCell<Vec<DotGridTextureEntry>> = const {
         std::cell::RefCell::new(Vec::new())
     };
 }

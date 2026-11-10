@@ -1050,7 +1050,7 @@ impl Lumen {
                 if browser_modifier && modifiers.alt && key == "r" && !modifiers.shift {
                     if reader::is_plugin_enabled() {
                         this.engine
-                            .execute_script(this.active_tab_id(), &reader::toggle_script());
+                            .execute_script(this.active_tab_id(), reader::toggle_script());
                     }
                     window.prevent_default();
                     cx.stop_propagation();

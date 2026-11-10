@@ -470,7 +470,6 @@ cef::wrap_render_handler! {
             let slice = unsafe { std::slice::from_raw_parts(buffer, len) };
             let copy_started = crate::stats::frame_copy_started();
             let pixels = slice.to_vec();
-            let edge_color = median_edge_color_bgra(&pixels, width as usize, height as usize);
             crate::stats::record_osr_paint(copy_started);
             if let Some(img_buffer) = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
                 width as u32,
@@ -480,10 +479,20 @@ cef::wrap_render_handler! {
                 let frame = image::Frame::new(img_buffer);
                 let render_image = Arc::new(RenderImage::new(smallvec::smallvec![frame]));
                 let mut state = self.shared.lock().unwrap();
+                let now = std::time::Instant::now();
+                let should_calc_edge = state.edge_color.is_none()
+                    || state.width != width
+                    || state.height != height
+                    || state.last_edge_color_instant.is_none_or(|t| {
+                        now.duration_since(t) >= std::time::Duration::from_millis(1000)
+                    });
+                if should_calc_edge {
+                    state.edge_color = median_edge_color_bgra(slice, width as usize, height as usize);
+                    state.last_edge_color_instant = Some(now);
+                }
                 if let Some(previous) = state.image.replace(render_image) {
                     state.retired.push(previous);
                 }
-                state.edge_color = edge_color;
                 state.dirty = true;
             }
             let _ = self.paint_wake.try_send(());
@@ -789,6 +798,12 @@ cef::wrap_life_span_handler! {
                 return 1;
             }
             let url = target_url.map(ToString::to_string).unwrap_or_default();
+            if self.shield.enabled()
+                && !url.is_empty()
+                && self.shield.should_block(&url, &url, "document", "GET", &self.tab_id)
+            {
+                return 1;
+            }
             if let Ok(mut events) = self.events.lock() {
                 events.popups.push((
                     self.space_id.clone(),

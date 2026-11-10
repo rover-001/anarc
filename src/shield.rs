@@ -18,6 +18,7 @@ pub struct ShieldState {
     matcher: SyncSender<MatcherMessage>,
     allowlist: Mutex<HashSet<String>>,
     blocked_by_tab: Mutex<HashMap<String, u64>>,
+    cache: Mutex<HashMap<u64, bool>>,
     enabled: AtomicBool,
 }
 
@@ -82,6 +83,7 @@ impl ShieldState {
             matcher,
             allowlist: Mutex::new(allowlist),
             blocked_by_tab: Mutex::new(HashMap::new()),
+            cache: Mutex::new(HashMap::with_capacity(4096)),
             enabled: AtomicBool::new(true),
         });
         if let Err(error) = std::thread::Builder::new()
@@ -124,6 +126,9 @@ impl ShieldState {
     /// Replace only plugin-provided rules in this worker. Bundled EasyList,
     /// Lumen's starter list and user filter files are rebuilt alongside them.
     pub(crate) fn replace_pack_filter_lists(&self, lists: Vec<String>) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.clear();
+        }
         if let Err(error) = self
             .matcher
             .try_send(MatcherMessage::ReplacePackLists(lists))
@@ -151,6 +156,25 @@ impl ShieldState {
         {
             return false;
         }
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            url.hash(&mut hasher);
+            source_url.hash(&mut hasher);
+            resource_type.hash(&mut hasher);
+            method.hash(&mut hasher);
+            hasher.finish()
+        };
+        if let Ok(cache) = self.cache.lock()
+            && let Some(&blocked) = cache.get(&hash) {
+                if blocked {
+                    if let Ok(mut counts) = self.blocked_by_tab.lock() {
+                        *counts.entry(tab_id.to_owned()).or_default() += 1;
+                    }
+                    crate::stats::record_blocked_request(tab_id);
+                }
+                return blocked;
+            }
         let (reply, result) = mpsc::sync_channel(1);
         let query = MatchRequest {
             url: url.to_owned(),
@@ -161,6 +185,12 @@ impl ShieldState {
         };
         let blocked = self.matcher.send(MatcherMessage::Check(query)).is_ok()
             && result.recv().unwrap_or(false);
+        if let Ok(mut cache) = self.cache.lock() {
+            if cache.len() >= 8192 {
+                cache.clear();
+            }
+            cache.insert(hash, blocked);
+        }
         if blocked {
             if let Ok(mut counts) = self.blocked_by_tab.lock() {
                 *counts.entry(tab_id.to_owned()).or_default() += 1;
@@ -182,10 +212,16 @@ impl ShieldState {
     }
 
     pub fn set_enabled(&self, enabled: bool) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.clear();
+        }
         self.enabled.store(enabled, Ordering::Relaxed);
     }
 
     pub fn toggle_site(&self, host: &str) -> bool {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.clear();
+        }
         let host = host.to_ascii_lowercase();
         let Ok(mut allowlist) = self.allowlist.lock() else {
             return false;

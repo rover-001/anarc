@@ -295,7 +295,7 @@ pub fn theme_for_space(space: &crate::model::Space) -> SpaceTheme {
     let pack_mode = pack_themes
         .iter()
         .filter_map(|pack| pack.mode.as_deref())
-        .last();
+        .next_back();
     let light = match pack_mode {
         Some("dark") => false,
         Some("light") => true,
@@ -390,14 +390,13 @@ pub fn active_topbar_height() -> f32 {
 pub fn active_card_radius() -> f32 {
     let pack_themes = crate::plugin::active_theme_overrides();
     for pack in pack_themes.iter().rev() {
-        if let Some(val) = pack.tokens.get("card_radius") {
-            if let Some(n) = val
+        if let Some(val) = pack.tokens.get("card_radius")
+            && let Some(n) = val
                 .as_float()
                 .or_else(|| val.as_integer().map(|i| i as f64))
             {
                 return (n as f32) * UI_SCALE;
             }
-        }
     }
     16.0 * UI_SCALE
 }
@@ -419,10 +418,12 @@ fn parse_theme_color(value: &toml::Value) -> Option<u32> {
         .flatten()
 }
 
+type GrainTextureEntry = ((u32, u32), std::sync::Arc<gpui_kit::RenderImage>);
+
 // Reuse the sparse grain texture when only its opacity or the theme colors change.
 // Four bounded entries cover the window, sidebar, picker, and a transition surface.
 thread_local! {
-    static GRAIN_TEXTURES: std::cell::RefCell<Vec<((u32, u32), std::sync::Arc<gpui_kit::RenderImage>)>> = const {
+    static GRAIN_TEXTURES: std::cell::RefCell<Vec<GrainTextureEntry>> = const {
         std::cell::RefCell::new(Vec::new())
     };
 }

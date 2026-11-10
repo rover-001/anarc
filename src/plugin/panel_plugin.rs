@@ -190,6 +190,7 @@ pub(crate) fn register_panel_plugins(
     Ok(())
 }
 
+#[allow(clippy::type_complexity)]
 fn parse_panel(
     directory: &Path,
     text: &str,
