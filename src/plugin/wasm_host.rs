@@ -912,9 +912,10 @@ fn timed_guest_call<T>(
     let timer_engine = engine.clone();
     let timer = thread::Builder::new()
         .name("lumen-wasm-deadline".into())
-        .spawn(move || match cancel_rx.recv_timeout(timeout) {
-            Err(RecvTimeoutError::Timeout) => timer_engine.increment_epoch(),
-            _ => {}
+        .spawn(move || {
+            if let Err(RecvTimeoutError::Timeout) = cancel_rx.recv_timeout(timeout) {
+                timer_engine.increment_epoch();
+            }
         })
         .map_err(|error| WorkerFailure::Trap(format!("failed to start deadline timer: {error}")))?;
     let outcome = call(store);
@@ -1211,10 +1212,10 @@ impl Plugin for WasmPlugin {
             *current = Some(worker);
         }
         ctx.effect(move || {
-            if let Ok(mut current) = slot.lock() {
-                if let Some(worker) = current.take() {
-                    worker.stop();
-                }
+            if let Ok(mut current) = slot.lock()
+                && let Some(worker) = current.take()
+            {
+                worker.stop();
             }
         });
         Ok(())

@@ -343,8 +343,10 @@ cef::wrap_app! {
                     "disable-sync",
                     "disable-breakpad",
                     "no-first-run",
-                    "disable-gpu-shader-disk-cache",
                     "enable-smooth-scrolling",
+                    "enable-gpu-rasterization",
+                    "ignore-gpu-blocklist",
+                    "enable-zero-copy",
                     // Lumen's chrome is dark, so web content should request the
                     // dark color scheme by default (prefers-color-scheme: dark).
                     "force-dark-mode",
@@ -356,7 +358,9 @@ cef::wrap_app! {
                 let value = CefString::from("user-gesture-required");
                 command_line.append_switch_with_value(Some(&name), Some(&value));
                 let name = CefString::from("enable-features");
-                let value = CefString::from("OverlayScrollbar,OverlayScrollbars");
+                let value = CefString::from(
+                    "OverlayScrollbar,OverlayScrollbars,CanvasOopRasterization,VaapiIgnoreDriverChecks",
+                );
                 command_line.append_switch_with_value(Some(&name), Some(&value));
                 let name = CefString::from("disable-features");
                 let value = CefString::from(
@@ -380,6 +384,7 @@ pub struct BrowserSharedState {
     pub height: i32,
     pub image: Option<Arc<RenderImage>>,
     pub edge_color: Option<u32>,
+    pub last_edge_color_instant: Option<std::time::Instant>,
     pub dirty: bool,
     pub root_dirty: bool,
     pub title: Option<String>,
@@ -409,11 +414,13 @@ fn median_edge_color_bgra(pixels: &[u8], width: usize, height: usize) -> Option<
     if width == 0 || height == 0 || pixels.len() < width.checked_mul(height)?.checked_mul(4)? {
         return None;
     }
-    let mut red = Vec::with_capacity(height);
-    let mut green = Vec::with_capacity(height);
-    let mut blue = Vec::with_capacity(height);
+    let step = (height / 128).max(1);
+    let sample_count = height.div_ceil(step);
+    let mut red = Vec::with_capacity(sample_count);
+    let mut green = Vec::with_capacity(sample_count);
+    let mut blue = Vec::with_capacity(sample_count);
     let x = width - 1;
-    for y in 0..height {
+    for y in (0..height).step_by(step) {
         let offset = (y * width + x) * 4;
         blue.push(pixels[offset]);
         green.push(pixels[offset + 1]);

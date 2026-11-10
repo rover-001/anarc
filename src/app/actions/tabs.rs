@@ -271,14 +271,21 @@ impl Lumen {
                 space.active = Some(id);
             }
         }
-        self.closing_tab_serial = self.closing_tab_serial.wrapping_add(1);
-        self.closing_tab = Some((
-            closing_space_id,
-            closing_snapshot,
-            index,
-            Instant::now(),
-            self.closing_tab_serial,
-        ));
+        let is_empty_tab = closing_snapshot.url == "about:blank"
+            || closing_snapshot.url == "lumen://welcome"
+            || closing_snapshot.url.trim().is_empty();
+        if !is_empty_tab {
+            self.closing_tab_serial = self.closing_tab_serial.wrapping_add(1);
+            self.closing_tab = Some((
+                closing_space_id,
+                closing_snapshot,
+                index,
+                Instant::now(),
+                self.closing_tab_serial,
+            ));
+        } else {
+            self.closing_tab = None;
+        }
         self.emit_plugin_text("tab.closed", closed_tab_id);
         self.save_state();
         true

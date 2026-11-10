@@ -290,11 +290,10 @@ pub fn clear_browsing_history() {
     if !plugin_enabled() {
         return;
     }
-    if let Some(mutex) = get_database() {
-        if let Ok(connection) = mutex.lock() {
+    if let Some(mutex) = get_database()
+        && let Ok(connection) = mutex.lock() {
             let _ = connection.execute_batch("DELETE FROM history; DELETE FROM imported_visits;");
         }
-    }
     let _ = fs::remove_file(history_path());
 }
 
