@@ -29,7 +29,10 @@ pub(crate) fn normalize_address_with_engine(input: &str, search_engine: SearchEn
     if let Some(url) = keyword_search_url(input) {
         return url;
     }
-    if input == "localhost" || input.starts_with("localhost:") || input.contains('.') {
+    if input == "localhost"
+        || input.starts_with("localhost:")
+        || (!input.contains(char::is_whitespace) && input.contains('.'))
+    {
         return format!("https://{input}");
     }
 
