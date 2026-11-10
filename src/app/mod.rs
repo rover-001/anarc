@@ -161,8 +161,8 @@ fn sidebar_width_for(collapsed: bool, width: f32) -> f32 {
     }
 }
 
-/// Number of favorite tiles per sidebar row.
-const FAVORITE_TILES_PER_ROW: usize = 4;
+/// Arc-style favorite tile size.
+const FAVORITE_TILE_SIZE: f32 = 30.0 * UI_SCALE;
 
 #[cfg(all(target_os = "linux", not(test)))]
 fn resize_debug(message: std::fmt::Arguments<'_>) {

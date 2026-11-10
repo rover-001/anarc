@@ -154,3 +154,7 @@ Removed plugins from Extensions popover (only Ad blocker extension is displayed)
 ## Session 2026-11-10T10:35:32.649780770+00:00
 
 Removed new-tab welcome element; removed logo from sidebar space header and collapsed sidebar; removed solid background from logo asset producing clean transparent RGBA PNG.
+
+## Session 2026-11-10T10:45:00.459526582+00:00
+
+Audited codebase for secrets, hardened .gitignore, updated README.md with comprehensive installation and CEF setup guides for Linux distributions, created private GitHub repository rover-001/anarc, and pushed all code to origin/main.
