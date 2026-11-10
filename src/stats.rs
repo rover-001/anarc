@@ -74,7 +74,11 @@ pub fn record_blocked_request(tab_id: &str) {
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap();
-    *counts.entry(tab_id.to_owned()).or_default() += 1;
+    if let Some(count) = counts.get_mut(tab_id) {
+        *count += 1;
+    } else {
+        counts.insert(tab_id.to_owned(), 1);
+    }
 }
 
 pub fn frame_copy_started() -> Option<Instant> {
@@ -120,4 +124,26 @@ fn process_rss() -> String {
             })
         })
         .unwrap_or_else(|| "unavailable".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blocked_request_records_counts_correctly() {
+        set_plugin_enabled(true);
+        unsafe {
+            std::env::set_var("ANARC_STATS", "1");
+        }
+        record_blocked_request("tab-1");
+        record_blocked_request("tab-1");
+        record_blocked_request("tab-2");
+        let counts = BLOCKED_BY_TAB.get().unwrap().lock().unwrap();
+        assert!(counts.get("tab-1").copied().unwrap_or(0) >= 2);
+        assert!(counts.get("tab-2").copied().unwrap_or(0) >= 1);
+        unsafe {
+            std::env::remove_var("ANARC_STATS");
+        }
+    }
 }

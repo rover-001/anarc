@@ -350,6 +350,14 @@ impl Lumen {
                 let left_edge_color = None;
                 self.web_viewport.update(cx, |viewport, cx| {
                     viewport.set_theme(theme);
+                    if left_image.is_none()
+                        && (active_tab_url.is_empty()
+                            || active_tab_url == "about:blank"
+                            || active_tab_url == "lumen://welcome"
+                            || active_tab_url == "anarc://welcome")
+                    {
+                        viewport.clear_transition_image();
+                    }
                     viewport.set_frame(
                         left_tab_id.clone(),
                         viewport_sidebar,

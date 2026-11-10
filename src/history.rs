@@ -3,12 +3,14 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, Transaction, params};
 
 const MAX_RECENT_SEARCHES: usize = 10;
 static PLUGIN_ENABLED: AtomicBool = AtomicBool::new(true);
+static DB_CONN: OnceLock<Mutex<Connection>> = OnceLock::new();
 
 pub(crate) fn set_plugin_enabled(enabled: bool) {
     PLUGIN_ENABLED.store(enabled, Ordering::Relaxed);
@@ -27,7 +29,7 @@ fn database_path() -> PathBuf {
     crate::paths::data_dir().join("history.sqlite")
 }
 
-fn open_database() -> rusqlite::Result<Connection> {
+fn create_database_connection() -> rusqlite::Result<Connection> {
     #[cfg(test)]
     let connection = Connection::open_in_memory()?;
     #[cfg(not(test))]
@@ -38,8 +40,35 @@ fn open_database() -> rusqlite::Result<Connection> {
         }
         Connection::open(path)?
     };
+
+    connection.execute_batch(
+        "PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;",
+    )?;
     initialize_database(&connection)?;
     Ok(connection)
+}
+
+fn get_database() -> Option<&'static Mutex<Connection>> {
+    if let Some(conn) = DB_CONN.get() {
+        return Some(conn);
+    }
+    match create_database_connection() {
+        Ok(connection) => {
+            let _ = DB_CONN.set(Mutex::new(connection));
+            DB_CONN.get()
+        }
+        Err(err) => {
+            eprintln!("Failed to open history database: {err}");
+            None
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[cfg(test)]
+pub(crate) fn open_database() -> rusqlite::Result<Connection> {
+    create_database_connection()
 }
 
 fn initialize_database(connection: &Connection) -> rusqlite::Result<()> {
@@ -83,10 +112,12 @@ pub fn record_visit(url: &str, title: &str) {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return;
     }
-    let Ok(connection) = open_database() else {
+    let Some(mutex) = get_database() else {
         return;
     };
-    let _ = record_visit_in(&connection, url, title);
+    if let Ok(connection) = mutex.lock() {
+        let _ = record_visit_in(&connection, url, title);
+    }
 }
 
 /// Merge imported browser visits into the same SQLite history used by search.
@@ -98,7 +129,18 @@ where
     if !plugin_enabled() {
         return Ok(0);
     }
-    let mut connection = open_database()?;
+    let mutex = get_database().ok_or_else(|| {
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CANTOPEN),
+            Some("history database not available".into()),
+        )
+    })?;
+    let mut connection = mutex.lock().map_err(|_| {
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("database mutex poisoned".into()),
+        )
+    })?;
     let transaction = connection.transaction()?;
     let imported = import_visits_in(&transaction, visits)?;
     transaction.commit()?;
@@ -155,10 +197,12 @@ pub fn update_title(url: &str, title: &str) {
     if url.is_empty() || title.is_empty() {
         return;
     }
-    let Ok(connection) = open_database() else {
+    let Some(mutex) = get_database() else {
         return;
     };
-    let _ = update_title_in(&connection, url, title);
+    if let Ok(connection) = mutex.lock() {
+        let _ = update_title_in(&connection, url, title);
+    }
 }
 
 fn update_title_in(connection: &Connection, url: &str, title: &str) -> rusqlite::Result<()> {
@@ -174,10 +218,14 @@ pub fn search(query: &str, limit: usize) -> Vec<HistoryEntry> {
     if !plugin_enabled() || query.trim().is_empty() || limit == 0 {
         return Vec::new();
     }
-    let Ok(connection) = open_database() else {
+    let Some(mutex) = get_database() else {
         return Vec::new();
     };
-    search_in(&connection, query, limit)
+    if let Ok(connection) = mutex.lock() {
+        search_in(&connection, query, limit)
+    } else {
+        Vec::new()
+    }
 }
 
 fn search_in(connection: &Connection, query: &str, limit: usize) -> Vec<HistoryEntry> {
@@ -242,8 +290,10 @@ pub fn clear_browsing_history() {
     if !plugin_enabled() {
         return;
     }
-    if let Ok(connection) = open_database() {
-        let _ = connection.execute_batch("DELETE FROM history; DELETE FROM imported_visits;");
+    if let Some(mutex) = get_database() {
+        if let Ok(connection) = mutex.lock() {
+            let _ = connection.execute_batch("DELETE FROM history; DELETE FROM imported_visits;");
+        }
     }
     let _ = fs::remove_file(history_path());
 }
@@ -321,5 +371,23 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].visit_count, 2);
         assert_eq!(found[0].visit_time, 2);
+    }
+
+    #[test]
+    fn persistent_singleton_tracks_visits_and_searches() {
+        set_plugin_enabled(true);
+        clear_browsing_history();
+        record_visit("https://singleton.test/home", "Singleton Home");
+        record_visit("https://singleton.test/home", "Singleton Home");
+        update_title("https://singleton.test/home", "Singleton Home Updated");
+
+        let results = search("singleton.test", 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Singleton Home Updated");
+        assert_eq!(results[0].visit_count, 2);
+
+        clear_browsing_history();
+        let empty = search("singleton.test", 10);
+        assert!(empty.is_empty());
     }
 }

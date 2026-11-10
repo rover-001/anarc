@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SuggestionItem {
     pub icon_type: String,
@@ -5,13 +7,159 @@ pub(crate) struct SuggestionItem {
     pub target: String,
 }
 
+struct PopularSite {
+    slug: &'static str,
+    name_lower: &'static str,
+    url: &'static str,
+    title: &'static str,
+}
+
+const POPULAR_SITES: &[PopularSite] = &[
+    PopularSite {
+        slug: "youtube",
+        name_lower: "youtube",
+        url: "https://youtube.com",
+        title: "YouTube — https://youtube.com",
+    },
+    PopularSite {
+        slug: "github",
+        name_lower: "github",
+        url: "https://github.com",
+        title: "GitHub — https://github.com",
+    },
+    PopularSite {
+        slug: "google",
+        name_lower: "google",
+        url: "https://google.com",
+        title: "Google — https://google.com",
+    },
+    PopularSite {
+        slug: "gmail",
+        name_lower: "gmail",
+        url: "https://mail.google.com",
+        title: "Gmail — https://mail.google.com",
+    },
+    PopularSite {
+        slug: "reddit",
+        name_lower: "reddit",
+        url: "https://reddit.com",
+        title: "Reddit — https://reddit.com",
+    },
+    PopularSite {
+        slug: "twitter",
+        name_lower: "twitter / x",
+        url: "https://x.com",
+        title: "Twitter / X — https://x.com",
+    },
+    PopularSite {
+        slug: "chatgpt",
+        name_lower: "chatgpt",
+        url: "https://chatgpt.com",
+        title: "ChatGPT — https://chatgpt.com",
+    },
+    PopularSite {
+        slug: "claude",
+        name_lower: "claude ai",
+        url: "https://claude.ai",
+        title: "Claude AI — https://claude.ai",
+    },
+    PopularSite {
+        slug: "wikipedia",
+        name_lower: "wikipedia",
+        url: "https://wikipedia.org",
+        title: "Wikipedia — https://wikipedia.org",
+    },
+    PopularSite {
+        slug: "amazon",
+        name_lower: "amazon",
+        url: "https://amazon.com",
+        title: "Amazon — https://amazon.com",
+    },
+    PopularSite {
+        slug: "netflix",
+        name_lower: "netflix",
+        url: "https://netflix.com",
+        title: "Netflix — https://netflix.com",
+    },
+    PopularSite {
+        slug: "spotify",
+        name_lower: "spotify",
+        url: "https://open.spotify.com",
+        title: "Spotify — https://open.spotify.com",
+    },
+    PopularSite {
+        slug: "rust",
+        name_lower: "rust programming language",
+        url: "https://www.rust-lang.org",
+        title: "Rust Programming Language — https://www.rust-lang.org",
+    },
+    PopularSite {
+        slug: "crates",
+        name_lower: "crates.io",
+        url: "https://crates.io",
+        title: "Crates.io — https://crates.io",
+    },
+    PopularSite {
+        slug: "stackoverflow",
+        name_lower: "stack overflow",
+        url: "https://stackoverflow.com",
+        title: "Stack Overflow — https://stackoverflow.com",
+    },
+    PopularSite {
+        slug: "discord",
+        name_lower: "discord",
+        url: "https://discord.com",
+        title: "Discord — https://discord.com",
+    },
+    PopularSite {
+        slug: "twitch",
+        name_lower: "twitch",
+        url: "https://twitch.tv",
+        title: "Twitch — https://twitch.tv",
+    },
+    PopularSite {
+        slug: "notion",
+        name_lower: "notion",
+        url: "https://notion.so",
+        title: "Notion — https://notion.so",
+    },
+    PopularSite {
+        slug: "figma",
+        name_lower: "figma",
+        url: "https://figma.com",
+        title: "Figma — https://figma.com",
+    },
+    PopularSite {
+        slug: "news",
+        name_lower: "google news",
+        url: "https://news.google.com",
+        title: "Google News — https://news.google.com",
+    },
+    PopularSite {
+        slug: "maps",
+        name_lower: "google maps",
+        url: "https://maps.google.com",
+        title: "Google Maps — https://maps.google.com",
+    },
+];
+
+static LAST_QUERY_CACHE: Mutex<Option<(String, Vec<SuggestionItem>)>> = Mutex::new(None);
+
 pub(crate) fn compute_suggestions(query: &str) -> Vec<SuggestionItem> {
     let q = query.trim();
     if q.is_empty() {
         return Vec::new();
     }
 
-    let mut list = Vec::new();
+    if let Ok(guard) = LAST_QUERY_CACHE.lock() {
+        if let Some((last_q, last_results)) = &*guard {
+            if last_q == q {
+                return last_results.clone();
+            }
+        }
+    }
+
+    let mut list = Vec::with_capacity(6);
 
     // 1. Google search action
     list.push(SuggestionItem {
@@ -38,46 +186,14 @@ pub(crate) fn compute_suggestions(query: &str) -> Vec<SuggestionItem> {
         }
     }
 
-    // 3. Matched quick sites and keywords
+    // 3. Matched quick sites and keywords (zero allocations in loop)
     let q_lower = q.to_lowercase();
-    const POPULAR_SITES: &[(&str, &str, &str)] = &[
-        ("youtube", "YouTube", "https://youtube.com"),
-        ("github", "GitHub", "https://github.com"),
-        ("google", "Google", "https://google.com"),
-        ("gmail", "Gmail", "https://mail.google.com"),
-        ("reddit", "Reddit", "https://reddit.com"),
-        ("twitter", "Twitter / X", "https://x.com"),
-        ("chatgpt", "ChatGPT", "https://chatgpt.com"),
-        ("claude", "Claude AI", "https://claude.ai"),
-        ("wikipedia", "Wikipedia", "https://wikipedia.org"),
-        ("amazon", "Amazon", "https://amazon.com"),
-        ("netflix", "Netflix", "https://netflix.com"),
-        ("spotify", "Spotify", "https://open.spotify.com"),
-        (
-            "rust",
-            "Rust Programming Language",
-            "https://www.rust-lang.org",
-        ),
-        ("crates", "Crates.io", "https://crates.io"),
-        (
-            "stackoverflow",
-            "Stack Overflow",
-            "https://stackoverflow.com",
-        ),
-        ("discord", "Discord", "https://discord.com"),
-        ("twitch", "Twitch", "https://twitch.tv"),
-        ("notion", "Notion", "https://notion.so"),
-        ("figma", "Figma", "https://figma.com"),
-        ("news", "Google News", "https://news.google.com"),
-        ("maps", "Google Maps", "https://maps.google.com"),
-    ];
-
-    for (slug, name, url) in POPULAR_SITES {
-        if slug.starts_with(&q_lower) || name.to_lowercase().contains(&q_lower) {
+    for site in POPULAR_SITES {
+        if site.slug.starts_with(&q_lower) || site.name_lower.contains(&q_lower) {
             list.push(SuggestionItem {
                 icon_type: "zap".to_string(),
-                title: format!("{name} — {url}"),
-                target: url.to_string(),
+                title: site.title.to_string(),
+                target: site.url.to_string(),
             });
         }
     }
@@ -102,6 +218,11 @@ pub(crate) fn compute_suggestions(query: &str) -> Vec<SuggestionItem> {
     }
 
     list.truncate(6);
+
+    if let Ok(mut guard) = LAST_QUERY_CACHE.lock() {
+        *guard = Some((q.to_string(), list.clone()));
+    }
+
     list
 }
 
@@ -162,5 +283,9 @@ mod tests {
                 .iter()
                 .any(|s| s.target == "https://example.com")
         );
+
+        // Repeated/unchanged query returns equal result
+        let domain_sugs_cached = compute_suggestions("example.com");
+        assert_eq!(domain_sugs, domain_sugs_cached);
     }
 }

@@ -207,6 +207,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "anarc"
+version = "0.1.0"
+dependencies = [
+ "adblock",
+ "async-channel",
+ "cef",
+ "futures-lite",
+ "gpui-kit",
+ "gpui-pre",
+ "image",
+ "raw-window-handle",
+ "ring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "toml 0.8.23",
+ "url",
+ "wasmtime",
+ "wasmtime-wasi",
+ "x11",
+ "zip",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3806,7 +3831,6 @@ dependencies = [
  "qoi",
  "ravif",
  "rayon",
- "rgb",
  "tiff",
  "zune-core 0.5.3",
  "zune-jpeg 0.5.15",
@@ -4266,31 +4290,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_repr",
-]
-
-[[package]]
-name = "lumen"
-version = "0.1.0"
-dependencies = [
- "adblock",
- "async-channel",
- "cef",
- "futures-lite",
- "gpui-kit",
- "gpui-pre",
- "image",
- "raw-window-handle",
- "ring",
- "rusqlite",
- "serde",
- "serde_json",
- "smallvec",
- "toml 0.8.23",
- "url",
- "wasmtime",
- "wasmtime-wasi",
- "x11",
- "zip",
 ]
 
 [[package]]
