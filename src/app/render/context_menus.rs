@@ -32,7 +32,7 @@ impl Lumen {
                 .absolute()
                 .top(px(TOPBAR_HEIGHT))
                 .right(px(8.0 * UI_SCALE))
-                .w(px(260.0 * UI_SCALE))
+                .w(px(300.0 * UI_SCALE))
                 .max_h(px(480.0 * UI_SCALE))
                 .bg(rgb(theme.surface))
                 .border_1()
@@ -72,25 +72,51 @@ impl Lumen {
                         .id("toggle-ad-blocker")
                         .px_2()
                         .py_2()
+                        .w_full()
+                        .min_w_0()
                         .rounded_md()
-                        .text_sm()
-                        .text_color(rgb(theme.text))
                         .hover(move |style| style.bg(rgb(theme.surface_hover)))
                         .flex()
                         .items_center()
-                        .gap_2()
-                        .child(Icon::new(IconName::Shield).text_color(rgb(if ad_blocker_enabled { 0x76d7b2 } else { theme.muted })))
+                        .justify_between()
+                        .gap_3()
                         .child(
-                            div().flex_1().flex().flex_col().child("uBlock Origin (Built-in)").child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(theme.muted))
-                                    .child("Blocks ads, popups & YouTube video ads"),
-                            ),
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .min_w_0()
+                                .flex_1()
+                                .child(Icon::new(IconName::Shield).text_color(rgb(if ad_blocker_enabled { 0x76d7b2 } else { theme.muted })))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(rgb(theme.text))
+                                                .whitespace_nowrap()
+                                                .child("uBlock Origin (Built-in)"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(theme.muted))
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .whitespace_nowrap()
+                                                .child("Blocks ads, popups & YouTube ads"),
+                                        ),
+                                ),
                         )
                         .child(
                             div()
                                 .id("ad-blocker-toggle-switch")
+                                .flex_shrink_0()
                                 .w(px(34.0 * UI_SCALE))
                                 .h(px(20.0 * UI_SCALE))
                                 .rounded_full()
@@ -125,9 +151,9 @@ impl Lumen {
                         .id("manage-extensions-btn")
                         .px_2()
                         .py_2()
+                        .w_full()
+                        .min_w_0()
                         .rounded_md()
-                        .text_sm()
-                        .text_color(rgb(theme.text))
                         .hover(move |style| style.bg(rgb(theme.surface_hover)))
                         .cursor_pointer()
                         .flex()
@@ -135,12 +161,28 @@ impl Lumen {
                         .gap_2()
                         .child(Icon::new(IconName::Puzzle))
                         .child(
-                            div().flex_1().flex().flex_col().child("Manage extensions & plugins").child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(theme.muted))
-                                    .child("Install packs, userstyles & userscripts"),
-                            ),
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(rgb(theme.text))
+                                        .whitespace_nowrap()
+                                        .child("Manage extensions & plugins"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(theme.muted))
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .child("Install packs, userstyles & userscripts"),
+                                ),
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.plugins_menu_open = false;

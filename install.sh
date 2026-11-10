@@ -91,8 +91,11 @@ CEF_DIR="$PREFIX/anarc-cef"
 
 echo "==> Installing to $APP_DIR"
 mkdir -p "$APP_DIR/bin" "$BIN_DIR"
-cp "$BUNDLE_BIN" "$APP_DIR/bin/anarc"
-chmod 755 "$APP_DIR/bin/anarc"
+# Install atomically via temp file to avoid 'Text file busy' (ETXTBSY) if anarc is currently running
+rm -f "$APP_DIR/bin/anarc.tmp" 2>/dev/null || true
+cp -f "$BUNDLE_BIN" "$APP_DIR/bin/anarc.tmp"
+chmod 755 "$APP_DIR/bin/anarc.tmp"
+mv -f "$APP_DIR/bin/anarc.tmp" "$APP_DIR/bin/anarc"
 ln -sf anarc "$APP_DIR/bin/lumen"
 
 # CEF runtime: copy only runtime files (skip cmake/, include/, CMakeLists, etc.)
@@ -101,7 +104,13 @@ mkdir -p "$CEF_DIR"
 for item in libcef.so libcef_dll chrome-sandbox chrome_100_percent.pak \
             chrome_200_percent.pak icudtl.dat resources.pak v8_context_snapshot.bin \
             vk_swiftshader_icd.json libvk_swiftshader.so libvulkan.so.1 locales; do
-    [ -e "$BUNDLE_CEF/$item" ] && cp -r "$BUNDLE_CEF/$item" "$CEF_DIR/"
+    if [ -e "$BUNDLE_CEF/$item" ]; then
+        if [ -f "$BUNDLE_CEF/$item" ]; then
+            cp -f "$BUNDLE_CEF/$item" "$CEF_DIR/$item.tmp" 2>/dev/null && mv -f "$CEF_DIR/$item.tmp" "$CEF_DIR/$item" || cp -rf "$BUNDLE_CEF/$item" "$CEF_DIR/"
+        else
+            cp -rf "$BUNDLE_CEF/$item" "$CEF_DIR/"
+        fi
+    fi
 done
 
 # Symlink anarc into CEF runtime directory as anarc and chrome so CEF child processes
