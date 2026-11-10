@@ -75,7 +75,7 @@ impl Lumen {
             .into_iter()
             .filter(|item| item.key == "keymap.binding")
             .find_map(|item| {
-                let (registered_key, action) = item.value.split_once('=')?;
+                let (registered_key, action) = item.value.rsplit_once('=')?;
                 (registered_key == shortcut).then(|| action.to_string())
             })
     }

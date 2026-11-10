@@ -69,23 +69,6 @@ impl Lumen {
                     }
                 }),
             );
-        sidebar_content = sidebar_content.on_mouse_down(
-            gpui_kit::MouseButton::Right,
-            cx.listener(|this, event: &gpui_kit::MouseDownEvent, window, cx| {
-                let (x, y, width, height) = tab_context_menu_position(event, window);
-                this.sidebar_context_menu = Some(SidebarContextMenu {
-                    x,
-                    y,
-                    width,
-                    height,
-                });
-                this.space_context_menu = None;
-                this.theme_editor = None;
-                cx.stop_propagation();
-                cx.notify();
-            }),
-        );
-
         if !self.is_sidebar_collapsed() {
             sidebar_content = sidebar_content.child(
                 div()
@@ -101,7 +84,23 @@ impl Lumen {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
-                    .child(active_space.name.clone()),
+                    .child(active_space.name.clone())
+                    .on_mouse_down(
+                        gpui_kit::MouseButton::Right,
+                        cx.listener(|this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                            let (x, y, width, height) = tab_context_menu_position(event, window);
+                            this.sidebar_context_menu = Some(SidebarContextMenu {
+                                x,
+                                y,
+                                width,
+                                height,
+                            });
+                            this.space_context_menu = None;
+                            this.theme_editor = None;
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    ),
             );
 
             let mut sidebar_row_index = 0usize;
@@ -173,7 +172,7 @@ impl Lumen {
                         .justify_center()
                         .text_xs()
                         .text_color(rgb(theme.muted))
-                        .child("Drag a tab here to favorite"),
+                        .child("Drag a tab here to star"),
                 );
             }
             for (id, _title, favicon) in &favorite_tabs {
@@ -198,7 +197,7 @@ impl Lumen {
                         .cursor_pointer()
                         .when(selected, |tile| tile.bg(rgb(theme.surface)))
                         .hover(move |tile| tile.bg(rgb(theme.surface_hover)))
-                        .child(tab_list::favicon(favicon.clone()))
+                        .child(tab_list::favorite_favicon(favicon.clone()))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.activate_tab_in_active_space(&tile_id);
                             cx.notify();
