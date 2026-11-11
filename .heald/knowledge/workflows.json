@@ -1109,5 +1109,22 @@
     "symbols": [],
     "guidance": "Fixed browser downloads (CEF can_download and on_before_download set to 1 with ui_update_wake dispatch), added top-right download active indicator badge and live progress notification card. Pre-installed uBlock Origin with YouTube ad tracking filters and client-side SPA ad-stripping scriptlet for complete YouTube video & banner ad elimination; added Manage Extensions navigation to Settings -> Plugins.",
     "updated_at": "2026-11-10T13:41:51.368856253+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/app/actions/tabs.rs",
+      "src/app/render.rs",
+      "src/app/tests.rs",
+      "src/engine/browser.rs",
+      "src/engine/callbacks.rs",
+      "src/engine/mod.rs",
+      "src/engine/navigation.rs",
+      "src/main.rs",
+      "src/navigation/address.rs"
+    ],
+    "symbols": [],
+    "guidance": "Fixed external Chromium launch on install and uncloseable login popup tabs",
+    "updated_at": "2026-11-11T12:56:42.611092500+00:00"
   }
 ]

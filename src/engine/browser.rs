@@ -92,7 +92,8 @@ impl Engine {
                 request_handler,
             );
 
-            let window_info = WindowInfo::default().set_as_windowless(0);
+            let mut window_info = WindowInfo::default().set_as_windowless(0);
+            window_info.runtime_style = cef::RuntimeStyle::ALLOY;
             let start_url = CefString::from(url);
 
             if !self.contexts.contains_key(space_id) {

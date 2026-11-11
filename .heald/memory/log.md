@@ -194,3 +194,7 @@ Fixed browser downloads (CEF can_download and on_before_download set to 1 with u
 ## Session 2026-11-10T13:42:07.210828755+00:00
 
 Pushed finalized memory log to origin/main
+
+## Session 2026-11-11T12:56:42.600829329+00:00
+
+Fixed external Chromium launch on install and uncloseable login popup tabs

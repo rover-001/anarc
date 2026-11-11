@@ -778,6 +778,14 @@ cef::wrap_life_span_handler! {
             }
         }
 
+        fn do_close(&self, _browser: Option<&mut Browser>) -> i32 {
+            if let Ok(mut events) = self.events.lock() {
+                events.close_requests.push(self.tab_id.clone());
+                let _ = self.paint_wake.try_send(());
+            }
+            0
+        }
+
         fn on_before_popup(
             &self,
             _browser: Option<&mut Browser>,
@@ -798,18 +806,23 @@ cef::wrap_life_span_handler! {
                 return 1;
             }
             let url = target_url.map(ToString::to_string).unwrap_or_default();
+            let trimmed = url.trim();
+            if trimmed.is_empty() || trimmed == "about:blank" {
+                return 1;
+            }
             if self.shield.enabled()
-                && !url.is_empty()
-                && self.shield.should_block(&url, &url, "document", "GET", &self.tab_id)
+                && self.shield.should_block(trimmed, trimmed, "document", "GET", &self.tab_id)
             {
                 return 1;
             }
             if let Ok(mut events) = self.events.lock() {
-                events.popups.push((
-                    self.space_id.clone(),
-                    if url.is_empty() { "about:blank".to_owned() } else { url },
-                ));
-                let _ = self.paint_wake.try_send(());
+                if !events.popups.iter().any(|(s, u)| s == &self.space_id && u == trimmed) {
+                    events.popups.push((
+                        self.space_id.clone(),
+                        trimmed.to_owned(),
+                    ));
+                    let _ = self.paint_wake.try_send(());
+                }
             }
             1
         }
@@ -825,6 +838,14 @@ mod popup_tests {
         assert!(should_block_popup(0, true));
         assert!(!should_block_popup(1, true));
         assert!(!should_block_popup(0, false));
+    }
+
+    #[test]
+    fn empty_and_blank_popups_are_rejected() {
+        for url in ["", "   ", "about:blank", "  about:blank  "] {
+            let trimmed = url.trim();
+            assert!(trimmed.is_empty() || trimmed == "about:blank");
+        }
     }
 }
 
