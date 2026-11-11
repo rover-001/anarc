@@ -118,6 +118,13 @@ impl Render for Lumen {
                         if !popups.is_empty() {
                             cx.notify();
                         }
+                        let close_requests = this.engine.take_close_requests();
+                        for tab_id in &close_requests {
+                            this.close_tab_by_id(tab_id);
+                        }
+                        if !close_requests.is_empty() {
+                            cx.notify();
+                        }
                         for (tab_id, fullscreen) in this.engine.take_fullscreen_changes() {
                             if fullscreen {
                                 this.fullscreen_tab = Some(tab_id);
@@ -256,12 +263,8 @@ impl Render for Lumen {
             }
         }
 
-        for (space_id, url) in self.engine.take_popups() {
-            self.open_popup_tab(&space_id, url);
-
-            for retired in self.engine.take_retired_images() {
-                let _ = _window.drop_image(retired);
-            }
+        for retired in self.engine.take_retired_images() {
+            let _ = _window.drop_image(retired);
         }
 
         let current_tab_url = self

@@ -220,7 +220,7 @@ impl Lumen {
         let Some(space) = self
             .spaces
             .iter_mut()
-            .find(|space| space.id == self.active_space)
+            .find(|space| space.tabs.iter().any(|tab| tab.id == tab_id))
         else {
             return false;
         };

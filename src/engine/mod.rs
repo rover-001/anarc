@@ -36,6 +36,7 @@ struct EngineEvents {
     downloads: Vec<DownloadRecord>,
     created: Vec<(String, Browser)>,
     plugin_events: Vec<(String, String)>,
+    close_requests: Vec<String>,
 }
 
 fn origin_favicon_url(page_url: &str) -> Option<String> {
@@ -350,10 +351,16 @@ cef::wrap_app! {
                     // Lumen's chrome is dark, so web content should request the
                     // dark color scheme by default (prefers-color-scheme: dark).
                     "force-dark-mode",
+                    "disable-chrome-runtime",
                 ] {
                     let name = CefString::from(name);
                     command_line.append_switch(Some(&name));
                 }
+                let current_exe = std::env::current_exe()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("anarc"));
+                let subprocess_switch = CefString::from("browser-subprocess-path");
+                let subprocess_path = CefString::from(current_exe.to_string_lossy().as_ref());
+                command_line.append_switch_with_value(Some(&subprocess_switch), Some(&subprocess_path));
                 let name = CefString::from("autoplay-policy");
                 let value = CefString::from("user-gesture-required");
                 command_line.append_switch_with_value(Some(&name), Some(&value));

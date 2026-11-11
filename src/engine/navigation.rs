@@ -14,6 +14,12 @@ impl Engine {
             .map(|mut events| std::mem::take(&mut events.popups))
             .unwrap_or_default()
     }
+    pub fn take_close_requests(&self) -> Vec<String> {
+        self.events
+            .lock()
+            .map(|mut events| std::mem::take(&mut events.close_requests))
+            .unwrap_or_default()
+    }
     pub fn take_fullscreen_changes(&self) -> Vec<(String, bool)> {
         self.events
             .lock()
