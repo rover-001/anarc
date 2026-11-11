@@ -47,8 +47,10 @@ BUNDLE_BIN=""
 BUNDLE_CEF=""
 if [ -f ./anarc ] && [ -d "./cef_${CEF_ARCH}" ]; then
     BUNDLE_BIN="./anarc"
+    BUNDLE_CEF="./cef_${CEF_ARCH}"
 elif [ -f ./lumen ] && [ -d "./cef_${CEF_ARCH}" ]; then
     BUNDLE_BIN="./lumen"
+    BUNDLE_CEF="./cef_${CEF_ARCH}"
 fi
 
 if [ -z "$BUNDLE_BIN" ] && [ "$SKIP_BUILD" -eq 0 ]; then
@@ -123,11 +125,14 @@ ln -sf "$APP_DIR/bin/anarc" "$CEF_DIR/chromium"
 
 cat > "$BIN_DIR/anarc" <<EOF
 #!/bin/sh
+export PATH="$APP_DIR/bin:$BIN_DIR:$CEF_DIR:\$PATH"
 export LD_LIBRARY_PATH="$CEF_DIR\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
 exec "$APP_DIR/bin/anarc" "\$@"
 EOF
 chmod 755 "$BIN_DIR/anarc"
 ln -sf anarc "$BIN_DIR/lumen"
+ln -sf anarc "$BIN_DIR/chrome"
+ln -sf anarc "$BIN_DIR/chromium"
 
 # --- Desktop entry + icon ---------------------------------------------------
 if [ "$NO_DESKTOP" -eq 0 ]; then
@@ -145,7 +150,8 @@ if [ "$NO_DESKTOP" -eq 0 ]; then
 Type=Application
 Name=Anarc
 Comment=Anarc browser
-Exec=anarc %U
+Exec=$BIN_DIR/anarc %U
+TryExec=$BIN_DIR/anarc
 Icon=anarc
 Terminal=false
 Categories=Network;WebBrowser;

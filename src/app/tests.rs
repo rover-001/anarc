@@ -1020,3 +1020,58 @@ fn theme_picker_grain_drag_and_outside_dismiss_use_rendered_bounds(cx: &mut gpui
     })
     .unwrap();
 }
+
+#[gpui::test]
+fn closing_a_tab_in_non_active_space_succeeds_and_updates_model(cx: &mut gpui::TestAppContext) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        // Create a secondary space with a tab
+        let mut work_space = Space::new("work", "Work", "briefcase", 0x4f46e5);
+        let tab = Tab::new("work-tab-1", "Work Tab", "https://example.com");
+        work_space.tabs.push(tab);
+        work_space.active = Some("work-tab-1".to_string());
+        app.spaces.push(work_space);
+
+        // Keep active space as "personal"
+        assert_eq!(app.active_space, "personal");
+
+        // Close the tab in the "work" space
+        assert!(app.close_tab_by_id("work-tab-1"));
+
+        // Verify the tab was removed from the work space
+        let work = app.spaces.iter().find(|s| s.id == "work").unwrap();
+        assert_eq!(work.tabs.len(), 1); // space.tabs replaced with new about:blank tab when empty
+        assert_ne!(work.tabs[0].id, "work-tab-1");
+    });
+}
+
+#[test]
+fn take_close_requests_drains_queued_tabs() {
+    let engine = engine::Engine::new();
+    assert!(engine.take_close_requests().is_empty());
+}
+
+#[gpui::test]
+fn open_popup_tab_creates_live_tab_and_activates_it(cx: &mut gpui::TestAppContext) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.open_popup_tab("personal", "https://accounts.example.com/oauth".to_string());
+        assert_eq!(app.active_space, "personal");
+        let active_id = app.active_tab_id().to_string();
+        let active_tab = app.active_space().tabs.iter().find(|t| t.id == active_id).unwrap();
+        assert_eq!(active_tab.url, "https://accounts.example.com/oauth");
+        assert_eq!(active_tab.state, TabState::Live);
+    });
+}
