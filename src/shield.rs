@@ -19,6 +19,8 @@ pub struct ShieldState {
     allowlist: Mutex<HashSet<String>>,
     blocked_by_tab: Mutex<HashMap<String, u64>>,
     cache: Mutex<HashMap<u64, bool>>,
+    cosmetic_cache: Mutex<HashMap<String, Option<Arc<CosmeticInjection>>>>,
+    engine_ready: Arc<AtomicBool>,
     enabled: AtomicBool,
 }
 
@@ -30,8 +32,43 @@ struct MatchRequest {
     reply: SyncSender<bool>,
 }
 
+struct CosmeticRequest {
+    url: String,
+    reply: SyncSender<Option<CosmeticInjection>>,
+}
+
+/// Element-hiding rules for one page, mirroring uBlock Origin's cosmetic
+/// filtering stage: a stylesheet of selectors plus optional scriptlets.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct CosmeticInjection {
+    pub css: String,
+    pub script: String,
+}
+
+impl CosmeticInjection {
+    fn is_empty(&self) -> bool {
+        self.css.is_empty() && self.script.is_empty()
+    }
+
+    /// Self-contained snippet that installs or refreshes the page stylesheet
+    /// and runs any scriptlet payload once per document.
+    fn to_script(&self) -> String {
+        let css = serde_json::to_string(&self.css).unwrap_or_else(|_| "\"\"".to_owned());
+        let mut script = format!(
+            "(()=>{{const css={css};if(!css)return;const id='anarc-shield-cosmetic';\
+let s=document.getElementById(id);if(!s){{s=document.createElement('style');s.id=id;\
+(document.head||document.documentElement).appendChild(s);}}s.textContent=css;}})();"
+        );
+        if !self.script.is_empty() {
+            script.push_str(&self.script);
+        }
+        script
+    }
+}
+
 enum MatcherMessage {
     Check(MatchRequest),
+    Cosmetic(CosmeticRequest),
     ReplacePackLists(Vec<String>),
 }
 
@@ -79,11 +116,15 @@ impl ShieldState {
             .lock()
             .map(|lists| lists.clone())
             .unwrap_or_default();
+        let engine_ready = Arc::new(AtomicBool::new(false));
+        let worker_ready = Arc::clone(&engine_ready);
         let state = Arc::new(Self {
             matcher,
             allowlist: Mutex::new(allowlist),
             blocked_by_tab: Mutex::new(HashMap::new()),
             cache: Mutex::new(HashMap::with_capacity(4096)),
+            cosmetic_cache: Mutex::new(HashMap::new()),
+            engine_ready,
             enabled: AtomicBool::new(true),
         });
         if let Err(error) = std::thread::Builder::new()
@@ -92,6 +133,7 @@ impl ShieldState {
                 let user_lists = read_user_filter_lists();
                 let mut pack_lists = initial_pack_lists;
                 let mut engine = build_filter_engine(&user_lists, &pack_lists);
+                worker_ready.store(true, Ordering::Relaxed);
                 while let Ok(message) = requests.recv() {
                     match message {
                         MatcherMessage::Check(request) => {
@@ -107,9 +149,16 @@ impl ShieldState {
                             });
                             let _ = request.reply.send(blocked);
                         }
+                        MatcherMessage::Cosmetic(request) => {
+                            let _ = request
+                                .reply
+                                .send(cosmetic_injection_for(&engine, &request.url));
+                        }
                         MatcherMessage::ReplacePackLists(lists) => {
+                            worker_ready.store(false, Ordering::Relaxed);
                             pack_lists = lists;
                             engine = build_filter_engine(&user_lists, &pack_lists);
+                            worker_ready.store(true, Ordering::Relaxed);
                         }
                     }
                 }
@@ -129,12 +178,70 @@ impl ShieldState {
         if let Ok(mut cache) = self.cache.lock() {
             cache.clear();
         }
+        if let Ok(mut cache) = self.cosmetic_cache.lock() {
+            cache.clear();
+        }
         if let Err(error) = self
             .matcher
             .try_send(MatcherMessage::ReplacePackLists(lists))
         {
             eprintln!("Lumen could not queue pack filter update: {error}");
         }
+    }
+
+    /// Element-hiding rules for a page. The result is cached per hostname so
+    /// repeat loads and SPA navigations do not pay for the worker round-trip.
+    pub fn cosmetic_injection(&self, url: &str) -> Option<CosmeticInjection> {
+        if !PLUGIN_ENABLED.load(Ordering::Relaxed) || !self.enabled.load(Ordering::Relaxed) {
+            return None;
+        }
+        // A page that loads while the worker is still parsing the bundled lists
+        // is skipped instead of freezing the UI; a later load retries.
+        if !self.engine_ready.load(Ordering::Relaxed) {
+            return None;
+        }
+        let host = url_host(url)?;
+        if self
+            .allowlist
+            .lock()
+            .is_ok_and(|allowlist| allowlist.contains(&host))
+        {
+            return None;
+        }
+        if let Ok(cache) = self.cosmetic_cache.lock()
+            && let Some(cached) = cache.get(&host)
+        {
+            return cached.as_ref().map(|injection| (**injection).clone());
+        }
+        let (reply, result) = mpsc::sync_channel(1);
+        let query = CosmeticRequest {
+            url: url.to_owned(),
+            reply,
+        };
+        // Called from the UI thread while a page finishes loading, so never
+        // block on a worker that has stopped draining its queue.
+        let injection = if self.matcher.send(MatcherMessage::Cosmetic(query)).is_ok() {
+            result
+                .recv_timeout(std::time::Duration::from_millis(250))
+                .ok()
+                .flatten()
+        } else {
+            None
+        }
+        .filter(|injection| !injection.is_empty());
+        if let Ok(mut cache) = self.cosmetic_cache.lock() {
+            if cache.len() >= 2048 {
+                cache.clear();
+            }
+            cache.insert(host, injection.clone().map(Arc::new));
+        }
+        injection
+    }
+
+    /// Ready-to-execute snippet that hides ad containers on the page.
+    pub fn cosmetic_script(&self, url: &str) -> Option<String> {
+        self.cosmetic_injection(url)
+            .map(|injection| injection.to_script())
     }
 
     pub fn should_block(
@@ -166,15 +273,16 @@ impl ShieldState {
             hasher.finish()
         };
         if let Ok(cache) = self.cache.lock()
-            && let Some(&blocked) = cache.get(&hash) {
-                if blocked {
-                    if let Ok(mut counts) = self.blocked_by_tab.lock() {
-                        *counts.entry(tab_id.to_owned()).or_default() += 1;
-                    }
-                    crate::stats::record_blocked_request(tab_id);
+            && let Some(&blocked) = cache.get(&hash)
+        {
+            if blocked {
+                if let Ok(mut counts) = self.blocked_by_tab.lock() {
+                    *counts.entry(tab_id.to_owned()).or_default() += 1;
                 }
-                return blocked;
+                crate::stats::record_blocked_request(tab_id);
             }
+            return blocked;
+        }
         let (reply, result) = mpsc::sync_channel(1);
         let query = MatchRequest {
             url: url.to_owned(),
@@ -215,11 +323,17 @@ impl ShieldState {
         if let Ok(mut cache) = self.cache.lock() {
             cache.clear();
         }
+        if let Ok(mut cache) = self.cosmetic_cache.lock() {
+            cache.clear();
+        }
         self.enabled.store(enabled, Ordering::Relaxed);
     }
 
     pub fn toggle_site(&self, host: &str) -> bool {
         if let Ok(mut cache) = self.cache.lock() {
+            cache.clear();
+        }
+        if let Ok(mut cache) = self.cosmetic_cache.lock() {
             cache.clear();
         }
         let host = host.to_ascii_lowercase();
@@ -268,20 +382,47 @@ fn read_user_filter_lists() -> Vec<String> {
         .collect()
 }
 
+/// Bundled lists. These mirror the filter sets enabled in the user's
+/// uBlock Origin Lite install: EasyList, EasyPrivacy, uBlock filters, uBlock
+/// badware risks and Peter Lowe's list. uBlock Origin Lite itself cannot run
+/// here because this build uses CEF's Alloy runtime, which has no extension
+/// support, so the equivalent lists are compiled into the built-in shield.
+const BUNDLED_FILTER_LISTS: &[&str] = &[
+    include_str!("../assets/filters/easylist.txt"),
+    include_str!("../assets/filters/easyprivacy.txt"),
+    include_str!("../assets/filters/ublock-filters.txt"),
+    include_str!("../assets/filters/ublock-badware.txt"),
+    include_str!("../assets/filters/pgl.txt"),
+    include_str!("../assets/filters/lumen.txt"),
+];
+
 fn build_filter_engine(user_lists: &[String], pack_lists: &[String]) -> adblock::Engine {
     let mut filters = FilterSet::new(false);
-    filters.add_filter_list(
-        include_str!("../assets/filters/easylist.txt").to_owned(),
-        ParseOptions::default(),
-    );
-    filters.add_filter_list(
-        include_str!("../assets/filters/lumen.txt").to_owned(),
-        ParseOptions::default(),
-    );
+    for text in BUNDLED_FILTER_LISTS {
+        filters.add_filter_list((*text).to_owned(), ParseOptions::default());
+    }
     for text in user_lists.iter().chain(pack_lists) {
         filters.add_filter_list(text.clone(), ParseOptions::default());
     }
     adblock::Engine::new_with_filter_set(filters)
+}
+
+/// Mirrors uBlock's cosmetic stage: collect the hide selectors that apply to
+/// this page and turn them into one stylesheet plus any scriptlet payload.
+fn cosmetic_injection_for(engine: &adblock::Engine, url: &str) -> Option<CosmeticInjection> {
+    let resources = engine.url_cosmetic_resources(url);
+    let mut injection = CosmeticInjection::default();
+    if !resources.hide_selectors.is_empty() {
+        let mut selectors = resources
+            .hide_selectors
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        selectors.sort_unstable();
+        injection.css = format!("{}{{display:none !important}}", selectors.join(","));
+    }
+    injection.script = resources.injected_script;
+    (!injection.is_empty()).then_some(injection)
 }
 
 fn allowlist_path() -> PathBuf {
@@ -479,6 +620,60 @@ mod tests {
         )
         .unwrap();
         assert!(engine.check_network_request(&request).should_block());
+    }
+
+    #[test]
+    fn bundled_lists_mirror_the_ubol_rulesets() {
+        let engine = build_filter_engine(&[], &[]);
+        for url in [
+            "https://www.google-analytics.com/analytics.js",
+            "https://cdn.taboola.com/libtrc/publisher/loader.js",
+            "https://ads.pubmatic.com/AdServer/js/showad.js",
+            "https://static.criteo.net/js/ld/publishertag.js",
+        ] {
+            let request =
+                adblock::request::Request::new(url, "https://publisher.test/", "script", "GET")
+                    .unwrap();
+            assert!(
+                engine.check_network_request(&request).should_block(),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn cosmetic_rules_hide_inline_ad_containers() {
+        let engine = build_filter_engine(&["example.com##.sponsored-slot".to_owned()], &[]);
+        let injection = cosmetic_injection_for(&engine, "https://example.com/article")
+            .expect("cosmetic rules for example.com");
+        assert!(
+            injection.css.contains(".sponsored-slot"),
+            "{}",
+            injection.css
+        );
+        assert!(injection.css.ends_with("{display:none !important}"));
+        let script = injection.to_script();
+        assert!(script.contains("anarc-shield-cosmetic"));
+        assert!(script.contains(".sponsored-slot"));
+    }
+
+    #[test]
+    fn cosmetic_script_is_cached_per_host_and_respects_global_toggle() {
+        enable_shield_plugin();
+        let state = ShieldState::start();
+        let url = "https://www.youtube.com/watch?v=123";
+        for _ in 0..500 {
+            if state.engine_ready.load(Ordering::Relaxed) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(state.cosmetic_script(url).is_some());
+        assert!(state.cosmetic_script(url).is_some());
+        state.set_enabled(false);
+        assert!(state.cosmetic_script(url).is_none());
+        state.set_enabled(true);
+        assert!(state.cosmetic_script(url).is_some());
     }
 
     #[test]

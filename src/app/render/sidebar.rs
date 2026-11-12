@@ -17,10 +17,24 @@ impl Lumen {
             .tabs
             .iter()
             .map(|tab| {
+                let display_title = if (tab.pinned || tab.favorite)
+                    && let Some(pinned_title) = &tab.pinned_title
+                {
+                    pinned_title.clone()
+                } else {
+                    tab.title.clone()
+                };
+                let display_url = if (tab.pinned || tab.favorite)
+                    && let Some(pinned_url) = &tab.pinned_url
+                {
+                    pinned_url.as_str()
+                } else {
+                    tab.url.as_str()
+                };
                 (
                     tab.id.clone(),
-                    tab.title.clone(),
-                    self.engine.get_favicon_image(&tab.id, Some(&tab.url)),
+                    display_title,
+                    self.engine.get_favicon_image(&tab.id, Some(display_url)),
                 )
             })
             .collect();
@@ -773,7 +787,7 @@ impl Lumen {
                                                         .size(px(14.0 * UI_SCALE)),
                                                 )
                                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.close_tab_by_id(&close_id);
+                                                    this.close_section_tab(&close_id);
                                                     cx.stop_propagation();
                                                     cx.notify();
                                                 })),
@@ -921,7 +935,7 @@ impl Lumen {
                                         .text_color(rgb(theme.muted))
                                         .child(Icon::new(IconName::X).size(px(14.0 * UI_SCALE)))
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.close_tab_by_id(&close_id);
+                                            this.close_section_tab(&close_id);
                                             cx.stop_propagation();
                                             cx.notify();
                                         })),
@@ -1010,57 +1024,58 @@ impl Lumen {
                 );
             }
 
-            let closing_tab_element = if let Some((closing_space, closing_tab, closing_index, started, serial)) =
-                &self.closing_tab
-                && closing_space == &active_space_id
-                && started.elapsed() < ui::motion::MOTION_FAST
-            {
-                let row_index = closing_tab_row_index(
-                    &active_space,
-                    stored_split_pair.as_ref(),
-                    self.split_group_expanded,
-                    closing_tab,
-                    *closing_index,
-                );
-                let row_rect = visual::sidebar_row_rect(sidebar_width_f32, row_index);
-                Some(
-                    div()
-                        .id(format!("closing-tab-{}-{serial}", closing_tab.id))
-                        .absolute()
-                        .left(px(row_rect.left))
-                        .top(px(row_rect.top))
-                        .w(px(row_rect.width))
-                        .h(px(row_rect.height))
-                        .overflow_hidden()
-                        .rounded_lg()
-                        .bg(rgb(theme.surface))
-                        .child(
-                            div()
-                                .w_full()
-                                .h_full()
-                                .flex()
-                                .items_center()
-                                .gap(px(visual::SIDEBAR_ROW_GAP))
-                                .px(px(visual::SIDEBAR_ROW_PADDING_X))
-                                .text_sm()
-                                .text_color(rgb(theme.muted))
-                                .child(tab_list::favicon(None))
-                                .child(closing_tab.title.clone()),
-                        )
-                        .with_animation(
-                            format!("tab-row-close-{}-{serial}", closing_tab.id),
-                            Animation::new(ui::motion::duration(ui::motion::MOTION_FAST))
-                                .with_easing(ui::motion::ease_out_quint),
-                            move |row, progress| {
-                                let remaining = ui::motion::clamp_percentage(1.0 - progress);
-                                row.h(px(visual::TAB_ROW_HEIGHT * remaining))
-                                    .opacity(remaining)
-                            },
-                        ),
-                )
-            } else {
-                None
-            };
+            let closing_tab_element =
+                if let Some((closing_space, closing_tab, closing_index, started, serial)) =
+                    &self.closing_tab
+                    && closing_space == &active_space_id
+                    && started.elapsed() < ui::motion::MOTION_FAST
+                {
+                    let row_index = closing_tab_row_index(
+                        &active_space,
+                        stored_split_pair.as_ref(),
+                        self.split_group_expanded,
+                        closing_tab,
+                        *closing_index,
+                    );
+                    let row_rect = visual::sidebar_row_rect(sidebar_width_f32, row_index);
+                    Some(
+                        div()
+                            .id(format!("closing-tab-{}-{serial}", closing_tab.id))
+                            .absolute()
+                            .left(px(row_rect.left))
+                            .top(px(row_rect.top))
+                            .w(px(row_rect.width))
+                            .h(px(row_rect.height))
+                            .overflow_hidden()
+                            .rounded_lg()
+                            .bg(rgb(theme.surface))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(visual::SIDEBAR_ROW_GAP))
+                                    .px(px(visual::SIDEBAR_ROW_PADDING_X))
+                                    .text_sm()
+                                    .text_color(rgb(theme.muted))
+                                    .child(tab_list::favicon(None))
+                                    .child(closing_tab.title.clone()),
+                            )
+                            .with_animation(
+                                format!("tab-row-close-{}-{serial}", closing_tab.id),
+                                Animation::new(ui::motion::duration(ui::motion::MOTION_FAST))
+                                    .with_easing(ui::motion::ease_out_quint),
+                                move |row, progress| {
+                                    let remaining = ui::motion::clamp_percentage(1.0 - progress);
+                                    row.h(px(visual::TAB_ROW_HEIGHT * remaining))
+                                        .opacity(remaining)
+                                },
+                            ),
+                    )
+                } else {
+                    None
+                };
 
             // Dropping a tab anywhere in the regular list removes it from the
             // favorites, pinned, or folder sections.

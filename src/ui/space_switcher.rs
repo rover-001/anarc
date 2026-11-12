@@ -176,7 +176,11 @@ pub fn downloads_button(theme: SpaceTheme, is_downloading: bool) -> impl IntoEle
         .flex()
         .items_center()
         .justify_center()
-        .text_color(rgb(if is_downloading { theme.accent } else { theme.muted }))
+        .text_color(rgb(if is_downloading {
+            theme.accent
+        } else {
+            theme.muted
+        }))
         .active(|style| style.opacity(0.92))
         .hover(move |style| {
             style

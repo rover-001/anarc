@@ -29,9 +29,23 @@ pub struct DownloadRecord {
     pub canceled: bool,
 }
 
+/// A window the page asked for (link click, `window.open`, OAuth popup).
+pub struct PopupRequest {
+    pub space_id: String,
+    pub url: String,
+    /// Set when CEF created the window itself. Those browsers keep a live
+    /// `window.opener`, `postMessage` and `window.close()`; the app only has to
+    /// put the existing browser on screen.
+    pub browser_id: Option<String>,
+}
+
 #[derive(Default)]
 struct EngineEvents {
-    popups: Vec<(String, String)>,
+    popups: Vec<PopupRequest>,
+    /// Windowless browsers CEF is about to create for the page itself. Their
+    /// shared state has to land in `pending_browsers` before `on_after_created`
+    /// delivers the browser.
+    pending_popup_states: Vec<(String, Arc<Mutex<BrowserSharedState>>)>,
     fullscreen: Vec<(String, bool)>,
     downloads: Vec<DownloadRecord>,
     created: Vec<(String, Browser)>,
@@ -290,6 +304,21 @@ pub fn detect_system_refresh_rate() -> Option<i32> {
     None
 }
 
+/// Every OSR frame is a full-window `Vec` copy plus a fresh GPU texture upload.
+/// Riding a 144 Hz panel burns ~1.2 GB/s of memory bandwidth and blocks CEF's
+/// compositor thread on the copy, which is what made heavy pages (chat apps,
+/// long documents) feel sluggish. Web content is paced well below this anyway,
+/// so cap the OSR surface at 60 fps; `ANARC_OSR_FPS` overrides it for benchmarks.
+const OSR_MAX_FRAME_RATE: i32 = 60;
+
+fn osr_frame_rate_cap() -> i32 {
+    std::env::var("ANARC_OSR_FPS")
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .unwrap_or(OSR_MAX_FRAME_RATE)
+        .clamp(1, 240)
+}
+
 pub fn frame_rate_for_refresh(refresh_interval: Option<std::time::Duration>) -> i32 {
     let rate = refresh_interval
         .filter(|interval| !interval.is_zero())
@@ -305,7 +334,63 @@ pub fn frame_rate_for_refresh(refresh_interval: Option<std::time::Duration>) -> 
             }
         })
         .unwrap_or(60);
-    rate.clamp(1, 240)
+    rate.clamp(1, osr_frame_rate_cap())
+}
+
+/// Identity providers and OAuth endpoints a sign-in popup points at.
+const AUTH_POPUP_HOSTS: &[&str] = &[
+    "accounts.google.com",
+    "accounts.youtube.com",
+    "appleid.apple.com",
+    "login.microsoftonline.com",
+    "login.live.com",
+    "login.microsoft.com",
+    "login.yahoo.com",
+    "id.atlassian.com",
+    "auth0.com",
+    "okta.com",
+];
+
+/// OAuth endpoints that stay on a general-purpose host.
+const AUTH_POPUP_PATHS: &[(&str, &str)] = &[
+    ("github.com", "/login/oauth"),
+    ("gitlab.com", "/oauth"),
+    ("bitbucket.org", "/site/oauth2"),
+    ("discord.com", "/oauth2/authorize"),
+    ("slack.com", "/oauth"),
+];
+
+/// True when a popup URL belongs to a sign-in flow. Those windows must keep
+/// their `window.opener` (identity providers hand the result back through
+/// `postMessage` and shut the window with `window.close()`), so they are the
+/// ones CEF is allowed to create itself.
+pub fn is_auth_flow_url(url: &str) -> bool {
+    let Some(host) = crate::shield::url_host(url) else {
+        return false;
+    };
+    if AUTH_POPUP_HOSTS
+        .iter()
+        .any(|known| host == *known || host.ends_with(&format!(".{known}")))
+    {
+        return true;
+    }
+    // OAuth providers that identify the flow by path rather than by
+    // `response_type`, so an invite or repo link on the same host stays a peek.
+    if AUTH_POPUP_PATHS
+        .iter()
+        .any(|(known_host, prefix)| host == *known_host && url_after_host(url).starts_with(prefix))
+    {
+        return true;
+    }
+    let lower = url.to_ascii_lowercase();
+    lower.contains("response_type=")
+        && (lower.contains("client_id=") || lower.contains("redirect_uri="))
+}
+
+fn url_after_host(url: &str) -> &str {
+    url.split_once("://")
+        .and_then(|(_, rest)| rest.find('/').map(|index| &rest[index..]))
+        .unwrap_or("/")
 }
 
 cef::wrap_app! {
@@ -415,6 +500,51 @@ pub struct BrowserSharedState {
     pub screen_origin_y: i32,
     pub cursor: i32,
     pub target_zoom_level: Option<f64>,
+    /// Blink's visual-viewport page scale, driven by trackpad pinch. Unlike
+    /// `target_zoom_level` this magnifies the rendered page without reflowing
+    /// the layout, and it resets to 1 on every navigation.
+    pub page_scale: f64,
+}
+
+/// Fresh shared state for a browser CEF is about to create. Tabs pass their
+/// own size and zoom level; windows the page opened itself (OAuth popups) keep
+/// the default zoom.
+pub(super) fn new_shared_state(
+    width: i32,
+    height: i32,
+    url: &str,
+    zoom_level: f64,
+) -> BrowserSharedState {
+    let initial_host = crate::shield::url_host(url);
+    let initial_favicon = initial_host.as_deref().and_then(load_favicon_from_disk);
+    BrowserSharedState {
+        width: width.max(1),
+        height: height.max(1),
+        image: None,
+        edge_color: None,
+        last_edge_color_instant: None,
+        dirty: false,
+        root_dirty: false,
+        title: None,
+        url: None,
+        is_loading: true,
+        can_go_back: false,
+        can_go_forward: false,
+        favicon: initial_favicon,
+        favicon_host: initial_host.clone(),
+        favicon_preferred: false,
+        current_url: Some(url.to_string()),
+        current_host: initial_host,
+        retired: Vec::new(),
+        screen_width: width.max(1),
+        screen_height: height.max(1),
+        screen_scale: 1.0,
+        screen_origin_x: 0,
+        screen_origin_y: 0,
+        cursor: 0,
+        target_zoom_level: Some(zoom_level),
+        page_scale: 1.0,
+    }
 }
 
 fn median_edge_color_bgra(pixels: &[u8], width: usize, height: usize) -> Option<u32> {
@@ -447,7 +577,7 @@ fn median_edge_color_bgra(pixels: &[u8], width: usize, height: usize) -> Option<
 
 mod callbacks;
 use callbacks::{
-    HttpsFirstState, LumenClient, LumenContextMenuHandler, LumenDisplayHandler,
+    HttpsFirstState, LumenClient, LumenContextMenuHandler, LumenDialogHandler, LumenDisplayHandler,
     LumenDownloadHandler, LumenLifeSpanHandler, LumenLoadHandler, LumenPermissionHandler,
     LumenRenderHandler, LumenRequestHandler, remember_https_upgrade,
 };
@@ -478,6 +608,9 @@ pub struct Engine {
     shield: Arc<crate::shield::ShieldState>,
     https_state: Arc<Mutex<HttpsFirstState>>,
     panel_packages: panel_scheme::PanelRegistry,
+    /// Names the browsers CEF creates for page popups so their ids stay unique
+    /// without the app having to know about them ahead of time.
+    popup_serial: Arc<std::sync::atomic::AtomicU64>,
 }
 
 fn resize_should_send(
@@ -504,6 +637,7 @@ fn resize_debug(message: std::fmt::Arguments<'_>) {
 
 mod browser;
 mod cef_runtime;
+pub mod clipboard;
 mod navigation;
 mod panel_scheme;
 
@@ -566,6 +700,27 @@ fn cef_mouse_modifiers(modifiers: &gpui_kit::Modifiers) -> u32 {
         | (if modifiers.control { 4 } else { 0 })
         | (if modifiers.alt { 8 } else { 0 })
         | (if modifiers.platform { 128 } else { 0 })
+}
+
+/// CEF/Chromium `cef_event_flags_t` bits for the buttons currently held down.
+/// Click events get this for free (CEF derives it from the button type), but
+/// move events only carry what the embedder puts in `MouseEvent::modifiers`.
+/// Without it Blink sees `Button::kNoButton` on every move, so drag-select
+/// (and every other drag gesture in page content) never starts.
+fn cef_button_flag(button: gpui_kit::MouseButton) -> u32 {
+    match button {
+        gpui_kit::MouseButton::Left => 1,    // EVENTFLAG_LEFT_MOUSE_BUTTON
+        gpui_kit::MouseButton::Middle => 16, // EVENTFLAG_MIDDLE_MOUSE_BUTTON
+        gpui_kit::MouseButton::Right => 32,  // EVENTFLAG_RIGHT_MOUSE_BUTTON
+        gpui_kit::MouseButton::Navigate(_) => 0,
+    }
+}
+
+fn cef_mouse_flags(
+    modifiers: &gpui_kit::Modifiers,
+    pressed_button: Option<gpui_kit::MouseButton>,
+) -> u32 {
+    cef_mouse_modifiers(modifiers) | pressed_button.map_or(0, cef_button_flag)
 }
 
 fn cef_key_event(
@@ -731,10 +886,78 @@ mod tests {
             frame_rate_for_refresh(Some(std::time::Duration::from_millis(240))),
             4
         );
+        // A 240 Hz panel asks for 240 fps of full-frame OSR copies; the surface
+        // is capped well below that unless explicitly overridden.
+        assert!(frame_rate_for_refresh(Some(std::time::Duration::from_millis(4))) <= 240);
         assert_eq!(
             frame_rate_for_refresh(Some(std::time::Duration::from_millis(4))),
-            240
+            osr_frame_rate_cap()
         );
+        assert_eq!(
+            OSR_MAX_FRAME_RATE, 60,
+            "OSR copies are bandwidth bound; raise only with measurements"
+        );
+    }
+
+    #[test]
+    fn auth_flow_detection_covers_identity_providers_and_oauth_authorize_urls() {
+        assert!(is_auth_flow_url(
+            "https://accounts.google.com/v3/signin/accountchooser?client_id=a&redirect_uri=b"
+        ));
+        assert!(is_auth_flow_url(
+            "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?response_type=code&client_id=1"
+        ));
+        assert!(is_auth_flow_url(
+            "https://idp.example.com/authorize?response_type=code&redirect_uri=https%3A%2F%2Fapp.example.com"
+        ));
+        assert!(is_auth_flow_url(
+            "https://github.com/login/oauth/authorize?client_id=abc&redirect_uri=https%3A%2F%2Fapp.example.com"
+        ));
+        assert!(!is_auth_flow_url("https://github.com/rust-lang/rust"));
+        assert!(!is_auth_flow_url("https://accounts.example.com/oauth"));
+        assert!(!is_auth_flow_url("https://example.com/docs?page=2"));
+        assert!(!is_auth_flow_url("about:blank"));
+    }
+
+    #[test]
+    fn forgetting_a_page_closed_browser_waits_for_pending_creation_instead_of_double_closing() {
+        let mut engine = Engine::new();
+        let state = Arc::new(Mutex::new(new_shared_state(
+            10,
+            10,
+            "https://example.com",
+            1.0,
+        )));
+        engine
+            .pending_browsers
+            .insert("personal-popup-1".into(), state);
+        engine.forget_closed_browser("personal-popup-1");
+        assert!(!engine.pending_browsers.contains_key("personal-popup-1"));
+        assert!(engine.canceled_browsers.contains("personal-popup-1"));
+        assert!(!engine.has_browser("personal-popup-1"));
+    }
+
+    #[test]
+    fn mouse_button_flags_match_cef_event_flags() {
+        assert_eq!(cef_button_flag(gpui_kit::MouseButton::Left), 1);
+        assert_eq!(cef_button_flag(gpui_kit::MouseButton::Middle), 16);
+        assert_eq!(cef_button_flag(gpui_kit::MouseButton::Right), 32);
+        assert_eq!(
+            cef_mouse_flags(
+                &gpui_kit::Modifiers::default(),
+                Some(gpui_kit::MouseButton::Left)
+            ),
+            1
+        );
+        let shift = gpui_kit::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            cef_mouse_flags(&shift, Some(gpui_kit::MouseButton::Left)),
+            1 | 2
+        );
+        assert_eq!(cef_mouse_flags(&shift, None), 2);
     }
 
     #[test]

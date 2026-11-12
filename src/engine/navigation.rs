@@ -8,7 +8,7 @@ impl Engine {
             .unwrap_or_default()
     }
 
-    pub fn take_popups(&self) -> Vec<(String, String)> {
+    pub fn take_popups(&self) -> Vec<PopupRequest> {
         self.events
             .lock()
             .map(|mut events| std::mem::take(&mut events.popups))
@@ -114,6 +114,7 @@ impl Engine {
             }
             if let Some(host) = entry.browser.host() {
                 host.set_zoom_level(level.clamp(-5.0, 5.0));
+                host.invalidate(cef::PaintElementType::VIEW);
             }
         } else if let Some(state) = self.pending_browsers.get(tab_id)
             && let Ok(mut state) = state.lock()
@@ -174,6 +175,10 @@ impl Engine {
     pub fn ad_blocker_enabled(&self) -> bool {
         self.shield.enabled()
     }
+    /// CSS/scriptlet injection that hides inline ad containers for `url`.
+    pub fn shield_cosmetic_script(&self, url: &str) -> Option<String> {
+        self.shield.cosmetic_script(url)
+    }
     pub fn set_ad_blocker_enabled(&self, enabled: bool) {
         self.shield.set_enabled(enabled);
     }
@@ -204,11 +209,53 @@ impl Engine {
             host.set_focus(focused as i32);
         }
     }
+    pub fn copy(&self, id: &str) {
+        if let Some(frame) = self.browsers.get(id).and_then(|entry| {
+            entry
+                .browser
+                .focused_frame()
+                .or_else(|| entry.browser.main_frame())
+        }) {
+            frame.copy();
+        }
+    }
+    pub fn paste(&self, id: &str) {
+        if let Some(frame) = self.browsers.get(id).and_then(|entry| {
+            entry
+                .browser
+                .focused_frame()
+                .or_else(|| entry.browser.main_frame())
+        }) {
+            frame.paste();
+        }
+    }
+    pub fn cut(&self, id: &str) {
+        if let Some(frame) = self.browsers.get(id).and_then(|entry| {
+            entry
+                .browser
+                .focused_frame()
+                .or_else(|| entry.browser.main_frame())
+        }) {
+            frame.cut();
+        }
+    }
+    pub fn select_all(&self, id: &str) {
+        if let Some(frame) = self.browsers.get(id).and_then(|entry| {
+            entry
+                .browser
+                .focused_frame()
+                .or_else(|| entry.browser.main_frame())
+        }) {
+            frame.select_all();
+        }
+    }
     pub fn send_key_down(&self, id: &str, event: &KeyDownEvent) {
         let Some(host) = self.browsers.get(id).and_then(|entry| entry.browser.host()) else {
             return;
         };
         let key = &event.keystroke.key;
+        let is_control_or_platform =
+            event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
         let character = event
             .keystroke
             .key_char
@@ -234,7 +281,7 @@ impl Engine {
             true,
         );
         host.send_key_event(Some(&base));
-        if character != 0 {
+        if character != 0 && !is_control_or_platform {
             let text = cef_key_event(
                 key,
                 &event.keystroke.modifiers,

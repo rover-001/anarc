@@ -198,3 +198,43 @@ Pushed finalized memory log to origin/main
 ## Session 2026-11-11T12:56:42.600829329+00:00
 
 Fixed external Chromium launch on install and uncloseable login popup tabs
+
+## Session 2026-11-11T13:02:10.998118854+00:00
+
+Committed and pushed bug fixes to origin/main
+
+## Session 2026-11-11T13:31:52.048709302+00:00
+
+Added Arc-style peek overlay (link preview in floating card over the page, promote to tab, Esc close) and upgraded the built-in shield to mirror the user uBlock Origin Lite list set (EasyList, EasyPrivacy, uBlock filters, uBlock badware, PGL) plus cosmetic filtering (CSS hide selectors injected on page.load_end). Fixed two compile errors in in-progress drag-drop/file-dialog work (cef UTF-16 string list read, mut DragData). cargo check/clippy clean, 160 tests pass single-threaded; parallel default run still races pre-existing plugin feature-flag tests.
+
+## Session 2026-11-11T13:40:04.070365860+00:00
+
+Fixed browser file uploads by implementing CEF DialogHandler with native file chooser dialogs and enabled drag-and-drop file ingestion into web viewports
+
+## Session 2026-11-11T15:50:48.655113796+00:00
+
+Fixed address-bar paste and OAuth login popup handling. Address bar: Ctrl+V is now driven by the app (paste_into_address in app/actions/navigation.rs) and reads the clipboard from a spawned task instead of inside the key dispatch, then applies it with InputState::replace so a Ctrl+A selection is replaced; retries once after the dispatch unwinds. Sign-in popups: open_popup_tab now detects auth-flow URLs (AUTH_POPUP_HOSTS + AUTH_POPUP_PATHS + response_type/client_id heuristics, is_auth_flow_url) and runs them as full-page OAuth in the active tab (open_auth_popup_in_active_tab) instead of an opener-less peek. Added tests: address_bar_select_all_then_paste_replaces_the_text, sign_in_popups_navigate_the_active_tab_instead_of_opening_a_peek, auth_flow_detection_covers_identity_providers_and_oauth_authorize_urls, single_line_paste_drops_line_breaks_and_empty_clipboards. Verified: cargo fmt, cargo check --all-targets, cargo clippy --all-targets clean, cargo test -- --test-threads=1 => 164 passed, cargo build links.
+
+## Session 2026-11-11T15:57:15.429646327+00:00
+
+Investigated WhatsApp not opening. Opened https://web.whatsapp.com in a fresh tab in the running installed Anarc and visually verified the login page and QR code load successfully. No source changes; original failure not reproduced.
+
+## Session 2026-11-11T16:05:59.671858938+00:00
+
+Fixed page drag-select/copy: CEF mouse-move events now carry held-button event flags (cef_button_flag/cef_mouse_flags, Engine::send_mouse_move takes pressed_button) so Blink starts selection drags; capped CEF OSR windowless frame rate at 60 (ANARC_OSR_FPS override) to stop 144Hz full-frame copies/texture uploads; added unit tests: 166 pass, clippy clean.
+
+## Session 2026-11-11T16:37:19.586337922+00:00
+
+Fixed claude.ai Google sign-in: on_before_popup now lets CEF create user-gesture popups (NEW_POPUP or auth-flow URL, incl. gesture about:blank) with a windowless WindowInfo and full client so window.opener/postMessage/window.close keep working; the popup renders in the peek overlay via PopupRequest.browser_id, pending state is queued in EngineEvents.pending_popup_states so ensure_browser cannot duplicate the id, and page-initiated closes route through close_peek_from_page -> Engine::forget_closed_browser (no double close). Removed the auth-popup-navigates-active-tab path. Added multi-instance support: install.sh wrapper claims flock slots 1-9 and exports ANARC_INSTANCE_SLOT for slots >=2; paths::cef_root_dir maps them to <data>/cef/instance-<slot> because Chromium keeps its process singleton and cookie/cache DB in --user-data-dir; settings/spaces/history stay shared. Verified: cargo fmt, clippy --all-targets clean, 171 tests pass single-threaded, release build installed via ./install.sh, and a runtime check showed two concurrent app processes (slot 1 root + instance-2 root) both reaching first frame.
+
+## Session 2026-11-12T02:54:10.644674948+00:00
+
+Fixed trackpad pinch/scroll zooming responsiveness and OSR repaints, and fixed copy/paste across web apps like ChatGPT with system clipboard bridging and permission handling
+
+## Session 2026-11-12T04:59:36.063688975+00:00
+
+Fixed build error CefStringUserfreeUtf16 Display bound and test helper initialization, routed context menu and split close actions through close_section_tab, verified all 177 unit tests, and successfully completed ./install.sh release installation.
+
+## Session 2026-11-12T06:56:10.341795131+00:00
+
+Fixed two user-reported regressions. (1) Pinned/favorite tabs reopened on the last navigated page: pinned_url was only captured when a kept tab was closed, so saving before that field existed (all of the user's favorites) re-adopted the latest URL on every close. Added seed_pinned_destination() that captures the destination at startup (before any browsing), on re-open and on close-if-still-missing; startup healing persists so the drift stops. (2) Trackpad pinch still magnified the page: pinch forwarded Ctrl+wheel, which Blink treats as in-page visual viewport zoom. Pinch now drives the app's own page zoom (same as Ctrl+Plus/Minus) through zoom_tab_by_pinch -> change_zoom_for_tab, works for sidebar tabs, split panes and the peek overlay. Added unit coverage (legacy pin adoption, pinch step accumulation). Verified cargo fmt, check --all-targets, 178 tests, release build and ./install.sh; user must restart the running Anarc instance to load the new binary.

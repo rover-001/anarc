@@ -153,9 +153,10 @@ pub(crate) fn compute_suggestions(query: &str) -> Vec<SuggestionItem> {
 
     if let Ok(guard) = LAST_QUERY_CACHE.lock()
         && let Some((last_q, last_results)) = &*guard
-            && last_q == q {
-                return last_results.clone();
-            }
+        && last_q == q
+    {
+        return last_results.clone();
+    }
 
     let mut list = Vec::with_capacity(6);
 

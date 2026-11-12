@@ -1,3 +1,4 @@
+use super::actions::single_line_paste;
 use super::*;
 use gpui_kit::{Focusable, WindowOptions};
 
@@ -61,6 +62,14 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
             let focus_handle = cx.focus_handle();
             cx.new(|_| WebViewport::new(root_entity, focus_handle))
         },
+        peek_web_viewport: {
+            let root_entity = cx.weak_entity();
+            let focus_handle = cx.focus_handle();
+            cx.new(|_| WebViewport::new(root_entity, focus_handle))
+        },
+        peek: None,
+        peek_serial: 0,
+        peek_focused: false,
         focused_pane: 0,
         split_ratio: 0.5,
         split_resizing: false,
@@ -87,6 +96,7 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         theme_editor: None,
         tab_context_menu: None,
         folder_context_menu: None,
+        web_context_menu: None,
         folder_modal: None,
         split_group_expanded: false,
         added_tab: None,
@@ -229,6 +239,184 @@ fn closing_a_non_active_tab_by_id_preserves_the_active_tab(cx: &mut gpui::TestAp
 }
 
 #[gpui::test]
+fn closing_a_pinned_tab_request_keeps_it_pinned_and_unloads_it(cx: &mut gpui::TestAppContext) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.active_space_mut().tabs[0].pinned = true;
+        app.active_space_mut().tabs[0].url = "https://example.com".into();
+        app.close_section_tab("tab-1");
+    });
+    view.read_with(cx, |app, _| {
+        let tab = app
+            .active_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "tab-1")
+            .unwrap();
+        assert!(tab.pinned);
+        assert_eq!(tab.state, TabState::Discarded);
+    });
+}
+
+#[gpui::test]
+fn unloading_a_pinned_tab_restores_its_pinned_destination(cx: &mut gpui::TestAppContext) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.active_space_mut().tabs[0].url = "https://pinned.example/home".into();
+        app.active_space_mut().tabs[0].title = "Pinned Home".into();
+        app.pin_tab("tab-1", true);
+        app.active_space_mut().tabs[0].url = "https://pinned.example/changed".into();
+        app.active_space_mut().tabs[0].title = "Navigated Away".into();
+        app.unload_kept_tab("tab-1");
+    });
+    view.read_with(cx, |app, _| {
+        let tab = app
+            .active_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "tab-1")
+            .unwrap();
+        assert_eq!(tab.url, "https://pinned.example/home");
+        assert_eq!(tab.title, "Pinned Home");
+    });
+}
+
+#[gpui::test]
+fn unloading_a_favorite_tab_restores_its_pinned_destination(cx: &mut gpui::TestAppContext) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.active_space_mut().tabs[0].url = "https://favorite.example/home".into();
+        app.active_space_mut().tabs[0].title = "Favorite Home".into();
+        app.favorite_tab("tab-1", true);
+        app.active_space_mut().tabs[0].url = "https://favorite.example/changed".into();
+        app.active_space_mut().tabs[0].title = "Changed Title".into();
+        app.unload_kept_tab("tab-1");
+    });
+    view.read_with(cx, |app, _| {
+        let tab = app
+            .active_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "tab-1")
+            .unwrap();
+        assert!(tab.favorite);
+        assert_eq!(tab.url, "https://favorite.example/home");
+        assert_eq!(tab.title, "Favorite Home");
+    });
+}
+
+#[test]
+fn legacy_kept_tabs_adopt_their_saved_url_and_keep_it_after_navigation() {
+    let mut tab = Tab::new("tab-1", "ChatGPT", "https://chatgpt.com/");
+    tab.favorite = true;
+    super::actions::seed_pinned_destination(&mut tab);
+    assert_eq!(tab.pinned_url.as_deref(), Some("https://chatgpt.com/"));
+    assert_eq!(tab.pinned_title.as_deref(), Some("ChatGPT"));
+
+    // Later navigations must not move the pinned destination.
+    tab.url = "https://chatgpt.com/c/6af52c5a".into();
+    tab.title = "A conversation".into();
+    super::actions::seed_pinned_destination(&mut tab);
+    assert_eq!(tab.pinned_url.as_deref(), Some("https://chatgpt.com/"));
+    assert_eq!(tab.pinned_title.as_deref(), Some("ChatGPT"));
+
+    // Regular tabs are untouched.
+    let mut regular = Tab::new("tab-2", "Scratch", "https://example.com");
+    super::actions::seed_pinned_destination(&mut regular);
+    assert_eq!(regular.pinned_url, None);
+}
+
+#[gpui::test]
+fn transitioning_between_favorite_and_pinned_preserves_pinned_url(cx: &mut gpui::TestAppContext) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.active_space_mut().tabs[0].url = "https://original.example".into();
+        app.favorite_tab("tab-1", true);
+        // User navigates
+        app.active_space_mut().tabs[0].url = "https://original.example/updated".into();
+        // User then pins it
+        app.pin_tab("tab-1", true);
+    });
+    view.read_with(cx, |app, _| {
+        let tab = app
+            .active_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "tab-1")
+            .unwrap();
+        assert!(tab.pinned);
+        assert_eq!(tab.pinned_url.as_deref(), Some("https://original.example"));
+    });
+    // Unloading restores the original pinned link
+    view.update(cx, |app, _| {
+        app.unload_kept_tab("tab-1");
+    });
+    view.read_with(cx, |app, _| {
+        let tab = app
+            .active_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "tab-1")
+            .unwrap();
+        assert_eq!(tab.url, "https://original.example");
+    });
+}
+
+#[gpui::test]
+fn activating_already_active_pinned_tab_resets_to_pinned_destination(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.active_space_mut().tabs[0].url = "https://pinned.example".into();
+        app.pin_tab("tab-1", true);
+        app.active_space_mut().tabs[0].url = "https://pinned.example/subpage".into();
+        assert_eq!(app.active_space().active.as_deref(), Some("tab-1"));
+        // Clicking active tab again triggers reset
+        app.activate_tab_in_active_space("tab-1");
+    });
+    view.read_with(cx, |app, _| {
+        let tab = app
+            .active_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "tab-1")
+            .unwrap();
+        assert_eq!(tab.url, "https://pinned.example");
+    });
+}
+
+#[gpui::test]
 fn closing_an_empty_tab_does_not_trigger_closing_ghost_animation(cx: &mut gpui::TestAppContext) {
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
@@ -240,13 +428,24 @@ fn closing_an_empty_tab_does_not_trigger_closing_ghost_animation(cx: &mut gpui::
     view.update(cx, |app, _| {
         // Tab-1 is about:blank
         assert!(app.close_tab_by_id("tab-1"));
-        assert!(app.closing_tab.is_none(), "closing an empty blank tab must not set closing_tab");
+        assert!(
+            app.closing_tab.is_none(),
+            "closing an empty blank tab must not set closing_tab"
+        );
 
         // Now set a real url on the new tab
         let active_id = app.active_tab_id().to_string();
-        app.active_space_mut().tabs.iter_mut().find(|t| t.id == active_id).unwrap().url = "https://example.com".into();
+        app.active_space_mut()
+            .tabs
+            .iter_mut()
+            .find(|t| t.id == active_id)
+            .unwrap()
+            .url = "https://example.com".into();
         assert!(app.close_tab_by_id(&active_id));
-        assert!(app.closing_tab.is_some(), "closing a real tab must record closing_tab");
+        assert!(
+            app.closing_tab.is_some(),
+            "closing a real tab must record closing_tab"
+        );
     });
 }
 
@@ -266,28 +465,41 @@ fn download_toast_and_button_active_when_downloading(cx: &mut gpui::TestAppConte
         assert_eq!(initial_overlays.len(), 0);
 
         // Simulate an active download starting
-        app.engine.push_download_test(crate::engine::DownloadRecord {
-            id: 101,
-            url: "https://example.com/archive.tar.gz".into(),
-            path: std::path::PathBuf::from("/home/rover/Downloads/archive.tar.gz"),
-            received_bytes: 512,
-            total_bytes: 4096,
-            complete: false,
-            canceled: false,
-        });
+        app.engine
+            .push_download_test(crate::engine::DownloadRecord {
+                id: 101,
+                url: "https://example.com/archive.tar.gz".into(),
+                path: std::path::PathBuf::from("/home/rover/Downloads/archive.tar.gz"),
+                received_bytes: 512,
+                total_bytes: 4096,
+                complete: false,
+                canceled: false,
+            });
 
         assert_eq!(app.engine.downloads().len(), 1);
-        let active = app.engine.downloads().iter().any(|d| !d.complete && !d.canceled);
+        let active = app
+            .engine
+            .downloads()
+            .iter()
+            .any(|d| !d.complete && !d.canceled);
         assert!(active);
 
         // Context menus should now render the download toast overlay
         let overlays = app.render_context_menus(theme, &[], cx);
-        assert_eq!(overlays.len(), 1, "download toast overlay should be rendered when downloading");
+        assert_eq!(
+            overlays.len(),
+            1,
+            "download toast overlay should be rendered when downloading"
+        );
 
         // Dismissing the toast should prevent it from rendering
         app.dismissed_download_toast_id = Some(101);
         let overlays_after_dismiss = app.render_context_menus(theme, &[], cx);
-        assert_eq!(overlays_after_dismiss.len(), 0, "dismissed download toast must not render");
+        assert_eq!(
+            overlays_after_dismiss.len(),
+            0,
+            "dismissed download toast must not render"
+        );
     });
 }
 
@@ -1058,7 +1270,7 @@ fn take_close_requests_drains_queued_tabs() {
 }
 
 #[gpui::test]
-fn open_popup_tab_creates_live_tab_and_activates_it(cx: &mut gpui::TestAppContext) {
+fn open_popup_tab_shows_a_peek_overlay_instead_of_a_new_tab(cx: &mut gpui::TestAppContext) {
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1067,11 +1279,149 @@ fn open_popup_tab_creates_live_tab_and_activates_it(cx: &mut gpui::TestAppContex
         .expect("open test window")
     });
     view.update(cx, |app, _| {
+        let tabs_before = app.active_space().tabs.len();
         app.open_popup_tab("personal", "https://accounts.example.com/oauth".to_string());
         assert_eq!(app.active_space, "personal");
-        let active_id = app.active_tab_id().to_string();
-        let active_tab = app.active_space().tabs.iter().find(|t| t.id == active_id).unwrap();
-        assert_eq!(active_tab.url, "https://accounts.example.com/oauth");
-        assert_eq!(active_tab.state, TabState::Live);
+        assert_eq!(app.active_space().tabs.len(), tabs_before);
+        let peek = app.peek.as_ref().expect("popup opens a peek overlay");
+        assert_eq!(peek.url, "https://accounts.example.com/oauth");
+        assert!(peek.id.starts_with("personal-peek-"));
+        assert_eq!(app.active_tab_id(), "tab-1");
     });
+}
+
+#[gpui::test]
+fn peek_promotes_to_a_live_tab_keeping_its_browser_id(cx: &mut gpui::TestAppContext) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.open_popup_tab("personal", "https://example.com/docs".to_string());
+        let peek_id = app.peek.as_ref().expect("peek open").id.clone();
+        app.open_peek_in_tab();
+        assert!(app.peek.is_none());
+        assert_eq!(app.active_tab_id(), peek_id);
+        let tab = app
+            .active_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == peek_id)
+            .expect("promoted tab exists");
+        assert_eq!(tab.url, "https://example.com/docs");
+        assert_eq!(tab.state, TabState::Live);
+    });
+}
+
+#[gpui::test]
+fn closing_a_peek_removes_it_and_restores_the_active_tab(cx: &mut gpui::TestAppContext) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.open_popup_tab("personal", "https://example.com".to_string());
+        assert!(app.peek.is_some());
+        app.close_peek();
+        assert!(app.peek.is_none());
+        assert_eq!(app.active_tab_id(), "tab-1");
+        assert_eq!(app.active_space().tabs.len(), 1);
+    });
+}
+
+#[gpui::test]
+fn address_bar_select_all_then_paste_replaces_the_text(cx: &mut gpui::TestAppContext) {
+    let (handle, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |app, cx| {
+            app.address.update(cx, |input, cx| {
+                input.set_value("https://example.com/old", window, cx);
+                input.focus(window, cx);
+            });
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                "https://pasted.example/new".to_string(),
+            ));
+        });
+    })
+    .unwrap();
+    dispatch_test_key(cx, handle, "ctrl-a");
+    dispatch_test_key(cx, handle, "ctrl-v");
+    cx.run_until_parked();
+    view.read_with(cx, |app, cx| {
+        assert_eq!(app.address.read(cx).value(), "https://pasted.example/new");
+    });
+}
+
+#[gpui::test]
+fn sign_in_popups_show_their_cef_window_in_the_peek_overlay(cx: &mut gpui::TestAppContext) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        let tabs_before = app.active_space().tabs.len();
+        app.show_popup_window(
+            "personal",
+            "https://accounts.google.com/v3/signin/accountchooser?client_id=abc&redirect_uri=https%3A%2F%2Fclaude.ai"
+                .to_string(),
+            "personal-popup-7".to_string(),
+        );
+        assert_eq!(app.active_space, "personal");
+        assert_eq!(app.active_space().tabs.len(), tabs_before);
+        let peek = app.peek.as_ref().expect("popup window shows in the peek overlay");
+        assert_eq!(peek.id, "personal-popup-7");
+        assert_eq!(
+            peek.url,
+            "https://accounts.google.com/v3/signin/accountchooser?client_id=abc&redirect_uri=https%3A%2F%2Fclaude.ai"
+        );
+        assert_eq!(app.active_tab_id(), "tab-1");
+    });
+}
+
+#[gpui::test]
+fn page_closing_its_popup_window_only_dismisses_the_peek(cx: &mut gpui::TestAppContext) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        let tabs_before = app.active_space().tabs.len();
+        app.show_popup_window(
+            "personal",
+            "https://accounts.google.com/signin".to_string(),
+            "personal-popup-8".to_string(),
+        );
+        app.close_peek_from_page();
+        assert!(app.peek.is_none());
+        assert_eq!(app.active_space().tabs.len(), tabs_before);
+        assert_eq!(app.active_tab_id(), "tab-1");
+    });
+}
+
+#[test]
+fn single_line_paste_drops_line_breaks_and_empty_clipboards() {
+    assert_eq!(
+        single_line_paste("https://example.com/a\n").as_deref(),
+        Some("https://example.com/a")
+    );
+    assert_eq!(single_line_paste("").as_deref(), None);
+    assert_eq!(single_line_paste("\r\n").as_deref(), None);
 }

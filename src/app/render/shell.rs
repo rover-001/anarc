@@ -1,5 +1,7 @@
 use super::*;
 
+use super::super::actions::peek::{PEEK_HEADER_HEIGHT, peek_layout};
+
 impl Lumen {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn render_shell(
@@ -318,7 +320,8 @@ impl Lumen {
                                     .active(|style| style.opacity(0.92))
                                     .child(space_switcher::downloads_button(theme, is_downloading))
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.app_page = if this.app_page == Some(AppPage::Downloads) {
+                                        this.app_page = if this.app_page == Some(AppPage::Downloads)
+                                        {
                                             None
                                         } else {
                                             Some(AppPage::Downloads)
@@ -898,11 +901,177 @@ impl Lumen {
             );
         }
 
+        if let Some(peek) = self.peek.clone()
+            && self.fullscreen_tab.is_none()
+        {
+            let (window_width, window_height) = {
+                let bounds = window.bounds();
+                (f32::from(bounds.size.width), f32::from(bounds.size.height))
+            };
+            let layout = peek_layout(
+                window_width,
+                window_height,
+                sidebar_width_f32,
+                sidebar_on_right,
+                topbar_height,
+            );
+            let image = self.engine.get_image(&peek.id);
+            let cursor = self.engine.get_cursor(&peek.id);
+            self.peek_web_viewport.update(cx, |viewport, cx| {
+                viewport.set_theme(theme);
+                viewport.set_peek_mode(true);
+                viewport.set_origin_override(Some((layout.viewport_x, layout.viewport_y)));
+                viewport.set_frame(
+                    peek.id.clone(),
+                    0.0,
+                    image,
+                    cursor,
+                    Vec::new(),
+                    0.0,
+                    0,
+                    false,
+                    None,
+                );
+                cx.notify();
+            });
+
+            let title = if peek.title.trim().is_empty() {
+                peek.url.clone()
+            } else {
+                peek.title.clone()
+            };
+            let favicon = self.engine.get_favicon_image(&peek.id, Some(&peek.url));
+            let favicon_element = tab_list::favicon(favicon);
+            let header_button = |id: &'static str, icon: IconName| {
+                div()
+                    .id(id)
+                    .size(px(26.0 * UI_SCALE))
+                    .rounded_md()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .text_color(rgb(theme.muted))
+                    .hover(move |style| {
+                        style
+                            .bg(rgb(theme.surface_hover))
+                            .text_color(rgb(theme.text))
+                    })
+                    .active(|style| style.opacity(0.9))
+                    .child(Icon::new(icon).size(px(15.0 * UI_SCALE)))
+            };
+
+            let card = div()
+                .id("peek-overlay")
+                .occlude()
+                .absolute()
+                .left(px(layout.card_x))
+                .top(px(layout.card_y))
+                .w(px(layout.card_w))
+                .h(px(layout.card_h))
+                .rounded(px(CARD_RADIUS))
+                .bg(rgb(theme.surface))
+                .border_1()
+                .border_color(rgb(theme.border))
+                .overflow_hidden()
+                .flex()
+                .flex_col()
+                .with_animation(
+                    format!("peek-overlay-enter-{}", peek.id),
+                    Animation::new(ui::motion::duration(ui::motion::MOTION_SLOW))
+                        .with_easing(ui::motion::ease_out_quint),
+                    |card, progress| card.opacity(ui::motion::clamp_percentage(progress)),
+                )
+                .child(
+                    div()
+                        .id("peek-header")
+                        .flex_none()
+                        .h(px(PEEK_HEADER_HEIGHT))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px(px(10.0 * UI_SCALE))
+                        .bg(rgb(theme.surface))
+                        .border_b_1()
+                        .border_color(rgb(theme.border))
+                        .child(favicon_element)
+                        .child(
+                            div()
+                                .flex_1()
+                                .overflow_hidden()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_ellipsis()
+                                        .text_color(rgb(theme.text))
+                                        .child(title),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_ellipsis()
+                                        .text_color(rgb(theme.muted))
+                                        .child(peek.url.clone()),
+                                ),
+                        )
+                        .child(
+                            header_button("peek-open-in-tab", IconName::ExternalLink).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.open_peek_in_tab();
+                                    cx.notify();
+                                }),
+                            ),
+                        )
+                        .child(
+                            header_button("peek-close", IconName::X).on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    this.close_peek();
+                                    cx.notify();
+                                },
+                            )),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("peek-viewport")
+                        .flex_1()
+                        .relative()
+                        .overflow_hidden()
+                        .child(
+                            AnyView::from(self.peek_web_viewport.clone())
+                                .cached(StyleRefinement::default().size_full()),
+                        ),
+                );
+            root = root.child(card);
+        } else {
+            if self.peek_web_viewport.read(cx).has_content() {
+                self.peek_web_viewport.update(cx, |viewport, cx| {
+                    viewport.clear_content();
+                    cx.notify();
+                });
+            }
+        }
+
         root = root
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.to_lowercase();
                 let modifiers = &event.keystroke.modifiers;
                 let browser_modifier = modifiers.control || modifiers.platform;
+                let address_focused =
+                    window.focused(cx) == Some(this.address.read(cx).focus_handle(cx));
+                if !event.is_held
+                    && browser_modifier
+                    && !modifiers.shift
+                    && key == "v"
+                    && address_focused
+                {
+                    this.paste_into_address(window, cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return;
+                }
                 if !event.is_held
                     && browser_modifier
                     && !modifiers.shift
@@ -1008,6 +1177,17 @@ impl Lumen {
                     this.find_in_page(!modifiers.shift, true, cx);
                     window.prevent_default();
                     cx.stop_propagation();
+                    return;
+                }
+                if !event.is_held
+                    && matches!(key.as_str(), "escape" | "esc")
+                    && this.peek.is_some()
+                    && !this.show_find
+                {
+                    this.close_peek();
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.notify();
                     return;
                 }
                 if matches!(key.as_str(), "escape" | "esc") {

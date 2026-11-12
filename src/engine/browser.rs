@@ -16,35 +16,12 @@ impl Engine {
             return Ok(());
         }
         if !self.browsers.contains_key(id) && !self.pending_browsers.contains_key(id) {
-            let initial_host = crate::shield::url_host(url);
-            let initial_favicon = initial_host.as_deref().and_then(load_favicon_from_disk);
-            let shared = Arc::new(Mutex::new(BrowserSharedState {
-                width: width.max(1),
-                height: height.max(1),
-                image: None,
-                edge_color: None,
-                last_edge_color_instant: None,
-                dirty: false,
-                root_dirty: false,
-                title: None,
-                url: None,
-                is_loading: true,
-                can_go_back: false,
-                can_go_forward: false,
-                favicon: initial_favicon,
-                favicon_host: initial_host.clone(),
-                favicon_preferred: false,
-                current_url: Some(url.to_string()),
-                current_host: initial_host,
-                retired: Vec::new(),
-                screen_width: width.max(1),
-                screen_height: height.max(1),
-                screen_scale: 1.0,
-                screen_origin_x: 0,
-                screen_origin_y: 0,
-                cursor: 0,
-                target_zoom_level: Some(initial_zoom_level),
-            }));
+            let shared = Arc::new(Mutex::new(new_shared_state(
+                width,
+                height,
+                url,
+                initial_zoom_level,
+            )));
             let render_handler =
                 LumenRenderHandler::new(shared.clone(), self.ui_update_wake.clone(), id.to_owned());
             let display_handler = LumenDisplayHandler::new(
@@ -61,8 +38,11 @@ impl Engine {
                 self.close_state.clone(),
                 self.shutdown_requested.clone(),
                 self.shield.clone(),
+                self.https_state.clone(),
+                self.panel_packages.clone(),
                 self.windowless_frame_rate,
                 initial_zoom_level,
+                self.popup_serial.clone(),
             );
             let download_handler =
                 LumenDownloadHandler::new(self.events.clone(), self.ui_update_wake.clone());
@@ -81,6 +61,7 @@ impl Engine {
                 self.events.clone(),
                 self.panel_packages.clone(),
             );
+            let dialog_handler = LumenDialogHandler::new(self.ui_update_wake.clone());
             let mut client = LumenClient::new(
                 render_handler,
                 display_handler,
@@ -90,6 +71,7 @@ impl Engine {
                 load_handler,
                 context_menu_handler,
                 request_handler,
+                dialog_handler,
             );
 
             let mut window_info = WindowInfo::default().set_as_windowless(0);
@@ -118,6 +100,8 @@ impl Engine {
             let browser_settings = BrowserSettings {
                 background_color,
                 windowless_frame_rate: self.windowless_frame_rate,
+                javascript_access_clipboard: State::ENABLED,
+                javascript_dom_paste: State::ENABLED,
                 ..Default::default()
             };
 
@@ -194,6 +178,19 @@ impl Engine {
         self.lifecycle.closed(tab_id);
         self.resize_state.remove(tab_id);
         self.visible.retain(|id| id != tab_id);
+    }
+    /// Drops the bookkeeping for a browser CEF is already tearing down itself
+    /// (a page called `window.close()`). Closing it again would double-close.
+    pub fn forget_closed_browser(&mut self, tab_id: &str) {
+        if self.pending_browsers.remove(tab_id).is_some() {
+            // The browser CEF is still creating; close it once it arrives.
+            self.canceled_browsers.insert(tab_id.to_owned());
+        } else {
+            self.browsers.remove(tab_id);
+        }
+        self.resize_state.remove(tab_id);
+        self.visible.retain(|id| id != tab_id);
+        self.lifecycle.closed(tab_id);
     }
     fn close_browser_entry(&mut self, tab_id: &str) {
         if self.pending_browsers.contains_key(tab_id) {
@@ -433,10 +430,22 @@ impl Engine {
         if let Some(entry) = self.browsers.get(tab_id)
             && let Some(host) = entry.browser.host()
         {
+            let pressed_button = if button == MouseButtonType::LEFT {
+                Some(gpui_kit::MouseButton::Left)
+            } else if button == MouseButtonType::MIDDLE {
+                Some(gpui_kit::MouseButton::Middle)
+            } else if button == MouseButtonType::RIGHT {
+                Some(gpui_kit::MouseButton::Right)
+            } else {
+                None
+            };
             let event = MouseEvent {
                 x,
                 y,
-                modifiers: cef_mouse_modifiers(modifiers),
+                // CEF derives the button flag for click events itself, but keeping
+                // press/release symmetrical here costs nothing and stays correct if
+                // that ever changes.
+                modifiers: cef_mouse_flags(modifiers, if mouse_up { None } else { pressed_button }),
             };
             host.send_mouse_click_event(Some(&event), button, mouse_up as i32, click_count);
         }
@@ -448,6 +457,7 @@ impl Engine {
         y: i32,
         mouse_leave: bool,
         modifiers: &gpui_kit::Modifiers,
+        pressed_button: Option<gpui_kit::MouseButton>,
     ) {
         if let Some(entry) = self.browsers.get(tab_id)
             && let Some(host) = entry.browser.host()
@@ -455,7 +465,7 @@ impl Engine {
             let event = MouseEvent {
                 x,
                 y,
-                modifiers: cef_mouse_modifiers(modifiers),
+                modifiers: cef_mouse_flags(modifiers, pressed_button),
             };
             host.send_mouse_move_event(Some(&event), mouse_leave as i32);
         }
@@ -479,5 +489,162 @@ impl Engine {
             };
             host.send_mouse_wheel_event(Some(&event), delta_x, delta_y);
         }
+    }
+
+    /// Magnifies the page around (x, y) without relayouting it — the same
+    /// "page scale" zoom Chromium applies to a trackpad pinch. CEF has no
+    /// gesture-event API, so the scale is driven straight into Blink's visual
+    /// viewport through the DevTools `Emulation` domain.
+    pub fn pinch_zoom(&self, tab_id: &str, x: i32, y: i32, scale_factor: f64) {
+        if !scale_factor.is_finite() || scale_factor <= 0.0 {
+            return;
+        }
+        let Some(entry) = self.browsers.get(tab_id) else {
+            return;
+        };
+        let (previous, next) = {
+            let Ok(mut state) = entry.state.lock() else {
+                return;
+            };
+            let previous = state.page_scale;
+            let next = (previous * scale_factor).clamp(MIN_PAGE_SCALE, MAX_PAGE_SCALE);
+            state.page_scale = next;
+            (previous, next)
+        };
+        if (next - previous).abs() < 0.0005 {
+            return;
+        }
+        let Some(host) = entry.browser.host() else {
+            return;
+        };
+        set_page_scale(&host, next);
+        let (dx, dy) = pinch_scroll_delta(previous, next, x, y);
+        if dx != 0.0 || dy != 0.0 {
+            scroll_page_by(&host, dx, dy);
+        }
+    }
+
+    pub fn send_drag_drop_files(
+        &self,
+        tab_id: &str,
+        file_paths: &[std::path::PathBuf],
+        x: i32,
+        y: i32,
+    ) {
+        if let Some(entry) = self.browsers.get(tab_id)
+            && let Some(host) = entry.browser.host()
+            && let Some(mut drag_data) = cef::drag_data_create()
+        {
+            for path in file_paths {
+                if let Some(path_str) = path.to_str() {
+                    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    drag_data.add_file(
+                        Some(&CefString::from(path_str)),
+                        Some(&CefString::from(file_name)),
+                    );
+                }
+            }
+            let event = MouseEvent { x, y, modifiers: 0 };
+            let ops = DragOperationsMask::from(
+                cef::sys::cef_drag_operations_mask_t::DRAG_OPERATION_EVERY,
+            );
+            host.drag_target_drag_enter(Some(&mut drag_data), Some(&event), ops);
+            host.drag_target_drag_over(Some(&event), ops);
+            host.drag_target_drop(Some(&event));
+            host.drag_source_ended_at(x, y, ops);
+            let _ = self.ui_update_wake.try_send(());
+        }
+    }
+}
+
+/// Desktop Chromium refuses to zoom out past the natural page scale and
+/// magnifies up to four times (`default_maximum_page_scale_factor` in
+/// `web_preferences.h`), clamping the same way in Blink. Matching those limits
+/// here keeps the scale tracked per tab in step with the scale on the page.
+const MIN_PAGE_SCALE: f64 = 1.0;
+const MAX_PAGE_SCALE: f64 = 4.0;
+
+/// Layout scroll that keeps the document point under `(x, y)` fixed while the
+/// page scale moves from `previous` to `next`.
+///
+/// A page-scale change leaves the visual viewport's top-left where it was, so
+/// the point that used to sit at `x / previous` inside the page drifts by
+/// `x / previous - x / next`. Scrolling that much puts it back under the cursor.
+/// View coordinates are CSS pixels at scale 1, which is what the click and
+/// scroll paths already feed CEF.
+fn pinch_scroll_delta(previous: f64, next: f64, x: i32, y: i32) -> (f64, f64) {
+    if !(previous > 0.0) || !(next > 0.0) {
+        return (0.0, 0.0);
+    }
+    let factor = 1.0 / previous - 1.0 / next;
+    if !factor.is_finite() {
+        return (0.0, 0.0);
+    }
+    (f64::from(x) * factor, f64::from(y) * factor)
+}
+
+/// Applies Blink's visual viewport scale. `Emulation.setPageScaleFactor` is
+/// handled by the renderer's `InspectorEmulationAgent`, and
+/// `CefBrowserHost::ExecuteDevToolsMethod` routes the message there without a
+/// DevTools port being open.
+fn set_page_scale(host: &BrowserHost, scale: f64) {
+    let Some(mut params) = cef::dictionary_value_create() else {
+        return;
+    };
+    let key = CefString::from("pageScaleFactor");
+    params.set_double(Some(&key), scale);
+    let method = CefString::from("Emulation.setPageScaleFactor");
+    host.execute_dev_tools_method(0, Some(&method), Some(&mut params));
+}
+
+/// Puts the visual viewport back to the page's natural scale. The dedicated
+/// `Emulation.resetPageScaleFactor` command is a no-op in this embedding, so
+/// the scale is set explicitly.
+pub(super) fn reset_page_scale(host: &BrowserHost) {
+    set_page_scale(host, 1.0);
+}
+
+/// Scrolls the document in layout pixels. Issued as a DevTools command rather
+/// than through the frame so it is ordered behind the page-scale update.
+fn scroll_page_by(host: &BrowserHost, dx: f64, dy: f64) {
+    let Some(mut params) = cef::dictionary_value_create() else {
+        return;
+    };
+    let expression = format!("window.scrollBy({dx:.4},{dy:.4})");
+    let expression = CefString::from(expression.as_str());
+    let key = CefString::from("expression");
+    params.set_string(Some(&key), Some(&expression));
+    let method = CefString::from("Runtime.evaluate");
+    host.execute_dev_tools_method(0, Some(&method), Some(&mut params));
+}
+
+#[cfg(test)]
+mod pinch_tests {
+    use super::*;
+
+    #[test]
+    fn scroll_delta_keeps_the_anchored_point_still() {
+        // Pinching 2x with the cursor 100px into the viewport: Blink's own
+        // touchpad pinch moves the page by the same 100 - 100 / 2 = 50.
+        let (dx, dy) = pinch_scroll_delta(1.0, 2.0, 100, 100);
+        assert!((dx - 50.0).abs() < 1e-9, "dx={dx}");
+        assert!((dy - 50.0).abs() < 1e-9, "dy={dy}");
+    }
+
+    #[test]
+    fn scroll_delta_is_zero_when_the_scale_does_not_move() {
+        assert_eq!(pinch_scroll_delta(1.5, 1.5, 300, 200), (0.0, 0.0));
+    }
+
+    #[test]
+    fn scroll_delta_unwinds_when_zooming_back_out() {
+        let (dx, _) = pinch_scroll_delta(2.0, 1.0, 100, 0);
+        assert!((dx + 50.0).abs() < 1e-9, "dx={dx}");
+    }
+
+    #[test]
+    fn scroll_delta_ignores_nonsense_scales() {
+        assert_eq!(pinch_scroll_delta(0.0, 2.0, 100, 100), (0.0, 0.0));
+        assert_eq!(pinch_scroll_delta(1.0, f64::NAN, 100, 100), (0.0, 0.0));
     }
 }

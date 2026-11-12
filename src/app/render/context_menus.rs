@@ -87,7 +87,13 @@ impl Lumen {
                                 .gap_2()
                                 .min_w_0()
                                 .flex_1()
-                                .child(Icon::new(IconName::Shield).text_color(rgb(if ad_blocker_enabled { 0x76d7b2 } else { theme.muted })))
+                                .child(Icon::new(IconName::Shield).text_color(rgb(
+                                    if ad_blocker_enabled {
+                                        0x76d7b2
+                                    } else {
+                                        theme.muted
+                                    },
+                                )))
                                 .child(
                                     div()
                                         .flex_1()
@@ -224,7 +230,10 @@ impl Lumen {
                         ui::app_pages::format_bytes(latest.total_bytes)
                     )
                 } else {
-                    format!("Downloading... {}", ui::app_pages::format_bytes(latest.received_bytes))
+                    format!(
+                        "Downloading... {}",
+                        ui::app_pages::format_bytes(latest.received_bytes)
+                    )
                 };
                 let bar_width = 250.0 * UI_SCALE;
                 let fill_width = (bar_width * pct).max(if is_active { 4.0 } else { 0.0 });
@@ -238,7 +247,11 @@ impl Lumen {
                     .w(px(280.0 * UI_SCALE))
                     .bg(rgb(theme.surface))
                     .border_1()
-                    .border_color(rgb(if is_active { theme.accent } else { theme.border }))
+                    .border_color(rgb(if is_active {
+                        theme.accent
+                    } else {
+                        theme.border
+                    }))
                     .rounded_xl()
                     .p_3()
                     .shadow_lg()
@@ -261,16 +274,19 @@ impl Lumen {
                                     .flex()
                                     .items_center()
                                     .gap_2()
-                                    .child(
-                                        Icon::new(IconName::Download)
-                                            .text_color(rgb(if is_complete { 0x76d7b2 } else { theme.accent })),
-                                    )
+                                    .child(Icon::new(IconName::Download).text_color(rgb(
+                                        if is_complete { 0x76d7b2 } else { theme.accent },
+                                    )))
                                     .child(
                                         div()
                                             .text_xs()
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(rgb(theme.text))
-                                            .child(if is_complete { "Download Complete" } else { "Download Started" }),
+                                            .child(if is_complete {
+                                                "Download Complete"
+                                            } else {
+                                                "Download Started"
+                                            }),
                                     ),
                             )
                             .child(
@@ -714,6 +730,34 @@ impl Lumen {
                             cx.notify();
                         })),
                 );
+                if (target_pinned || target_favorite)
+                    && target_tab
+                        .and_then(|t| t.pinned_url.as_deref())
+                        .is_some_and(|p_url| target_tab.is_some_and(|t| t.url != p_url))
+                {
+                    let reset_id = target_id.clone();
+                    panel = panel.child(
+                        div()
+                            .id("ctx-reset-pinned")
+                            .px_2()
+                            .py_2()
+                            .rounded_md()
+                            .text_sm()
+                            .text_color(rgb(theme.text))
+                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Icon::new(IconName::RotateCw))
+                            .child("Reset to pinned URL")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.reset_tab_to_pinned_url(&reset_id);
+                                this.tab_context_menu = None;
+                                cx.notify();
+                            })),
+                    );
+                }
                 panel = panel.child(div().h(px(1.0)).mx_1().bg(rgb(theme.border)));
                 panel = panel.child(
                     div()
@@ -934,7 +978,7 @@ impl Lumen {
                         .child(Icon::new(IconName::X))
                         .child("Close tab")
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.close_tab_by_id(&close_id);
+                            this.close_section_tab(&close_id);
                             this.tab_context_menu = None;
                             cx.notify();
                         })),
@@ -964,7 +1008,7 @@ impl Lumen {
                         .child("Close other tabs")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             for id in &other_ids {
-                                this.close_tab_by_id(id);
+                                this.close_section_tab(id);
                             }
                             this.active_space_mut().active = Some(keep_id.clone());
                             this.emit_plugin_text("tab.activated", keep_id.clone());
@@ -1085,6 +1129,188 @@ impl Lumen {
                         cx.notify();
                     })),
             );
+            overlays.push(menu_layer.child(panel).into_any_element());
+        }
+
+        if let Some(menu) = &self.web_context_menu {
+            let menu_tab_id = menu.tab_id.clone();
+            let menu_layer = div()
+                .id("web-context-dismiss-layer")
+                .occlude()
+                .absolute()
+                .inset_0()
+                .on_mouse_down(
+                    gpui_kit::MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.web_context_menu = None;
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    gpui_kit::MouseButton::Right,
+                    cx.listener(|this, _, _, cx| {
+                        this.web_context_menu = None;
+                        cx.notify();
+                    }),
+                );
+
+            let mut panel = div()
+                .id("web-context-menu-panel")
+                .occlude()
+                .absolute()
+                .left(px(menu.x))
+                .top(px(menu.y))
+                .w(px(180.0 * UI_SCALE))
+                .bg(rgb(theme.surface))
+                .border_1()
+                .border_color(rgb(theme.border))
+                .rounded_lg()
+                .shadow_lg()
+                .p_1()
+                .flex()
+                .flex_col()
+                .gap_0p5();
+
+            let copy_id = menu_tab_id.clone();
+            panel = panel.child(
+                div()
+                    .id("ctx-web-copy")
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .text_sm()
+                    .text_color(rgb(theme.text))
+                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(IconName::Copy))
+                    .child("Copy")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.engine.copy(&copy_id);
+                        this.web_context_menu = None;
+                        cx.notify();
+                    })),
+            );
+
+            let paste_id = menu_tab_id.clone();
+            panel = panel.child(
+                div()
+                    .id("ctx-web-paste")
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .text_sm()
+                    .text_color(rgb(theme.text))
+                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(IconName::Clipboard))
+                    .child("Paste")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.engine.paste(&paste_id);
+                        this.web_context_menu = None;
+                        cx.notify();
+                    })),
+            );
+
+            let select_all_id = menu_tab_id.clone();
+            panel = panel.child(
+                div()
+                    .id("ctx-web-select-all")
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .text_sm()
+                    .text_color(rgb(theme.text))
+                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(IconName::Check))
+                    .child("Select All")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.engine.select_all(&select_all_id);
+                        this.web_context_menu = None;
+                        cx.notify();
+                    })),
+            );
+
+            panel = panel.child(div().h(px(1.0)).mx_1().my_0p5().bg(rgb(theme.border)));
+
+            let reload_id = menu_tab_id.clone();
+            panel = panel.child(
+                div()
+                    .id("ctx-web-reload")
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .text_sm()
+                    .text_color(rgb(theme.text))
+                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(IconName::RotateCw))
+                    .child("Reload")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.engine.reload(&reload_id, false);
+                        this.web_context_menu = None;
+                        cx.notify();
+                    })),
+            );
+
+            let back_id = menu_tab_id.clone();
+            panel = panel.child(
+                div()
+                    .id("ctx-web-back")
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .text_sm()
+                    .text_color(rgb(theme.text))
+                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(IconName::ArrowLeft))
+                    .child("Back")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.engine.go_back(&back_id);
+                        this.web_context_menu = None;
+                        cx.notify();
+                    })),
+            );
+
+            let fwd_id = menu_tab_id.clone();
+            panel = panel.child(
+                div()
+                    .id("ctx-web-forward")
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .text_sm()
+                    .text_color(rgb(theme.text))
+                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(IconName::ArrowRight))
+                    .child("Forward")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.engine.go_forward(&fwd_id);
+                        this.web_context_menu = None;
+                        cx.notify();
+                    })),
+            );
+
             overlays.push(menu_layer.child(panel).into_any_element());
         }
 

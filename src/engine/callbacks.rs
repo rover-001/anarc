@@ -28,6 +28,16 @@ cef::wrap_load_handler! {
             }
         }
 
+        fn on_load_start(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            _transition_type: TransitionType,
+        ) {
+            let Some(frame) = frame else { return; };
+            inject_clipboard_script(frame);
+        }
+
         fn on_load_end(
             &self,
             browser: Option<&mut Browser>,
@@ -38,10 +48,18 @@ cef::wrap_load_handler! {
             if frame.is_main() == 0 { return; }
             if let Some(browser) = browser
                 && let Some(host) = browser.host()
-                    && let Ok(state) = self.shared.lock()
-                        && let Some(zoom) = state.target_zoom_level {
-                            host.set_zoom_level(zoom.clamp(-5.0, 5.0));
+                    && let Ok(mut state) = self.shared.lock() {
+                            // A new document starts at its natural scale; the
+                            // renderer does not always drop a pinch zoom set
+                            // through DevTools, so put it back explicitly.
+                            state.page_scale = 1.0;
+                            super::browser::reset_page_scale(&host);
+                            if let Some(zoom) = state.target_zoom_level {
+                                host.set_zoom_level(zoom.clamp(-5.0, 5.0));
+                            }
+                            host.invalidate(PaintElementType::VIEW);
                         }
+            inject_clipboard_script(frame);
             let url = CefStringUtf16::from(&frame.url()).to_string();
             if let Ok(mut events) = self.events.lock() {
                 events.plugin_events.push((
@@ -79,6 +97,59 @@ cef::wrap_load_handler! {
             }
         }
     }
+}
+
+fn inject_clipboard_script(frame: &Frame) {
+    let script = r#"
+        (function() {
+            if (window.__anarc_cb_init) return;
+            window.__anarc_cb_init = true;
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    const orig = navigator.clipboard.writeText.bind(navigator.clipboard);
+                    navigator.clipboard.writeText = async function(text) {
+                        try {
+                            console.log("[ANARC_CB_COPY]" + encodeURIComponent(text));
+                        } catch (_) {}
+                        return orig(text);
+                    };
+                }
+                document.addEventListener('copy', function() {
+                    setTimeout(function() {
+                        try {
+                            let text = window.getSelection().toString();
+                            if (!text && document.activeElement && 'selectionStart' in document.activeElement) {
+                                const el = document.activeElement;
+                                text = el.value.substring(el.selectionStart, el.selectionEnd);
+                            }
+                            if (text) {
+                                console.log("[ANARC_CB_COPY]" + encodeURIComponent(text));
+                            }
+                        } catch (_) {}
+                    }, 0);
+                }, true);
+                document.addEventListener('mouseup', function() {
+                    setTimeout(function() {
+                        try {
+                            let text = window.getSelection().toString();
+                            if (!text && document.activeElement && 'selectionStart' in document.activeElement) {
+                                const el = document.activeElement;
+                                text = el.value.substring(el.selectionStart, el.selectionEnd);
+                            }
+                            if (text && text.trim().length > 0) {
+                                console.log("[ANARC_CB_PRIMARY]" + encodeURIComponent(text));
+                            }
+                        } catch (_) {}
+                    }, 10);
+                }, true);
+            } catch (_) {}
+        })();
+    "#;
+    frame.execute_java_script(
+        Some(&CefString::from(script)),
+        Some(&CefString::from("anarc://clipboard-sync")),
+        1,
+    );
 }
 
 #[derive(Default)]
@@ -233,9 +304,16 @@ cef::wrap_context_menu_handler! {
             &self,
             _browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
-            _params: Option<&mut ContextMenuParams>,
+            params: Option<&mut ContextMenuParams>,
             model: Option<&mut MenuModel>,
         ) {
+            if let Some(params) = params {
+                let selection = CefStringUtf16::from(&params.selection_text()).to_string();
+                if !selection.is_empty() {
+                    crate::engine::clipboard::write_system_clipboard(&selection);
+                    crate::engine::clipboard::write_primary_clipboard(&selection);
+                }
+            }
             if let Ok(mut events) = self.events.lock() {
                 events.plugin_events.push((
                     "context_menu.build".to_string(),
@@ -509,6 +587,30 @@ cef::wrap_display_handler! {
     }
 
     impl DisplayHandler {
+        fn on_console_message(
+            &self,
+            _browser: Option<&mut Browser>,
+            _level: LogSeverity,
+            message: Option<&CefString>,
+            _source: Option<&CefString>,
+            _line: i32,
+        ) -> i32 {
+            if let Some(msg) = message {
+                let text = msg.to_string();
+                if let Some(encoded) = text.strip_prefix("[ANARC_CB_COPY]") {
+                    let decoded = crate::engine::clipboard::url_decode(encoded);
+                    crate::engine::clipboard::write_system_clipboard(&decoded);
+                    return 1;
+                }
+                if let Some(encoded) = text.strip_prefix("[ANARC_CB_PRIMARY]") {
+                    let decoded = crate::engine::clipboard::url_decode(encoded);
+                    crate::engine::clipboard::write_primary_clipboard(&decoded);
+                    return 1;
+                }
+            }
+            0
+        }
+
         fn on_fullscreen_mode_change(&self, _browser: Option<&mut Browser>, fullscreen: i32) {
             if let Ok(mut events) = self.events.lock() {
                 events.fullscreen.push((self.tab_id.clone(), fullscreen != 0));
@@ -742,8 +844,11 @@ cef::wrap_life_span_handler! {
         close_state: Arc<(Mutex<usize>, Condvar)>,
         shutdown_requested: Arc<std::sync::atomic::AtomicBool>,
         shield: Arc<crate::shield::ShieldState>,
+        https_state: Arc<Mutex<HttpsFirstState>>,
+        panel_packages: panel_scheme::PanelRegistry,
         frame_rate: i32,
         initial_zoom_level: f64,
+        popup_serial: Arc<std::sync::atomic::AtomicU64>,
     }
 
     impl LifeSpanHandler {
@@ -793,40 +898,167 @@ cef::wrap_life_span_handler! {
             _popup_id: i32,
             target_url: Option<&CefString>,
             _target_frame_name: Option<&CefString>,
-            _target_disposition: WindowOpenDisposition,
-            _user_gesture: i32,
-            _popup_features: Option<&PopupFeatures>,
-            _window_info: Option<&mut WindowInfo>,
-            _client: Option<&mut Option<Client>>,
-            _settings: Option<&mut BrowserSettings>,
+            target_disposition: WindowOpenDisposition,
+            user_gesture: i32,
+            popup_features: Option<&PopupFeatures>,
+            window_info: Option<&mut WindowInfo>,
+            client: Option<&mut Option<Client>>,
+            settings: Option<&mut BrowserSettings>,
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _no_javascript_access: Option<&mut i32>,
         ) -> i32 {
-            if should_block_popup(_user_gesture, self.shield.enabled()) {
+            if should_block_popup(user_gesture, self.shield.enabled()) {
                 return 1;
             }
             let url = target_url.map(ToString::to_string).unwrap_or_default();
             let trimmed = url.trim();
-            if trimmed.is_empty() || trimmed == "about:blank" {
+            // Some sign-in libraries open a blank window first and navigate it
+            // from script afterwards, so a gesture-opened blank popup still has
+            // to exist. Everything else blank is noise.
+            let blank = trimmed.is_empty() || trimmed == "about:blank";
+            let wants_native_window = user_gesture == 1
+                && (target_disposition == WindowOpenDisposition::NEW_POPUP
+                    || is_auth_flow_url(trimmed));
+            if blank && !wants_native_window {
                 return 1;
             }
-            if self.shield.enabled()
+            if !blank
+                && self.shield.enabled()
                 && self.shield.should_block(trimmed, trimmed, "document", "GET", &self.tab_id)
             {
                 return 1;
             }
-            if let Ok(mut events) = self.events.lock() {
-                if !events.popups.iter().any(|(s, u)| s == &self.space_id && u == trimmed) {
-                    events.popups.push((
-                        self.space_id.clone(),
-                        trimmed.to_owned(),
-                    ));
-                    let _ = self.paint_wake.try_send(());
-                }
+            // Sign-in popups have to keep a live `window.opener`: identity
+            // providers hand the result back through `postMessage` and finish
+            // with `window.close()`. Letting CEF own those windows keeps that
+            // contract, and the app only has to show the browser it created.
+            let popup_url = if blank { "about:blank" } else { trimmed };
+            if wants_native_window
+                && start_popup_browser(
+                    self,
+                    popup_url,
+                    popup_features,
+                    window_info,
+                    client,
+                    settings,
+                )
+            {
+                return 0;
+            }
+            if blank {
+                return 1;
+            }
+            if let Ok(mut events) = self.events.lock()
+                && !events
+                    .popups
+                    .iter()
+                    .any(|popup| popup.space_id == self.space_id && popup.url == trimmed)
+            {
+                events.popups.push(PopupRequest {
+                    space_id: self.space_id.clone(),
+                    url: trimmed.to_owned(),
+                    browser_id: None,
+                });
+                let _ = self.paint_wake.try_send(());
             }
             1
         }
     }
+}
+
+/// Lets CEF create the popup itself, so the new browser keeps its opener.
+/// Returns false when the platform passed nothing to configure, in which case
+/// the caller falls back to an app-created peek window.
+fn start_popup_browser(
+    handler: &LumenLifeSpanHandler,
+    url: &str,
+    popup_features: Option<&PopupFeatures>,
+    window_info: Option<&mut WindowInfo>,
+    client: Option<&mut Option<Client>>,
+    settings: Option<&mut BrowserSettings>,
+) -> bool {
+    let (Some(window_info), Some(client), Some(settings)) = (window_info, client, settings) else {
+        return false;
+    };
+    let width = popup_features
+        .filter(|features| features.width_set != 0 && features.width > 0)
+        .map_or(800, |features| features.width);
+    let height = popup_features
+        .filter(|features| features.height_set != 0 && features.height > 0)
+        .map_or(700, |features| features.height);
+    let serial = handler
+        .popup_serial
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tab_id = format!("{}-popup-{serial}", handler.space_id);
+    let shared = Arc::new(Mutex::new(new_shared_state(width, height, url, 1.0)));
+    let render_handler =
+        LumenRenderHandler::new(shared.clone(), handler.paint_wake.clone(), tab_id.clone());
+    let display_handler = LumenDisplayHandler::new(
+        shared.clone(),
+        tab_id.clone(),
+        handler.paint_wake.clone(),
+        handler.events.clone(),
+    );
+    let life_span_handler = LumenLifeSpanHandler::new(
+        handler.events.clone(),
+        handler.space_id.clone(),
+        tab_id.clone(),
+        handler.paint_wake.clone(),
+        handler.close_state.clone(),
+        handler.shutdown_requested.clone(),
+        handler.shield.clone(),
+        handler.https_state.clone(),
+        handler.panel_packages.clone(),
+        handler.frame_rate,
+        handler.initial_zoom_level,
+        handler.popup_serial.clone(),
+    );
+    let download_handler =
+        LumenDownloadHandler::new(handler.events.clone(), handler.paint_wake.clone());
+    let permission_handler = LumenPermissionHandler::new(handler.events.clone());
+    let load_handler = LumenLoadHandler::new(
+        shared.clone(),
+        handler.https_state.clone(),
+        handler.events.clone(),
+        tab_id.clone(),
+    );
+    let context_menu_handler = LumenContextMenuHandler::new(handler.events.clone());
+    let request_handler = LumenRequestHandler::new(
+        handler.shield.clone(),
+        tab_id.clone(),
+        handler.https_state.clone(),
+        handler.events.clone(),
+        handler.panel_packages.clone(),
+    );
+    let dialog_handler = LumenDialogHandler::new(handler.paint_wake.clone());
+    *client = Some(LumenClient::new(
+        render_handler,
+        display_handler,
+        life_span_handler,
+        download_handler,
+        permission_handler,
+        load_handler,
+        context_menu_handler,
+        request_handler,
+        dialog_handler,
+    ));
+    *window_info = WindowInfo::default().set_as_windowless(0);
+    settings.windowless_frame_rate = handler.frame_rate;
+    settings.javascript_access_clipboard = State::ENABLED;
+    settings.javascript_dom_paste = State::ENABLED;
+    if let Ok(mut count) = handler.close_state.0.lock() {
+        *count += 1;
+    }
+    if let Ok(mut events) = handler.events.lock() {
+        events.pending_popup_states.push((tab_id.clone(), shared));
+        events.popups.push(PopupRequest {
+            space_id: handler.space_id.clone(),
+            url: url.to_owned(),
+            browser_id: Some(tab_id),
+        });
+    }
+    let _ = handler.paint_wake.try_send(());
+    true
 }
 
 #[cfg(test)]
@@ -846,6 +1078,64 @@ mod popup_tests {
             let trimmed = url.trim();
             assert!(trimmed.is_empty() || trimmed == "about:blank");
         }
+    }
+}
+
+#[cfg(test)]
+mod dialog_tests {
+    use super::*;
+
+    #[test]
+    fn filter_patterns_clean_and_deduplicate_extensions() {
+        let filters = vec!["image/*".to_string(), "custom.pdf".to_string()];
+        let extensions = vec![
+            ".png;.jpg".to_string(),
+            "jpeg".to_string(),
+            "*.png".to_string(),
+        ];
+        let patterns = collect_filter_patterns(&filters, &extensions);
+        assert_eq!(patterns, vec!["*.jpeg", "*.jpg", "*.pdf", "*.png"]);
+    }
+
+    #[test]
+    fn build_zenity_args_handles_open_modes_and_filters() {
+        let open_args = build_zenity_args(
+            FileDialogMode::OPEN,
+            Some("Upload file"),
+            Some("/tmp/test.txt"),
+            &[],
+            &["txt".to_string()],
+        );
+        assert!(open_args.contains(&"--file-selection".to_string()));
+        assert!(open_args.contains(&"--title=Upload file".to_string()));
+        assert!(open_args.contains(&"--filename=/tmp/test.txt".to_string()));
+        assert!(open_args.contains(&"--file-filter=Supported files | *.txt".to_string()));
+        assert!(open_args.contains(&"--file-filter=All files | *".to_string()));
+        assert!(!open_args.contains(&"--multiple".to_string()));
+        assert!(!open_args.contains(&"--directory".to_string()));
+    }
+
+    #[test]
+    fn build_zenity_args_handles_open_multiple_and_folder() {
+        let multi_args = build_zenity_args(FileDialogMode::OPEN_MULTIPLE, None, None, &[], &[]);
+        assert!(multi_args.contains(&"--multiple".to_string()));
+        assert!(multi_args.contains(&"--separator=\n".to_string()));
+        assert!(multi_args.contains(&"--title=Select Files".to_string()));
+
+        let folder_args = build_zenity_args(FileDialogMode::OPEN_FOLDER, None, None, &[], &[]);
+        assert!(folder_args.contains(&"--directory".to_string()));
+        assert!(folder_args.contains(&"--title=Select Folder".to_string()));
+
+        let save_args = build_zenity_args(FileDialogMode::SAVE, None, None, &[], &[]);
+        assert!(save_args.contains(&"--save".to_string()));
+        assert!(save_args.contains(&"--confirm-overwrite".to_string()));
+        assert!(save_args.contains(&"--title=Save File".to_string()));
+    }
+
+    #[test]
+    fn extract_cef_string_list_on_none_returns_empty() {
+        let result = extract_cef_string_list(None);
+        assert!(result.is_empty());
     }
 }
 
@@ -997,7 +1287,7 @@ cef::wrap_permission_handler! {
             _browser: Option<&mut Browser>,
             _prompt_id: u64,
             _origin: Option<&CefString>,
-            _permissions: u32,
+            permissions: u32,
             callback: Option<&mut PermissionPromptCallback>,
         ) -> i32 {
             if let Ok(mut events) = self.events.lock() {
@@ -1006,7 +1296,274 @@ cef::wrap_permission_handler! {
                     format!("{}\npermission", _origin.map(ToString::to_string).unwrap_or_default()),
                 ));
             }
-            if let Some(callback) = callback { callback.cont(PermissionRequestResult::DENY); }
+            if let Some(callback) = callback {
+                const CEF_PERMISSION_TYPE_CLIPBOARD: u32 = 16;
+                let result = if (permissions & CEF_PERMISSION_TYPE_CLIPBOARD) != 0 {
+                    PermissionRequestResult::ACCEPT
+                } else {
+                    PermissionRequestResult::DENY
+                };
+                callback.cont(result);
+            }
+            1
+        }
+    }
+}
+
+pub(crate) fn collect_filter_patterns(filters: &[String], extensions: &[String]) -> Vec<String> {
+    let mut patterns = Vec::new();
+    for ext_group in extensions {
+        for ext in ext_group.split(';') {
+            let clean = ext.trim().trim_start_matches('*').trim_start_matches('.');
+            let actual_ext = clean.rsplit('.').next().unwrap_or(clean);
+            if !actual_ext.is_empty() {
+                patterns.push(format!("*.{actual_ext}"));
+            }
+        }
+    }
+    for filter in filters {
+        let clean = filter.trim();
+        if !clean.contains('/') {
+            for ext in clean.split(';') {
+                let clean_ext = ext.trim().trim_start_matches('*').trim_start_matches('.');
+                let actual_ext = clean_ext.rsplit('.').next().unwrap_or(clean_ext);
+                if !actual_ext.is_empty() {
+                    patterns.push(format!("*.{actual_ext}"));
+                }
+            }
+        }
+    }
+    patterns.sort();
+    patterns.dedup();
+    patterns
+}
+
+pub(crate) fn build_zenity_args(
+    mode: FileDialogMode,
+    title: Option<&str>,
+    default_path: Option<&str>,
+    filters: &[String],
+    extensions: &[String],
+) -> Vec<String> {
+    let mut args = vec!["--file-selection".to_string()];
+
+    if mode == FileDialogMode::OPEN_MULTIPLE {
+        args.push("--multiple".to_string());
+        args.push("--separator=\n".to_string());
+    } else if mode == FileDialogMode::OPEN_FOLDER {
+        args.push("--directory".to_string());
+    } else if mode == FileDialogMode::SAVE {
+        args.push("--save".to_string());
+        args.push("--confirm-overwrite".to_string());
+    }
+
+    let dialog_title = title.unwrap_or(if mode == FileDialogMode::SAVE {
+        "Save File"
+    } else if mode == FileDialogMode::OPEN_FOLDER {
+        "Select Folder"
+    } else if mode == FileDialogMode::OPEN_MULTIPLE {
+        "Select Files"
+    } else {
+        "Select File"
+    });
+    args.push(format!("--title={dialog_title}"));
+
+    if let Some(path) = default_path.filter(|p| !p.is_empty()) {
+        args.push(format!("--filename={path}"));
+    }
+
+    let patterns = collect_filter_patterns(filters, extensions);
+    if !patterns.is_empty() {
+        args.push(format!(
+            "--file-filter=Supported files | {}",
+            patterns.join(" ")
+        ));
+        args.push("--file-filter=All files | *".to_string());
+    }
+
+    args
+}
+
+fn run_kdialog(
+    mode: FileDialogMode,
+    title: Option<&str>,
+    default_path: Option<&str>,
+    filters: &[String],
+    extensions: &[String],
+) -> std::io::Result<std::process::Output> {
+    let mut cmd = std::process::Command::new("kdialog");
+    let dialog_title = title.unwrap_or(if mode == FileDialogMode::SAVE {
+        "Save File"
+    } else if mode == FileDialogMode::OPEN_FOLDER {
+        "Select Folder"
+    } else if mode == FileDialogMode::OPEN_MULTIPLE {
+        "Select Files"
+    } else {
+        "Select File"
+    });
+    cmd.arg("--title").arg(dialog_title);
+
+    let patterns = collect_filter_patterns(filters, extensions);
+    let filter_arg = if patterns.is_empty() {
+        String::new()
+    } else {
+        patterns.join(" ")
+    };
+
+    if mode == FileDialogMode::OPEN_FOLDER {
+        cmd.arg("--getexistingdirectory");
+        if let Some(path) = default_path.filter(|p| !p.is_empty()) {
+            cmd.arg(path);
+        }
+    } else if mode == FileDialogMode::SAVE {
+        cmd.arg("--getsavefilename");
+        cmd.arg(default_path.unwrap_or(""));
+        if !filter_arg.is_empty() {
+            cmd.arg(filter_arg);
+        }
+    } else if mode == FileDialogMode::OPEN_MULTIPLE {
+        cmd.arg("--getopenfilename");
+        cmd.arg(default_path.unwrap_or(""));
+        if !filter_arg.is_empty() {
+            cmd.arg(filter_arg);
+        }
+        cmd.arg("--multiple").arg("--separate-output");
+    } else {
+        cmd.arg("--getopenfilename");
+        cmd.arg(default_path.unwrap_or(""));
+        if !filter_arg.is_empty() {
+            cmd.arg(filter_arg);
+        }
+    }
+
+    cmd.output()
+}
+
+pub(crate) fn run_file_picker(
+    mode: FileDialogMode,
+    title: Option<&str>,
+    default_path: Option<&str>,
+    filters: &[String],
+    extensions: &[String],
+) -> Option<Vec<String>> {
+    let zenity_args = build_zenity_args(mode, title, default_path, filters, extensions);
+    match std::process::Command::new("zenity")
+        .args(&zenity_args)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let out = String::from_utf8_lossy(&output.stdout);
+            let paths: Vec<String> = out
+                .lines()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .collect();
+            if !paths.is_empty() {
+                return Some(paths);
+            }
+        }
+        Ok(_) => return None,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return None,
+    }
+
+    match run_kdialog(mode, title, default_path, filters, extensions) {
+        Ok(output) if output.status.success() => {
+            let out = String::from_utf8_lossy(&output.stdout);
+            let paths: Vec<String> = out
+                .lines()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .collect();
+            if !paths.is_empty() {
+                return Some(paths);
+            }
+        }
+        Ok(_) => return None,
+        Err(_) => {}
+    }
+
+    None
+}
+
+pub(crate) fn extract_cef_string_list(mut list: Option<&mut CefStringList>) -> Vec<String> {
+    let mut items = Vec::new();
+    let Some(list) = list.as_mut() else {
+        return items;
+    };
+    let raw: *mut cef::sys::_cef_string_list_t = (&mut **list).into();
+    if raw.is_null() {
+        return items;
+    }
+    let count = unsafe { cef::sys::cef_string_list_size(raw) };
+    for i in 0..count {
+        let mut s: cef::sys::cef_string_t = unsafe { std::mem::zeroed() };
+        if unsafe { cef::sys::cef_string_list_value(raw, i, &mut s) } != 0 {
+            let text = if s.str_.is_null() || s.length == 0 {
+                String::new()
+            } else {
+                let units = unsafe { std::slice::from_raw_parts(s.str_, s.length) };
+                String::from_utf16_lossy(units)
+            };
+            unsafe { cef::sys::cef_string_utf16_clear(&mut s) };
+            if !text.is_empty() {
+                items.push(text);
+            }
+        }
+    }
+    items
+}
+
+cef::wrap_dialog_handler! {
+    pub(super) struct LumenDialogHandler {
+        ui_update_wake: async_channel::Sender<()>,
+    }
+
+    impl DialogHandler {
+        fn on_file_dialog(
+            &self,
+            _browser: Option<&mut Browser>,
+            mode: FileDialogMode,
+            title: Option<&CefString>,
+            default_file_path: Option<&CefString>,
+            accept_filters: Option<&mut CefStringList>,
+            accept_extensions: Option<&mut CefStringList>,
+            _accept_descriptions: Option<&mut CefStringList>,
+            callback: Option<&mut FileDialogCallback>,
+        ) -> ::std::os::raw::c_int {
+            let Some(callback) = callback else { return 0; };
+            let callback = callback.clone();
+            let title_str = title.map(ToString::to_string);
+            let default_path = default_file_path.map(ToString::to_string);
+            let filters = extract_cef_string_list(accept_filters);
+            let extensions = extract_cef_string_list(accept_extensions);
+            let wake = self.ui_update_wake.clone();
+
+            std::thread::spawn(move || {
+                let selected = run_file_picker(
+                    mode,
+                    title_str.as_deref(),
+                    default_path.as_deref(),
+                    &filters,
+                    &extensions,
+                );
+                match selected {
+                    Some(paths) if !paths.is_empty() => {
+                        let mut list = CefStringList::new();
+                        for path in paths {
+                            list.append(&path);
+                        }
+                        callback.cont(Some(&mut list));
+                    }
+                    _ => {
+                        callback.cancel();
+                    }
+                }
+                let _ = wake.try_send(());
+            });
+
             1
         }
     }
@@ -1022,6 +1579,7 @@ cef::wrap_client! {
         load_handler: LoadHandler,
         context_menu_handler: ContextMenuHandler,
         request_handler: RequestHandler,
+        dialog_handler: DialogHandler,
     }
 
     impl Client {
@@ -1045,5 +1603,6 @@ cef::wrap_client! {
         }
 
         fn request_handler(&self) -> Option<RequestHandler> { Some(self.request_handler.clone()) }
+        fn dialog_handler(&self) -> Option<DialogHandler> { Some(self.dialog_handler.clone()) }
     }
 }

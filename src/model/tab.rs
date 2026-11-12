@@ -5,6 +5,11 @@ pub struct Tab {
     pub id: String,
     pub title: String,
     pub url: String,
+    /// Destination restored when a pinned tab is unloaded and opened again.
+    #[serde(default)]
+    pub pinned_url: Option<String>,
+    #[serde(default)]
+    pub pinned_title: Option<String>,
     #[serde(default)]
     pub favicon_path: Option<String>,
     pub pinned: bool,
@@ -25,6 +30,8 @@ impl Tab {
             id: id.into(),
             title: title.into(),
             url: url.into(),
+            pinned_url: None,
+            pinned_title: None,
             favicon_path: None,
             pinned: false,
             favorite: false,

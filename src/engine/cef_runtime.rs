@@ -28,6 +28,7 @@ impl Engine {
             shield: crate::shield::ShieldState::start(),
             https_state: Arc::new(Mutex::new(HttpsFirstState::default())),
             panel_packages: crate::plugin::new_panel_registry(),
+            popup_serial: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -50,8 +51,11 @@ impl Engine {
         std::fs::create_dir_all(&cache_root)
             .map_err(|error| format!("cannot create CEF cache directory: {error}"))?;
 
-        let current_exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("anarc"));
-        let exe_dir = current_exe.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let current_exe =
+            std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("anarc"));
+        let exe_dir = current_exe
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
 
         // Locate CEF runtime resources (resources.pak, locales/)
         // Priority:
@@ -110,12 +114,22 @@ impl Engine {
         }
     }
     pub fn take_created_browsers(&mut self) -> bool {
-        let created = self
+        let (created, popup_states) = self
             .events
             .lock()
             .ok()
-            .map(|mut events| std::mem::take(&mut events.created))
+            .map(|mut events| {
+                (
+                    std::mem::take(&mut events.created),
+                    std::mem::take(&mut events.pending_popup_states),
+                )
+            })
             .unwrap_or_default();
+        // Windows the page opened itself are already on their way; registering
+        // their state first keeps `ensure_browser` from starting a duplicate.
+        for (id, state) in popup_states {
+            self.pending_browsers.insert(id, state);
+        }
         let mut changed = false;
         for (id, browser) in created {
             if self.canceled_browsers.remove(&id) {
@@ -137,6 +151,7 @@ impl Engine {
                     && let Some(host) = browser.host()
                 {
                     host.set_zoom_level(zoom.clamp(-5.0, 5.0));
+                    host.invalidate(cef::PaintElementType::VIEW);
                 }
                 self.browsers
                     .insert(id.clone(), BrowserEntry { browser, state });
