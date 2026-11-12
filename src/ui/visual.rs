@@ -394,9 +394,9 @@ pub fn active_card_radius() -> f32 {
             && let Some(n) = val
                 .as_float()
                 .or_else(|| val.as_integer().map(|i| i as f64))
-            {
-                return (n as f32) * UI_SCALE;
-            }
+        {
+            return (n as f32) * UI_SCALE;
+        }
     }
     16.0 * UI_SCALE
 }

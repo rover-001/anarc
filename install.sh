@@ -99,8 +99,6 @@ cp -f "$BUNDLE_BIN" "$APP_DIR/bin/anarc.tmp"
 chmod 755 "$APP_DIR/bin/anarc.tmp"
 mv -f "$APP_DIR/bin/anarc.tmp" "$APP_DIR/bin/anarc"
 ln -sf anarc "$APP_DIR/bin/lumen"
-ln -sf anarc "$APP_DIR/bin/chrome"
-ln -sf anarc "$APP_DIR/bin/chromium"
 
 # CEF runtime: copy only runtime files (skip cmake/, include/, CMakeLists, etc.)
 echo "==> Installing CEF runtime to $CEF_DIR"
@@ -127,12 +125,37 @@ cat > "$BIN_DIR/anarc" <<EOF
 #!/bin/sh
 export PATH="$APP_DIR/bin:$BIN_DIR:$CEF_DIR:\$PATH"
 export LD_LIBRARY_PATH="$CEF_DIR\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+# Several Anarc windows can run side by side. Each launch claims a slot: slot 1
+# uses the default CEF profile, slots 2-9 get their own profile root so no two
+# processes ever open the same cookie/cache database. Everything else (settings,
+# spaces, history) stays shared.
+if command -v flock >/dev/null 2>&1; then
+    LOCK_DIR="\${XDG_RUNTIME_DIR:-/tmp}"
+    SLOT=1
+    while [ "\$SLOT" -le 9 ]; do
+        if [ "\$SLOT" -eq 1 ]; then
+            LOCK="\$LOCK_DIR/anarc.lock"
+        else
+            LOCK="\$LOCK_DIR/anarc-\$SLOT.lock"
+        fi
+        exec 9>"\$LOCK"
+        if flock -n 9; then
+            break
+        fi
+        SLOT=\$((SLOT + 1))
+    done
+    if [ "\$SLOT" -gt 9 ]; then
+        echo "anarc: 9 windows are already running" >&2
+        exit 1
+    fi
+    if [ "\$SLOT" -gt 1 ]; then
+        export ANARC_INSTANCE_SLOT="\$SLOT"
+    fi
+fi
 exec "$APP_DIR/bin/anarc" "\$@"
 EOF
 chmod 755 "$BIN_DIR/anarc"
 ln -sf anarc "$BIN_DIR/lumen"
-ln -sf anarc "$BIN_DIR/chrome"
-ln -sf anarc "$BIN_DIR/chromium"
 
 # --- Desktop entry + icon ---------------------------------------------------
 if [ "$NO_DESKTOP" -eq 0 ]; then

@@ -3,14 +3,16 @@ use super::super::*;
 impl Lumen {
     pub(crate) fn theme_picker_space(&self) -> &Space {
         if self.theme_editor.as_ref().is_some_and(|e| e.target_modal)
-            && let Some(modal) = &self.space_modal {
-                return &modal.theme_draft;
-            }
+            && let Some(modal) = &self.space_modal
+        {
+            return &modal.theme_draft;
+        }
         self.active_space()
     }
 
     pub(crate) fn theme_picker_space_mut(&mut self) -> &mut Space {
-        if self.theme_editor.as_ref().is_some_and(|e| e.target_modal) && self.space_modal.is_some() {
+        if self.theme_editor.as_ref().is_some_and(|e| e.target_modal) && self.space_modal.is_some()
+        {
             #[allow(clippy::unnecessary_unwrap)]
             return &mut self.space_modal.as_mut().unwrap().theme_draft;
         }
@@ -139,6 +141,7 @@ impl Lumen {
         if self.active_space == id {
             return;
         }
+        self.close_peek();
         let previous_space = self.active_space.clone();
         if let Some(to_index) = self.spaces.iter().position(|space| space.id == id) {
             let from_index = self
@@ -218,6 +221,7 @@ impl Lumen {
             cx.notify();
         });
         let previous_space = self.active_space.clone();
+        self.close_peek();
         self.active_space = id.to_owned();
         if previous_space != id {
             self.emit_plugin_text("space.switched", format!("{previous_space}\n{id}"));

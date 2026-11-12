@@ -2,13 +2,29 @@ mod folders;
 mod navigation;
 mod palette;
 mod panels;
+pub(super) mod peek;
 mod plugins;
 mod resize;
 mod shortcuts;
 mod spaces;
 mod tabs;
 
+#[cfg(test)]
+pub(in crate::app) use navigation::single_line_paste;
+
 use super::*;
+
+/// Kept tabs remember the page they were pinned on independently of where the
+/// user navigates later. Legacy tabs predate that field, so their current URL
+/// is adopted once as the pinned destination.
+pub(in crate::app) fn seed_pinned_destination(tab: &mut Tab) {
+    if (tab.pinned || tab.favorite) && tab.pinned_url.is_none() {
+        tab.pinned_url = Some(tab.url.clone());
+        if tab.pinned_title.is_none() && !tab.title.is_empty() {
+            tab.pinned_title = Some(tab.title.clone());
+        }
+    }
+}
 
 impl Lumen {
     pub(crate) fn plugin_rows(&self) -> Vec<crate::plugin::PluginRow> {
@@ -72,6 +88,28 @@ impl Lumen {
             };
 
         make_tab_ids_unique(&mut spaces);
+        for space in &mut spaces {
+            for tab in &mut space.tabs {
+                // Saves older than `pinned_url` (and tabs pinned before their
+                // URL settled) get their destination captured now, while the
+                // stored URL is still the page they represent. Capturing it on
+                // close instead would adopt whatever the user navigated to.
+                seed_pinned_destination(tab);
+            }
+        }
+        for space in &mut spaces {
+            for tab in &mut space.tabs {
+                if (tab.pinned || tab.favorite)
+                    && let Some(pinned_url) = &tab.pinned_url
+                {
+                    tab.url = pinned_url.clone();
+                    if let Some(pinned_title) = &tab.pinned_title {
+                        tab.title = pinned_title.clone();
+                    }
+                    tab.state = TabState::Discarded;
+                }
+            }
+        }
         if let Some(space) = spaces.iter_mut().find(|space| space.id == active_space) {
             let blank_tab = space
                 .tabs
@@ -174,6 +212,9 @@ impl Lumen {
         let root_entity = cx.weak_entity();
         let second_web_viewport =
             cx.new(|_| WebViewport::new(root_entity, browser_focus_handle.clone()));
+        let root_entity = cx.weak_entity();
+        let peek_web_viewport =
+            cx.new(|_| WebViewport::new(root_entity, browser_focus_handle.clone()));
         let address_subscription =
             cx.subscribe(&address, |this: &mut Lumen, _, event, cx| match event {
                 InputEvent::PressEnter { .. } => {
@@ -235,6 +276,10 @@ impl Lumen {
             browser_focus_handle,
             web_viewport,
             second_web_viewport,
+            peek_web_viewport,
+            peek: None,
+            peek_serial: 0,
+            peek_focused: false,
             focused_pane: 0,
             split_ratio: 0.5,
             split_resizing: false,
@@ -263,6 +308,7 @@ impl Lumen {
             sidebar_context_menu: None,
             theme_editor: None,
             tab_context_menu: None,
+            web_context_menu: None,
             folder_context_menu: None,
             folder_modal: None,
             split_group_expanded: false,
@@ -295,6 +341,12 @@ impl Lumen {
     }
     pub(crate) fn close_app_page(&mut self) {
         self.app_page = None;
+    }
+    pub(crate) fn open_web_context_menu(&mut self, tab_id: String, x: f32, y: f32) {
+        self.tab_context_menu = None;
+        self.folder_context_menu = None;
+        self.space_context_menu = None;
+        self.web_context_menu = Some(super::state::WebContextMenu { tab_id, x, y });
     }
     pub(crate) fn set_settings_section(&mut self, section: SettingsSection) {
         self.settings_section = section;
@@ -433,12 +485,16 @@ impl Lumen {
     }
     pub(crate) fn focus_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.browser_focused = true;
+        self.peek_focused = false;
         self.show_suggestions = false;
         self.selected_suggestion = None;
         window.focus(&self.browser_focus_handle, cx);
         if let Some(pair) = self.current_split_pair() {
             self.engine.set_focus(&pair.first, false);
             self.engine.set_focus(&pair.second, false);
+        }
+        if let Some(peek_id) = self.peek.as_ref().map(|peek| peek.id.clone()) {
+            self.engine.set_focus(&peek_id, false);
         }
         let tab_id = self.focused_tab_id().to_string();
         self.engine.set_focus(&tab_id, true);
