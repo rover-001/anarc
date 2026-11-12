@@ -15,8 +15,32 @@ pub fn plugin_config_path() -> PathBuf {
 }
 
 /// CEF requires request-context cache paths to be direct children of its root cache path.
+///
+/// Two windows can run at once, but they must never share one CEF profile:
+/// Chromium puts a process-singleton lock in `--user-data-dir` (the root cache
+/// path) and a second process opening the same cookies/cache database corrupts
+/// it. The launcher claims a slot per window; slot 1 keeps the default profile
+/// and every later slot gets its own root, so the rest of the user data
+/// (settings, spaces, history) stays shared like a second browser window.
 pub fn cef_root_dir() -> PathBuf {
-    cef_root_from_data_dir(data_dir())
+    instance_cef_root(
+        cef_root_from_data_dir(data_dir()),
+        resolve_instance_slot(std::env::var_os("ANARC_INSTANCE_SLOT")),
+    )
+}
+
+const MAX_INSTANCE_SLOTS: u32 = 9;
+
+fn resolve_instance_slot(value: Option<std::ffi::OsString>) -> Option<u32> {
+    let slot = value?.to_str()?.trim().parse::<u32>().ok()?;
+    (2..=MAX_INSTANCE_SLOTS).contains(&slot).then_some(slot)
+}
+
+fn instance_cef_root(base: PathBuf, slot: Option<u32>) -> PathBuf {
+    match slot {
+        Some(slot) => base.join(format!("instance-{slot}")),
+        None => base,
+    }
 }
 
 pub fn profile_dir(space_id: &str) -> PathBuf {
@@ -158,6 +182,29 @@ mod tests {
         assert_eq!(
             profile_from_cef_root(PathBuf::from("/tmp/lumen-data/cef"), "../personal"),
             PathBuf::from("/tmp/lumen-data/cef/space-%2E%2E%2Fpersonal")
+        );
+    }
+
+    #[test]
+    fn only_secondary_launch_slots_are_accepted() {
+        assert_eq!(resolve_instance_slot(Some("2".into())), Some(2));
+        assert_eq!(resolve_instance_slot(Some("9".into())), Some(9));
+        assert_eq!(resolve_instance_slot(Some("1".into())), None);
+        assert_eq!(resolve_instance_slot(Some("0".into())), None);
+        assert_eq!(resolve_instance_slot(Some("10".into())), None);
+        assert_eq!(resolve_instance_slot(Some("second".into())), None);
+        assert_eq!(resolve_instance_slot(None), None);
+    }
+
+    #[test]
+    fn secondary_slots_get_their_own_cef_root_with_direct_child_profiles() {
+        let base = PathBuf::from("/tmp/lumen-data/cef");
+        assert_eq!(instance_cef_root(base.clone(), None), base);
+        let secondary = instance_cef_root(base, Some(2));
+        assert_eq!(secondary, PathBuf::from("/tmp/lumen-data/cef/instance-2"));
+        assert_eq!(
+            profile_from_cef_root(secondary, "personal"),
+            PathBuf::from("/tmp/lumen-data/cef/instance-2/space-personal")
         );
     }
 }

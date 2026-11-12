@@ -110,11 +110,7 @@ impl PluginManagerModel {
             .get(id)
             .and_then(|entry| entry.enabled)
             .unwrap_or(descriptor.enabled_by_default);
-        config
-            .plugins
-            .entry(id.to_owned())
-            .or_default()
-            .enabled = Some(enabled);
+        config.plugins.entry(id.to_owned()).or_default().enabled = Some(enabled);
 
         Ok(match (was_enabled, enabled) {
             (true, false) => ToggleAction::Disable,

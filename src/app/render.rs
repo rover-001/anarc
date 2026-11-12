@@ -1,5 +1,11 @@
 use super::*;
 
+// TEMPORARY benchmark hook.
+static BENCH_OPENED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(target_os = "linux", not(test)))]
+use super::actions::peek::peek_layout;
+
 mod context_menus;
 mod dialogs;
 mod shell;
@@ -26,6 +32,19 @@ impl Render for Lumen {
                 "Lumen time-to-first-frame: {:.1} ms",
                 self.started_at.elapsed().as_secs_f64() * 1000.0
             );
+        }
+
+        // TEMPORARY benchmark hook.
+        if std::env::var_os("ANARC_BENCH_URL").is_some()
+            && !BENCH_OPENED.swap(true, std::sync::atomic::Ordering::Relaxed)
+            && let Ok(url) = std::env::var("ANARC_BENCH_URL")
+        {
+            let id = self.active_tab_id().to_owned();
+            if let Some(tab) = self.active_space_mut().tabs.iter_mut().find(|tab| tab.id == id)
+            {
+                tab.url = url;
+                tab.state = TabState::Discarded;
+            }
         }
 
         #[cfg(not(test))]
@@ -90,8 +109,16 @@ impl Render for Lumen {
                                 && let Some((tab_id, url)) = payload.split_once('\n')
                             {
                                 this.inject_pack_assets(tab_id, url);
-                                if this.engine.ad_blocker_enabled() && crate::shield::is_youtube_url(url) {
-                                    this.engine.execute_script(tab_id, crate::shield::youtube_ad_shield_script());
+                                if this.engine.ad_blocker_enabled() {
+                                    if let Some(script) = this.engine.shield_cosmetic_script(url) {
+                                        this.engine.execute_script(tab_id, &script);
+                                    }
+                                    if crate::shield::is_youtube_url(url) {
+                                        this.engine.execute_script(
+                                            tab_id,
+                                            crate::shield::youtube_ad_shield_script(),
+                                        );
+                                    }
                                 }
                             }
                             let mode = match event.as_str() {
@@ -112,15 +139,28 @@ impl Render for Lumen {
                             cx.notify();
                         }
                         let popups = this.engine.take_popups();
-                        for (space_id, url) in &popups {
-                            this.open_popup_tab(space_id, url.clone());
+                        let has_popups = !popups.is_empty();
+                        for popup in popups {
+                            match popup.browser_id {
+                                Some(browser_id) => {
+                                    this.show_popup_window(&popup.space_id, popup.url, browser_id)
+                                }
+                                None => this.open_popup_tab(&popup.space_id, popup.url),
+                            }
                         }
-                        if !popups.is_empty() {
+                        if has_popups {
                             cx.notify();
                         }
                         let close_requests = this.engine.take_close_requests();
                         for tab_id in &close_requests {
-                            this.close_tab_by_id(tab_id);
+                            if this.peek.as_ref().is_some_and(|peek| peek.id == *tab_id) {
+                                this.close_peek_from_page();
+                            } else {
+                                // CEF can request a window close when Ctrl+W is
+                                // handled by the web view. Keep pinned/favorite
+                                // tabs in the sidebar, matching the app shortcut.
+                                this.close_section_tab(tab_id);
+                            }
                         }
                         if !close_requests.is_empty() {
                             cx.notify();
@@ -140,6 +180,12 @@ impl Render for Lumen {
                                 || vec![this.active_tab_id().to_string()],
                                 |pair| vec![pair.first, pair.second],
                             );
+                        let split_active = visible_ids.len() > 1;
+                        let peek_id = this.peek.as_ref().map(|peek| peek.id.clone());
+                        let mut visible_ids = visible_ids;
+                        if let Some(peek_id) = peek_id.clone() {
+                            visible_ids.push(peek_id);
+                        }
                         let visible_refs =
                             visible_ids.iter().map(String::as_str).collect::<Vec<_>>();
                         let (has_updates, has_root_updates) =
@@ -147,18 +193,36 @@ impl Render for Lumen {
                         if has_root_updates {
                             stats::record_root_metadata_update();
                             for tab_id in &visible_ids {
-                                if let Some((title, url)) = this.engine.take_updates(tab_id)
-                                    && let Some(tab) = this
+                                if let Some((title, url)) = this.engine.take_updates(tab_id) {
+                                    if peek_id.as_deref() == Some(tab_id.as_str()) {
+                                        if let Some(peek) = this.peek.as_mut() {
+                                            if let Some(title) = title.filter(|t| !t.is_empty()) {
+                                                peek.title = title;
+                                            }
+                                            if let Some(url) = url.filter(|u| !u.is_empty()) {
+                                                peek.url = url;
+                                            }
+                                        }
+                                        continue;
+                                    }
+                                    if let Some(tab) = this
                                         .active_space_mut()
                                         .tabs
                                         .iter_mut()
                                         .find(|tab| tab.id == *tab_id)
-                                {
-                                    if let Some(title) = title.filter(|title| !title.is_empty()) {
-                                        tab.title = title;
-                                    }
-                                    if let Some(url) = url.filter(|url| !url.is_empty()) {
-                                        tab.url = url;
+                                    {
+                                        if let Some(title) = title.filter(|title| !title.is_empty())
+                                        {
+                                            tab.title = title.clone();
+                                            if (tab.pinned || tab.favorite)
+                                                && tab.pinned_title.is_none()
+                                            {
+                                                tab.pinned_title = Some(title);
+                                            }
+                                        }
+                                        if let Some(url) = url.filter(|url| !url.is_empty()) {
+                                            tab.url = url;
+                                        }
                                     }
                                 }
                             }
@@ -190,16 +254,26 @@ impl Render for Lumen {
                                     retired_images,
                                     0.0,
                                     0,
-                                    visible_ids.len() > 1,
+                                    split_active,
                                     edge_color,
                                 );
                                 cx.notify();
                             });
-                            if let Some(second_tab) = visible_ids.get(1).cloned() {
+                            if let Some(second_tab) =
+                                visible_ids.get(1).filter(|_| split_active).cloned()
+                            {
                                 let image = this.engine.get_image(&second_tab);
                                 let cursor = this.engine.get_cursor(&second_tab);
                                 this.second_web_viewport.update(cx, |viewport, cx| {
                                     viewport.set_content(second_tab, image, cursor, Vec::new());
+                                    cx.notify();
+                                });
+                            }
+                            if let Some(peek_id) = peek_id.clone() {
+                                let image = this.engine.get_image(&peek_id);
+                                let cursor = this.engine.get_cursor(&peek_id);
+                                this.peek_web_viewport.update(cx, |viewport, cx| {
+                                    viewport.set_content(peek_id, image, cursor, Vec::new());
                                     cx.notify();
                                 });
                             }
@@ -234,7 +308,10 @@ impl Render for Lumen {
                     if let Some(t) = new_title
                         && !t.is_empty()
                     {
-                        tab.title = t;
+                        tab.title = t.clone();
+                        if (tab.pinned || tab.favorite) && tab.pinned_title.is_none() {
+                            tab.pinned_title = Some(t);
+                        }
                     }
                     if let Some(u) = new_url
                         && !u.is_empty()
@@ -527,10 +604,14 @@ impl Render for Lumen {
             } else if host.is_empty() {
                 self.active_zoom_target = None;
             }
-            let visible_ids = split_pair.as_ref().map_or_else(
+            let mut visible_ids = split_pair.as_ref().map_or_else(
                 || vec![active_tab_id_string.as_str()],
                 |pair| vec![pair.first.as_str(), pair.second.as_str()],
             );
+            let peek_visible = self.peek.as_ref().map(|peek| peek.id.clone());
+            if let Some(peek_id) = peek_visible.as_deref() {
+                visible_ids.push(peek_id);
+            }
             self.engine.set_visible_tabs(&visible_ids);
             let display = _window.display(cx);
             let window_bounds = _window.bounds();
@@ -563,6 +644,67 @@ impl Render for Lumen {
             }
         } else {
             self.engine.hide_all();
+        }
+
+        #[cfg(all(target_os = "linux", not(test)))]
+        if let Some(peek) = self.peek.clone()
+            && self.engine.is_initialized()
+        {
+            let sidebar_on_right = visual::active_layout_preset()
+                .is_some_and(|preset| preset.sidebar_side.as_deref() == Some("right"));
+            let layout = peek_layout(
+                width,
+                height,
+                sidebar_width_f32,
+                sidebar_on_right,
+                visual::active_topbar_height(),
+            );
+            let zoom = self
+                .zoom_levels
+                .get(&url_host(&peek.url))
+                .copied()
+                .unwrap_or_else(|| {
+                    visual::zoom_level_for_factor(self.preferences.default_zoom_factor)
+                });
+            if let Err(error) = self.engine.ensure_browser(
+                &peek.space_id,
+                &peek.id,
+                &peek.url,
+                layout.viewport_w,
+                layout.viewport_h,
+                0xff000000 | theme.surface,
+                zoom,
+            ) {
+                eprintln!("Lumen peek browser creation failed: {error}");
+            }
+            self.engine
+                .resize_browser(&peek.id, layout.viewport_w, layout.viewport_h);
+            let mut ids: Vec<String> = split_pair.as_ref().map_or_else(
+                || vec![active_tab_id_string.clone()],
+                |pair| vec![pair.first.clone(), pair.second.clone()],
+            );
+            ids.push(peek.id.clone());
+            let refs = ids.iter().map(String::as_str).collect::<Vec<_>>();
+            self.engine.set_visible_tabs(&refs);
+            let display = _window.display(cx);
+            let window_bounds = _window.bounds();
+            let (screen_width, screen_height) = display
+                .map(|display| {
+                    let bounds = display.bounds();
+                    (
+                        f32::from(bounds.size.width) as i32,
+                        f32::from(bounds.size.height) as i32,
+                    )
+                })
+                .unwrap_or((width as i32, height as i32));
+            self.engine.set_screen_metrics(
+                &peek.id,
+                screen_width,
+                screen_height,
+                scale,
+                f32::from(window_bounds.origin.x) as i32,
+                f32::from(window_bounds.origin.y) as i32,
+            );
         }
 
         #[cfg(all(target_os = "linux", not(test)))]

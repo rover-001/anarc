@@ -53,6 +53,19 @@ pub struct WebViewport {
     theme: SpaceTheme,
     scroll_accum_x: f32,
     scroll_accum_y: f32,
+    /// Coalesced trackpad pinch factor not yet handed to the browser engine.
+    /// Every step is a page-scale update plus a scroll correction, so raw
+    /// deltas accumulate until the next frame instead of queueing one update
+    /// per event.
+    pinch_pending_scale: f32,
+    /// Last time a pinch step was forwarded to Chromium.
+    pinch_last_emit: Option<std::time::Instant>,
+    /// Absolute window-space origin of this viewport. Used by the peek overlay,
+    /// which floats outside the regular content column.
+    origin_override: Option<(f32, f32)>,
+    /// Peek viewports input focus from `peek_focused` instead of the split pane
+    /// index and skip the card-edge chrome ring.
+    peek_mode: bool,
 }
 
 impl WebViewport {
@@ -80,7 +93,34 @@ impl WebViewport {
             theme: space_theme(0x9aa6ff),
             scroll_accum_x: 0.0,
             scroll_accum_y: 0.0,
+            pinch_pending_scale: 1.0,
+            pinch_last_emit: None,
+            origin_override: None,
+            peek_mode: false,
         }
+    }
+
+    pub fn set_origin_override(&mut self, origin: Option<(f32, f32)>) {
+        self.origin_override = origin;
+    }
+
+    pub fn set_peek_mode(&mut self, peek_mode: bool) {
+        self.peek_mode = peek_mode;
+    }
+
+    pub fn has_content(&self) -> bool {
+        self.image.is_some() || self.previous_image.is_some() || !self.tab_id.is_empty()
+    }
+
+    /// Drops the current frame and tab binding when the peek overlay closes.
+    pub fn clear_content(&mut self) {
+        self.tab_id.clear();
+        self.image = None;
+        self.previous_image = None;
+        self.resize_source_image = None;
+        self.transition_tab = None;
+        self.transition_waiting_for_image = false;
+        self.transition_cleanup_scheduled = false;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -99,6 +139,8 @@ impl WebViewport {
         if self.tab_id != tab_id {
             self.scroll_accum_x = 0.0;
             self.scroll_accum_y = 0.0;
+            self.pinch_pending_scale = 1.0;
+            self.pinch_last_emit = None;
             self.resize_source_image = None;
             self.resize_frame_handoff = ResizeFrameHandoff::default();
             // Only cross-fade when the incoming tab already has a rendered frame.
@@ -213,6 +255,42 @@ fn step_scroll_accum(accum: &mut f32, delta: f32) -> i32 {
     step
 }
 
+/// Minimum spacing between pinch steps forwarded to the browser engine. Each
+/// step updates the page scale and re-anchors the scroll offset, so raw
+/// trackpad updates are coalesced instead of queued behind the fingers.
+const PINCH_EMIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// Folds one raw trackpad pinch delta into the pending factor and returns the
+/// factor to forward once enough time has passed. `delta` is a relative
+/// page-scale step from the platform (0.05 == 5% larger), so factors multiply.
+fn coalesce_pinch_step(
+    pending: &mut f32,
+    last_emit: &mut Option<std::time::Instant>,
+    delta: f32,
+    now: std::time::Instant,
+) -> Option<f32> {
+    if !delta.is_finite() {
+        return None;
+    }
+    let factor = (1.0 + delta).clamp(0.5, 2.0);
+    if (factor - 1.0).abs() < 1e-4 {
+        return None;
+    }
+    *pending = (*pending * factor).clamp(0.25, 4.0);
+    if last_emit.is_some_and(|last| now.duration_since(last) < PINCH_EMIT_INTERVAL) {
+        return None;
+    }
+    *last_emit = Some(now);
+    Some(std::mem::replace(pending, 1.0))
+}
+
+/// Factor still pending when the gesture ends, so the last few percent of a
+/// pinch are not dropped.
+fn flush_pinch_step(pending: &mut f32) -> Option<f32> {
+    let scale = std::mem::replace(pending, 1.0);
+    ((scale - 1.0).abs() > 1e-4).then_some(scale)
+}
+
 fn browser_point_in_pane(
     position: gpui_kit::Point<gpui_kit::Pixels>,
     sidebar_width: f32,
@@ -229,6 +307,25 @@ fn browser_point_in_pane(
     (x, y)
 }
 
+/// Floating viewports (peek) know their exact window-space origin instead of
+/// deriving it from the sidebar/topbar layout.
+fn browser_point_at(
+    position: gpui_kit::Point<gpui_kit::Pixels>,
+    sidebar_width: f32,
+    pane_offset: f32,
+    fullscreen: bool,
+    origin_override: Option<(f32, f32)>,
+) -> (i32, i32) {
+    if let Some((left, top)) = origin_override {
+        (
+            (f32::from(position.x) - left).max(0.0) as i32,
+            (f32::from(position.y) - top).max(0.0) as i32,
+        )
+    } else {
+        browser_point_in_pane(position, sidebar_width, pane_offset, fullscreen)
+    }
+}
+
 impl Render for WebViewport {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         for image in self.retired_images.drain(..) {
@@ -239,6 +336,7 @@ impl Render for WebViewport {
         let tab_id_up = self.tab_id.clone();
         let tab_id_move = self.tab_id.clone();
         let tab_id_scroll = self.tab_id.clone();
+        let tab_id_pinch = self.tab_id.clone();
         let tab_id_exit = self.tab_id.clone();
         let down_sidebar = self.sidebar_width;
         let pane_offset = self.pane_offset;
@@ -246,10 +344,12 @@ impl Render for WebViewport {
         let up_sidebar = self.sidebar_width;
         let move_sidebar = self.sidebar_width;
         let scroll_sidebar = self.sidebar_width;
+        let pinch_sidebar = self.sidebar_width;
         let parent_down = self.parent.clone();
         let parent_up = self.parent.clone();
         let parent_move = self.parent.clone();
         let parent_scroll = self.parent.clone();
+        let parent_pinch = self.parent.clone();
         let parent_right_down = self.parent.clone();
         let parent_right_up = self.parent.clone();
         let parent_middle_down = self.parent.clone();
@@ -272,6 +372,11 @@ impl Render for WebViewport {
         let sidebar_middle_down = self.sidebar_width;
         let sidebar_middle_up = self.sidebar_width;
         let fullscreen = self.fullscreen;
+        let origin_override = self.origin_override;
+        let peek_mode = self.peek_mode;
+        let drop_parent = self.parent.clone();
+        let drop_tab_id = self.tab_id.clone();
+        let drop_sidebar = self.sidebar_width;
 
         let mut viewport = div()
             .id("web-view-viewport")
@@ -299,9 +404,14 @@ impl Render for WebViewport {
             .on_key_down(
                 cx.listener(move |_, event: &gpui_kit::KeyDownEvent, window, cx| {
                     let handled = parent_key_down
-                        .update(cx, |this, _| {
+                        .update(cx, |this, cx| {
+                            let focus_matches = if peek_mode {
+                                this.peek_focused
+                            } else {
+                                this.focused_pane == pane_index
+                            };
                             if !this.browser_focused
-                                || this.focused_pane != pane_index
+                                || !focus_matches
                                 || Lumen::is_app_shortcut_for_view(
                                     &event.keystroke.key.to_lowercase(),
                                     event.keystroke.modifiers.control
@@ -312,6 +422,81 @@ impl Render for WebViewport {
                             {
                                 return false;
                             }
+
+                            let key = event.keystroke.key.to_lowercase();
+                            let is_ctrl = event.keystroke.modifiers.control
+                                || event.keystroke.modifiers.platform;
+                            let is_plain_ctrl = is_ctrl
+                                && !event.keystroke.modifiers.shift
+                                && !event.keystroke.modifiers.alt;
+
+                            if is_plain_ctrl && key == "v" {
+                                let clip_text = cx
+                                    .read_from_clipboard()
+                                    .and_then(|item| item.text().map(|s| s.to_string()))
+                                    .or_else(crate::engine::clipboard::read_system_clipboard);
+
+                                if let Some(text) = clip_text {
+                                    let script = format!(
+                                        r#"(function() {{
+                                            const text = {};
+                                            const active = document.activeElement;
+                                            let handled = false;
+                                            try {{
+                                                const event = new ClipboardEvent('paste', {{
+                                                    clipboardData: new DataTransfer(),
+                                                    bubbles: true,
+                                                    cancelable: true
+                                                }});
+                                                event.clipboardData.setData('text/plain', text);
+                                                if (active) {{
+                                                    handled = !active.dispatchEvent(event);
+                                                }} else {{
+                                                    handled = !document.dispatchEvent(event);
+                                                }}
+                                            }} catch (_) {{}}
+                                            if (!handled) {{
+                                                try {{
+                                                    document.execCommand('insertText', false, text);
+                                                }} catch (_) {{}}
+                                            }}
+                                        }})();"#,
+                                        serde_json::to_string(&text).unwrap_or_default()
+                                    );
+                                    this.engine.execute_script(&key_tab_id, &script);
+                                }
+                                this.engine.paste(&key_tab_id);
+                                return true;
+                            }
+
+                            if is_plain_ctrl && key == "c" {
+                                this.engine.copy(&key_tab_id);
+                                let script = r#"(function() {
+                                    try {
+                                        let text = window.getSelection().toString();
+                                        if (!text && document.activeElement && 'selectionStart' in document.activeElement) {
+                                            const el = document.activeElement;
+                                            text = el.value.substring(el.selectionStart, el.selectionEnd);
+                                        }
+                                        if (text) {
+                                            console.log("[ANARC_CB_COPY]" + encodeURIComponent(text));
+                                        }
+                                    } catch (_) {}
+                                })();"#;
+                                this.engine.execute_script(&key_tab_id, script);
+                                return true;
+                            }
+
+                            if is_plain_ctrl && key == "x" {
+                                this.engine.cut(&key_tab_id);
+                                return true;
+                            }
+
+                            if is_plain_ctrl && key == "a" {
+                                this.engine.select_all(&key_tab_id);
+                                return true;
+                            }
+
                             this.engine.send_key_down(&key_tab_id, event);
                             true
                         })
@@ -326,8 +511,13 @@ impl Render for WebViewport {
                 cx.listener(move |_, event: &gpui_kit::KeyUpEvent, window, cx| {
                     let handled = parent_key_up
                         .update(cx, |this, _| {
+                            let focus_matches = if peek_mode {
+                                this.peek_focused
+                            } else {
+                                this.focused_pane == pane_index
+                            };
                             if !this.browser_focused
-                                || this.focused_pane != pane_index
+                                || !focus_matches
                                 || Lumen::is_app_shortcut_for_view(
                                     &event.keystroke.key.to_lowercase(),
                                     event.keystroke.modifiers.control
@@ -353,16 +543,21 @@ impl Render for WebViewport {
                 cx.listener(move |_, event: &gpui_kit::MouseDownEvent, window, cx| {
                     let parent = parent_down.clone();
                     let tab_id = tab_id_down.clone();
-                    let (x, y) = browser_point_in_pane(
+                    let (x, y) = browser_point_at(
                         event.position,
                         down_sidebar,
                         pane_offset,
                         fullscreen,
+                        origin_override,
                     );
                     parent
                         .update(cx, |this, cx| {
-                            this.set_focused_pane(pane_index);
-                            this.focus_browser(window, cx);
+                            if peek_mode {
+                                this.focus_peek_browser(window, cx);
+                            } else {
+                                this.set_focused_pane(pane_index);
+                                this.focus_browser(window, cx);
+                            }
                             this.engine.send_mouse_click(
                                 &tab_id,
                                 x,
@@ -380,8 +575,13 @@ impl Render for WebViewport {
             .on_mouse_up(
                 gpui_kit::MouseButton::Left,
                 cx.listener(move |_, event: &gpui_kit::MouseUpEvent, _, cx| {
-                    let (x, y) =
-                        browser_point_in_pane(event.position, up_sidebar, pane_offset, fullscreen);
+                    let (x, y) = browser_point_at(
+                        event.position,
+                        up_sidebar,
+                        pane_offset,
+                        fullscreen,
+                        origin_override,
+                    );
                     parent_up
                         .update(cx, |this, _| {
                             this.engine.send_mouse_click(
@@ -400,16 +600,24 @@ impl Render for WebViewport {
             .on_mouse_down(
                 gpui_kit::MouseButton::Right,
                 cx.listener(move |_, event: &gpui_kit::MouseDownEvent, window, cx| {
-                    let (x, y) = browser_point_in_pane(
+                    let (x, y) = browser_point_at(
                         event.position,
                         sidebar_right_down,
                         pane_offset,
                         fullscreen,
+                        origin_override,
                     );
+                    let screen_x = f32::from(event.position.x);
+                    let screen_y = f32::from(event.position.y);
+                    let menu_tab_id = tab_id_right_down.clone();
                     parent_right_down
                         .update(cx, |this, cx| {
-                            this.set_focused_pane(pane_index);
-                            this.focus_browser(window, cx);
+                            if peek_mode {
+                                this.focus_peek_browser(window, cx);
+                            } else {
+                                this.set_focused_pane(pane_index);
+                                this.focus_browser(window, cx);
+                            }
                             this.engine.send_mouse_click(
                                 &tab_id_right_down,
                                 x,
@@ -419,6 +627,7 @@ impl Render for WebViewport {
                                 event.click_count as i32,
                                 &event.modifiers,
                             );
+                            this.open_web_context_menu(menu_tab_id, screen_x, screen_y);
                             cx.notify();
                         })
                         .ok();
@@ -427,11 +636,12 @@ impl Render for WebViewport {
             .on_mouse_up(
                 gpui_kit::MouseButton::Right,
                 cx.listener(move |_, event: &gpui_kit::MouseUpEvent, _, cx| {
-                    let (x, y) = browser_point_in_pane(
+                    let (x, y) = browser_point_at(
                         event.position,
                         sidebar_right_up,
                         pane_offset,
                         fullscreen,
+                        origin_override,
                     );
                     parent_right_up
                         .update(cx, |this, _| {
@@ -451,16 +661,21 @@ impl Render for WebViewport {
             .on_mouse_down(
                 gpui_kit::MouseButton::Middle,
                 cx.listener(move |_, event: &gpui_kit::MouseDownEvent, window, cx| {
-                    let (x, y) = browser_point_in_pane(
+                    let (x, y) = browser_point_at(
                         event.position,
                         sidebar_middle_down,
                         pane_offset,
                         fullscreen,
+                        origin_override,
                     );
                     parent_middle_down
                         .update(cx, |this, cx| {
-                            this.set_focused_pane(pane_index);
-                            this.focus_browser(window, cx);
+                            if peek_mode {
+                                this.focus_peek_browser(window, cx);
+                            } else {
+                                this.set_focused_pane(pane_index);
+                                this.focus_browser(window, cx);
+                            }
                             this.engine.send_mouse_click(
                                 &tab_id_middle_down,
                                 x,
@@ -477,11 +692,12 @@ impl Render for WebViewport {
             .on_mouse_up(
                 gpui_kit::MouseButton::Middle,
                 cx.listener(move |_, event: &gpui_kit::MouseUpEvent, _, cx| {
-                    let (x, y) = browser_point_in_pane(
+                    let (x, y) = browser_point_at(
                         event.position,
                         sidebar_middle_up,
                         pane_offset,
                         fullscreen,
+                        origin_override,
                     );
                     parent_middle_up
                         .update(cx, |this, _| {
@@ -516,16 +732,23 @@ impl Render for WebViewport {
             )
             .on_mouse_move(
                 cx.listener(move |_, event: &gpui_kit::MouseMoveEvent, _, cx| {
-                    let (x, y) = browser_point_in_pane(
+                    let (x, y) = browser_point_at(
                         event.position,
                         move_sidebar,
                         pane_offset,
                         fullscreen,
+                        origin_override,
                     );
                     parent_move
                         .update(cx, |this, _| {
-                            this.engine
-                                .send_mouse_move(&tab_id_move, x, y, false, &event.modifiers)
+                            this.engine.send_mouse_move(
+                                &tab_id_move,
+                                x,
+                                y,
+                                false,
+                                &event.modifiers,
+                                event.pressed_button,
+                            )
                         })
                         .ok();
                 }),
@@ -533,35 +756,105 @@ impl Render for WebViewport {
             .on_mouse_exit(cx.listener(move |_, _, _, cx| {
                 parent_exit
                     .update(cx, |this, _| {
-                        this.engine
-                            .send_mouse_move(&tab_id_exit, 0, 0, true, &Default::default())
+                        this.engine.send_mouse_move(
+                            &tab_id_exit,
+                            0,
+                            0,
+                            true,
+                            &Default::default(),
+                            None,
+                        )
                     })
                     .ok();
             }))
-            .on_scroll(cx.listener(move |this, event: &gpui_kit::ScrollEvent, _, cx| {
-                let (x, y) =
-                    browser_point_in_pane(event.position, scroll_sidebar, pane_offset, fullscreen);
-                let (dx, dy) = match event.delta {
-                    gpui_kit::ScrollDelta::Pixels(p) => (f32::from(p.x), f32::from(p.y)),
-                    gpui_kit::ScrollDelta::Lines(l) => (l.x * 40.0, l.y * 40.0),
-                };
-                let step_x = step_scroll_accum(&mut this.scroll_accum_x, dx);
-                let step_y = step_scroll_accum(&mut this.scroll_accum_y, dy);
-                if step_x != 0 || step_y != 0 {
-                    parent_scroll
+            .on_pinch(cx.listener(
+                move |this, event: &gpui_kit::PinchEvent, _, cx| {
+                    let ended = matches!(
+                        event.phase,
+                        gpui_kit::TouchPhase::Ended | gpui_kit::TouchPhase::Cancelled
+                    );
+                    let scale = if event.phase == gpui_kit::TouchPhase::Started {
+                        this.pinch_pending_scale = 1.0;
+                        this.pinch_last_emit = None;
+                        return;
+                    } else if ended {
+                        this.pinch_last_emit = None;
+                        flush_pinch_step(&mut this.pinch_pending_scale)
+                    } else {
+                        coalesce_pinch_step(
+                            &mut this.pinch_pending_scale,
+                            &mut this.pinch_last_emit,
+                            event.delta,
+                            std::time::Instant::now(),
+                        )
+                    };
+                    let Some(scale) = scale else {
+                        return;
+                    };
+                    let (x, y) = browser_point_at(
+                        event.position,
+                        pinch_sidebar,
+                        pane_offset,
+                        fullscreen,
+                        origin_override,
+                    );
+                    parent_pinch
                         .update(cx, |this, _| {
-                            this.engine.send_mouse_wheel(
-                                &tab_id_scroll,
-                                x,
-                                y,
-                                step_x,
-                                step_y,
-                                &event.modifiers,
-                            )
+                            this.engine
+                                .pinch_zoom(&tab_id_pinch, x, y, f64::from(scale));
                         })
                         .ok();
-                }
-            }));
+                },
+            ))
+            .on_scroll(
+                cx.listener(move |this, event: &gpui_kit::ScrollEvent, _, cx| {
+                    let (x, y) = browser_point_at(
+                        event.position,
+                        scroll_sidebar,
+                        pane_offset,
+                        fullscreen,
+                        origin_override,
+                    );
+                    let (dx, dy) = match event.delta {
+                        gpui_kit::ScrollDelta::Pixels(p) => (f32::from(p.x), f32::from(p.y)),
+                        gpui_kit::ScrollDelta::Lines(l) => (l.x * 40.0, l.y * 40.0),
+                    };
+                    let step_x = step_scroll_accum(&mut this.scroll_accum_x, dx);
+                    let step_y = step_scroll_accum(&mut this.scroll_accum_y, dy);
+                    if step_x != 0 || step_y != 0 {
+                        parent_scroll
+                            .update(cx, |this, _| {
+                                this.engine.send_mouse_wheel(
+                                    &tab_id_scroll,
+                                    x,
+                                    y,
+                                    step_x,
+                                    step_y,
+                                    &event.modifiers,
+                                )
+                            })
+                            .ok();
+                    }
+                }),
+            )
+            .on_drop(
+                cx.listener(move |_, drag: &gpui_kit::ExternalPaths, window, cx| {
+                    let paths = drag.paths().to_vec();
+                    if paths.is_empty() {
+                        return;
+                    }
+                    let (x, y) = browser_point_at(
+                        window.mouse_position(),
+                        drop_sidebar,
+                        pane_offset,
+                        fullscreen,
+                        origin_override,
+                    );
+                    let _ = drop_parent.update(cx, |this, _| {
+                        this.engine.send_drag_drop_files(&drop_tab_id, &paths, x, y);
+                    });
+                }),
+            );
 
         let transition_id = self.transition_id;
         let transitioning = self.transition_tab.as_deref() == Some(self.tab_id.as_str())
@@ -678,71 +971,73 @@ impl Render for WebViewport {
         // A captured frame may be wider than its pane while split/sidebar
         // dividers are moving. Use a rounded border ring whose inner edge
         // matches the pane's corner arc; the pane's rectangular clip trims
-        // the rest of each ring.
-        let radius = CARD_RADIUS;
-        let ring_size = px(radius * 3.0);
-        let ring_offset = px(-radius);
-        let outer_corner_radius = px(radius * 2.0);
-        let border_width = px(radius);
-        let outer_color = rgb(self.theme.base);
-        let inner_color = rgb(self.theme.surface);
-        let (top_left_color, top_right_color, bottom_left_color, bottom_right_color) =
-            if !self.split_layout {
-                (outer_color, outer_color, outer_color, outer_color)
-            } else if self.pane_index == 0 {
-                (outer_color, inner_color, outer_color, inner_color)
-            } else {
-                (inner_color, outer_color, inner_color, outer_color)
-            };
-        viewport = viewport
-            .child(
-                div()
-                    .absolute()
-                    .top(ring_offset)
-                    .left(ring_offset)
-                    .w(ring_size)
-                    .h(ring_size)
-                    .border_t(border_width)
-                    .border_l(border_width)
-                    .border_color(top_left_color)
-                    .rounded_tl(outer_corner_radius),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(ring_offset)
-                    .right(ring_offset)
-                    .w(ring_size)
-                    .h(ring_size)
-                    .border_t(border_width)
-                    .border_r(border_width)
-                    .border_color(top_right_color)
-                    .rounded_tr(outer_corner_radius),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .bottom(ring_offset)
-                    .left(ring_offset)
-                    .w(ring_size)
-                    .h(ring_size)
-                    .border_b(border_width)
-                    .border_l(border_width)
-                    .border_color(bottom_left_color)
-                    .rounded_bl(outer_corner_radius),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .bottom(ring_offset)
-                    .right(ring_offset)
-                    .w(ring_size)
-                    .h(ring_size)
-                    .border_b(border_width)
-                    .border_r(border_width)
-                    .border_color(bottom_right_color)
-                    .rounded_br(outer_corner_radius),
-            );
+        // the rest of each ring. The peek overlay draws its own card border.
+        if !peek_mode {
+            let radius = CARD_RADIUS;
+            let ring_size = px(radius * 3.0);
+            let ring_offset = px(-radius);
+            let outer_corner_radius = px(radius * 2.0);
+            let border_width = px(radius);
+            let outer_color = rgb(self.theme.base);
+            let inner_color = rgb(self.theme.surface);
+            let (top_left_color, top_right_color, bottom_left_color, bottom_right_color) =
+                if !self.split_layout {
+                    (outer_color, outer_color, outer_color, outer_color)
+                } else if self.pane_index == 0 {
+                    (outer_color, inner_color, outer_color, inner_color)
+                } else {
+                    (inner_color, outer_color, inner_color, outer_color)
+                };
+            viewport = viewport
+                .child(
+                    div()
+                        .absolute()
+                        .top(ring_offset)
+                        .left(ring_offset)
+                        .w(ring_size)
+                        .h(ring_size)
+                        .border_t(border_width)
+                        .border_l(border_width)
+                        .border_color(top_left_color)
+                        .rounded_tl(outer_corner_radius),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top(ring_offset)
+                        .right(ring_offset)
+                        .w(ring_size)
+                        .h(ring_size)
+                        .border_t(border_width)
+                        .border_r(border_width)
+                        .border_color(top_right_color)
+                        .rounded_tr(outer_corner_radius),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .bottom(ring_offset)
+                        .left(ring_offset)
+                        .w(ring_size)
+                        .h(ring_size)
+                        .border_b(border_width)
+                        .border_l(border_width)
+                        .border_color(bottom_left_color)
+                        .rounded_bl(outer_corner_radius),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .bottom(ring_offset)
+                        .right(ring_offset)
+                        .w(ring_size)
+                        .h(ring_size)
+                        .border_b(border_width)
+                        .border_r(border_width)
+                        .border_color(bottom_right_color)
+                        .rounded_br(outer_corner_radius),
+                );
+        }
         viewport
     }
 }
@@ -794,5 +1089,66 @@ mod tests {
         assert!((accum - 0.1).abs() < 1e-5);
         assert_eq!(step_scroll_accum(&mut accum, -1.3), -1);
         assert!((accum - (-0.2)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn pinch_steps_are_coalesced_until_the_emit_interval() {
+        let start = std::time::Instant::now();
+        let mut pending = 1.0f32;
+        let mut last_emit = None;
+        let first = coalesce_pinch_step(&mut pending, &mut last_emit, 0.010, start).unwrap();
+        assert!((first - 1.010).abs() < 1e-5);
+        // Faster than the emit interval: folded into the pending factor.
+        assert_eq!(
+            coalesce_pinch_step(
+                &mut pending,
+                &mut last_emit,
+                0.020,
+                start + std::time::Duration::from_millis(5)
+            ),
+            None
+        );
+        let second = coalesce_pinch_step(
+            &mut pending,
+            &mut last_emit,
+            0.020,
+            start + std::time::Duration::from_millis(10),
+        )
+        .unwrap();
+        assert!((second - 1.0404).abs() < 1e-4);
+        assert!((pending - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pinch_steps_are_clamped_and_ignore_non_finite_deltas() {
+        let mut pending = 1.0f32;
+        let mut last_emit = None;
+        let now = std::time::Instant::now();
+        assert_eq!(
+            coalesce_pinch_step(&mut pending, &mut last_emit, f32::NAN, now),
+            None
+        );
+        assert_eq!(
+            coalesce_pinch_step(&mut pending, &mut last_emit, 5.0, now),
+            Some(2.0)
+        );
+        assert_eq!(
+            coalesce_pinch_step(
+                &mut pending,
+                &mut last_emit,
+                -5.0,
+                now + std::time::Duration::from_millis(20)
+            ),
+            Some(0.5)
+        );
+    }
+
+    #[test]
+    fn pinch_end_flushes_the_pending_factor_once() {
+        let mut pending = 1.0f32;
+        pending *= 1.02;
+        let flushed = flush_pinch_step(&mut pending).unwrap();
+        assert!((flushed - 1.02).abs() < 1e-5);
+        assert_eq!(flush_pinch_step(&mut pending), None);
     }
 }

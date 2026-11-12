@@ -72,6 +72,24 @@ pub(super) struct TabContextMenu {
     pub(super) height: f32,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct WebContextMenu {
+    pub(super) tab_id: String,
+    pub(super) x: f32,
+    pub(super) y: f32,
+}
+
+/// Arc-style peek: a link that would open a new tab is previewed in a floating
+/// overlay instead. `id` doubles as the CEF browser key so promoting the preview
+/// to a real tab keeps the live page (including its history and scroll state).
+#[derive(Clone, Debug)]
+pub(super) struct PeekState {
+    pub(super) id: String,
+    pub(super) space_id: String,
+    pub(super) title: String,
+    pub(super) url: String,
+}
+
 pub(super) struct FolderContextMenu {
     pub(super) folder_id: String,
     pub(super) x: f32,
@@ -138,6 +156,10 @@ pub(crate) struct Lumen {
     pub(crate) engine: crate::engine::Engine,
     pub(super) web_viewport: gpui_kit::Entity<WebViewport>,
     pub(super) second_web_viewport: gpui_kit::Entity<WebViewport>,
+    pub(super) peek_web_viewport: gpui_kit::Entity<WebViewport>,
+    pub(super) peek: Option<PeekState>,
+    pub(super) peek_serial: u64,
+    pub(crate) peek_focused: bool,
     pub(crate) focused_pane: usize,
     pub(super) split_ratio: f32,
     pub(super) split_resizing: bool,
@@ -146,6 +168,7 @@ pub(crate) struct Lumen {
     pub(super) sidebar_context_menu: Option<SidebarContextMenu>,
     pub(super) theme_editor: Option<ThemeEditor>,
     pub(super) tab_context_menu: Option<TabContextMenu>,
+    pub(super) web_context_menu: Option<WebContextMenu>,
     pub(super) folder_context_menu: Option<FolderContextMenu>,
     pub(super) folder_modal: Option<FolderModal>,
     pub(super) split_group_expanded: bool,

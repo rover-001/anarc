@@ -6,6 +6,13 @@ title: "Memory Index"
 
 | Title | Type | Date | Tags | Summary |
 | :--- | :--- | :--- | :--- | :--- |
+| **Fix pinned tab restoration, trackpad visual zoom, and clipboard selection** (`fix-pinned-tab-restoration-trackpad-visual-zoom-and-clipboard-selection.md`) | `decision` | 2026-11-12 | - | 1. Resolved pinned/favorite tab URL persistence: added pi... |
+| **Fix trackpad zoom and web copy-paste synchronization** (`fix-trackpad-zoom-and-web-copy-paste-synchronization.md`) | `decision` | 2026-11-12 | - | Resolved trackpad zooming by tuning pinch sensitivity fro... |
+| **Multi-instance launches get CEF profile slots** (`multi-instance-launches-get-cef-profile-slots.md`) | `decision` | 2026-11-11 | - | Anarc allows up to 9 concurrent windows. The installed la... |
+| **Page popups are CEF-native and render in the peek overlay** (`page-popups-are-cef-native-and-render-in-the-peek-overlay.md`) | `decision` | 2026-11-11 | - | window.open/sign-in popups are no longer cancelled and re... |
+| **Cap CEF OSR frame rate at 60 and pass button flags on mouse moves** (`cap-cef-osr-frame-rate-at-60-and-pass-button-flags-on-mouse-moves.md`) | `decision` | 2026-11-11 | - | OSR paints cost a full-window BGRA memcpy plus a new Rend... |
+| **Implement file upload dialog handler and drag-and-drop file ingestion** (`implement-file-upload-dialog-handler-and-drag-and-drop-file-ingestion.md`) | `decision` | 2026-11-11 | - | Implemented CEF DialogHandler in LumenDialogHandler spawn... |
+| **Shield mirrors uBlock Origin Lite; no WebExtensions in Alloy** (`shield-mirrors-ublock-origin-lite-no-webextensions-in-alloy.md`) | `decision` | 2026-11-11 | - | The built-in shield compiles the same filter sets the use... |
 | **Fix external Chromium launch on install and uncloseable popup tabs** (`fix-external-chromium-launch-on-install-and-uncloseable-popup-tabs.md`) | `decision` | 2026-11-11 | - | 1. Updated install.sh to export PATH with bin/CEF dirs, l... |
 | **Download handler fix and uBlock Origin integration with YouTube ad shield** (`download-handler-fix-and-ublock-origin-integration-with-youtube-ad-shield.md`) | `decision` | 2026-11-10 | - | Implemented can_download=1 and on_before_download=1 in Lu... |
 | **Sidebar right-click context menu and blank tab close animation fix** (`sidebar-right-click-context-menu-and-blank-tab-close-animation-fix.md`) | `decision` | 2026-11-10 | - | Fixed sidebar canvas right-click context menu by attachin... |

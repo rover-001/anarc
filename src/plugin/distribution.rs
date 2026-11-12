@@ -602,7 +602,9 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, PackageError> {
     }
     value
         .as_bytes()
-        .as_chunks::<2>().0.iter()
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| {
             let high = hex_nibble(chunk[0])?;
             let low = hex_nibble(chunk[1])?;

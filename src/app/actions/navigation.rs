@@ -38,20 +38,33 @@ impl Lumen {
         }
     }
     pub(crate) fn change_zoom(&mut self, delta: f64) {
-        let tab_id_and_host = self
-            .active_space()
-            .tabs
+        let active_id = self.active_tab_id().to_string();
+        self.change_zoom_for_tab(&active_id, delta);
+    }
+
+    /// URL a zoom target is showing. Covers sidebar tabs, split panes and the
+    /// peek overlay (whose browser id is not part of any space).
+    fn zoom_target_url(&self, target_tab_id: &str) -> Option<String> {
+        self.spaces
             .iter()
-            .find(|tab| tab.id == self.active_tab_id());
+            .flat_map(|space| space.tabs.iter())
+            .find(|tab| tab.id == target_tab_id)
+            .map(|tab| tab.url.clone())
+            .or_else(|| {
+                self.peek
+                    .as_ref()
+                    .filter(|peek| peek.id == target_tab_id)
+                    .map(|peek| peek.url.clone())
+            })
+    }
+
+    pub(crate) fn change_zoom_for_tab(&mut self, target_tab_id: &str, delta: f64) {
+        let tab_url = self.zoom_target_url(target_tab_id).unwrap_or_default();
         let settings = self
             .plugins
             .service(crate::plugin::SETTINGS)
             .expect("core settings service is mounted");
-        let Some((tab_id, host)) =
-            tab_id_and_host.map(|tab| (tab.id.clone(), settings.url_host(&tab.url)))
-        else {
-            return;
-        };
+        let host = settings.url_host(&tab_url);
         if host.is_empty() {
             self.preferences.default_zoom_factor = if delta == 0.0 {
                 visual::DEFAULT_PAGE_ZOOM_FACTOR
@@ -78,7 +91,7 @@ impl Lumen {
         };
         self.zoom_levels.insert(host, level);
         settings.save_zooms(&self.zoom_levels);
-        self.engine.set_zoom_level(&tab_id, level);
+        self.engine.set_zoom_level(target_tab_id, level);
     }
     pub(crate) fn set_search_engine(&mut self, engine: crate::settings::SearchEngine) {
         self.preferences.search_engine = engine;
@@ -98,6 +111,7 @@ impl Lumen {
             .clear();
     }
     pub(in crate::app) fn navigate(&mut self, cx: &Context<Self>) {
+        self.close_peek();
         self.show_suggestions = false;
         self.selected_suggestion = None;
         self.address_editing = false;
@@ -129,6 +143,7 @@ impl Lumen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.close_peek();
         self.show_suggestions = false;
         self.selected_suggestion = None;
         self.address_editing = false;
@@ -155,6 +170,44 @@ impl Lumen {
             self.engine.navigate(&id, &url);
         }
         self.save_state();
+    }
+
+    /// Pastes the clipboard into the address field at the current selection.
+    ///
+    /// The read happens from a task instead of inside the key dispatch: on
+    /// Wayland a clipboard roundtrip started while the platform queue is being
+    /// dispatched comes back empty, which made Ctrl+V silently do nothing even
+    /// though the select-all and copy beside it worked. The input's own
+    /// `Paste` action takes the same in-dispatch read, so the address bar
+    /// drives the paste itself.
+    pub(in crate::app) fn paste_into_address(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let address = self.address.downgrade();
+        cx.spawn_in(window, async move |this, cx| {
+            let mut clipboard = read_address_clipboard(&this, cx);
+            if clipboard.is_none() {
+                // One more try after the dispatch has unwound.
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1))
+                    .await;
+                clipboard = read_address_clipboard(&this, cx);
+            }
+            let Some(text) = clipboard.as_deref().and_then(single_line_paste) else {
+                return;
+            };
+            address
+                .update_in(cx, |input, window, cx| {
+                    if window.focused(cx) != Some(input.focus_handle(cx)) {
+                        return;
+                    }
+                    input.replace(text, window, cx);
+                })
+                .ok();
+        })
+        .detach();
     }
 
     pub(super) fn plugin_text_event(&self, name: &str, value: String) -> String {
@@ -250,4 +303,22 @@ impl Lumen {
         self.selected_suggestion =
             move_suggestion_selection(self.selected_suggestion, self.suggestions.len(), down);
     }
+}
+
+/// Clipboard text shaped for a single-line field: line breaks dropped, and
+/// nothing at all when the clipboard only carried formatting or an image.
+pub(in crate::app) fn single_line_paste(text: &str) -> Option<String> {
+    let text = text.replace(['\n', '\r'], "");
+    (!text.is_empty()).then_some(text)
+}
+
+fn read_address_clipboard(
+    app: &gpui_kit::WeakEntity<Lumen>,
+    cx: &mut gpui_kit::AsyncWindowContext,
+) -> Option<String> {
+    app.update(cx, |_app, cx| {
+        cx.read_from_clipboard().and_then(|item| item.text())
+    })
+    .ok()
+    .flatten()
 }

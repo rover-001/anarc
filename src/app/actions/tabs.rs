@@ -1,4 +1,5 @@
 use super::super::*;
+use super::seed_pinned_destination;
 
 impl Lumen {
     pub(crate) fn open_tab_context_menu(
@@ -20,14 +21,56 @@ impl Lumen {
     }
 
     pub(crate) fn activate_tab_in_active_space(&mut self, tab_id: &str) {
+        self.close_peek();
         if let Some(space) = self
             .spaces
             .iter_mut()
             .find(|space| space.id == self.active_space)
         {
-            space.active = Some(tab_id.to_owned());
-            let _ = space;
-            self.emit_plugin_text("tab.activated", tab_id.to_owned());
+            let is_already_active = space.active.as_deref() == Some(tab_id);
+            if is_already_active {
+                if let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                    if (tab.pinned || tab.favorite)
+                        && let Some(pinned_url) = tab.pinned_url.clone()
+                    {
+                        if tab.url != pinned_url {
+                            tab.url = pinned_url.clone();
+                            if let Some(pinned_title) = tab.pinned_title.clone() {
+                                tab.title = pinned_title;
+                            }
+                            self.engine.navigate(tab_id, &pinned_url);
+                            self.save_state();
+                        }
+                    }
+                }
+            } else {
+                if let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                    // Adopt the destination before the browser loads it, so a
+                    // later close cannot mistake a navigation for the pin.
+                    seed_pinned_destination(tab);
+                }
+                space.active = Some(tab_id.to_owned());
+                let _ = space;
+                self.emit_plugin_text("tab.activated", tab_id.to_owned());
+            }
+        }
+    }
+
+    pub(crate) fn reset_tab_to_pinned_url(&mut self, tab_id: &str) {
+        if let Some(space) = self
+            .spaces
+            .iter_mut()
+            .find(|space| space.id == self.active_space)
+            && let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id)
+        {
+            if let Some(pinned_url) = tab.pinned_url.clone() {
+                tab.url = pinned_url.clone();
+                if let Some(pinned_title) = tab.pinned_title.clone() {
+                    tab.title = pinned_title;
+                }
+                self.engine.navigate(tab_id, &pinned_url);
+                self.save_state();
+            }
         }
     }
 
@@ -45,6 +88,15 @@ impl Lumen {
             if favorite {
                 tab.pinned = false;
                 tab.folder = None;
+                if tab.pinned_url.is_none() {
+                    tab.pinned_url = Some(tab.url.clone());
+                }
+                if tab.pinned_title.is_none() && !tab.title.is_empty() {
+                    tab.pinned_title = Some(tab.title.clone());
+                }
+            } else if !tab.pinned {
+                tab.pinned_url = None;
+                tab.pinned_title = None;
             }
             changed = true;
         }
@@ -66,6 +118,15 @@ impl Lumen {
             if pinned {
                 tab.favorite = false;
                 tab.folder = None;
+                if tab.pinned_url.is_none() {
+                    tab.pinned_url = Some(tab.url.clone());
+                }
+                if tab.pinned_title.is_none() && !tab.title.is_empty() {
+                    tab.pinned_title = Some(tab.title.clone());
+                }
+            } else if !tab.favorite {
+                tab.pinned_url = None;
+                tab.pinned_title = None;
             }
             changed = true;
         }
@@ -87,6 +148,8 @@ impl Lumen {
         {
             tab.favorite = false;
             tab.pinned = false;
+            tab.pinned_url = None;
+            tab.pinned_title = None;
             tab.folder = None;
             changed = true;
         }
@@ -182,6 +245,7 @@ impl Lumen {
         self.reorder_tab_relative(tab_id, target_id, after);
     }
     pub(crate) fn add_tab(&mut self) {
+        self.close_peek();
         self.show_suggestions = false;
         self.address_editing = false;
         self.reset_address_for_tab_change = true;
@@ -335,6 +399,15 @@ impl Lumen {
         }
         self.engine.close_browser(tab_id);
         space.tabs[index].state = TabState::Discarded;
+        if space.tabs[index].pinned || space.tabs[index].favorite {
+            seed_pinned_destination(&mut space.tabs[index]);
+            if let Some(pinned_url) = space.tabs[index].pinned_url.clone() {
+                space.tabs[index].url = pinned_url;
+            }
+            if let Some(pinned_title) = space.tabs[index].pinned_title.clone() {
+                space.tabs[index].title = pinned_title;
+            }
+        }
 
         if let Some(folder_id) = folder_id {
             let another_folder_page_is_open = space.tabs.iter().any(|tab| {
@@ -459,6 +532,8 @@ impl Lumen {
         }
         self.save_state();
     }
+    /// Links that would normally open a new tab now surface as an Arc-style
+    /// peek overlay. The preview can be promoted with its "open in tab" button.
     pub(in crate::app) fn open_popup_tab(&mut self, space_id: &str, url: String) {
         let url = match self
             .plugins
@@ -474,18 +549,45 @@ impl Lumen {
             Some(crate::plugin::EventPayload::Text(redirected)) => redirected,
             _ => url,
         };
-        {
-            let Some(space) = self.spaces.iter_mut().find(|space| space.id == space_id) else {
-                return;
-            };
-            let id = next_tab_id(space);
-            let mut tab = Tab::new(&id, "New tab", url);
-            tab.state = TabState::Live;
-            space.tabs.push(tab);
-            space.active = Some(id);
+        if !self.spaces.iter().any(|space| space.id == space_id) {
+            return;
         }
-        self.emit_plugin_text("tab.created", self.active_tab_id().to_owned());
-        self.activate_space(space_id);
+        if self.active_space != space_id {
+            self.activate_space(space_id);
+        }
+        self.open_peek(space_id, url);
+        self.save_state();
+    }
+
+    /// Shows a window CEF created for the page (sign-in and OAuth popups) in
+    /// the peek overlay. The browser already exists and keeps its
+    /// `window.opener`, so nothing is created here; the overlay just points at
+    /// it. Closing the overlay, or the page calling `window.close()`, ends it.
+    pub(in crate::app) fn show_popup_window(
+        &mut self,
+        space_id: &str,
+        url: String,
+        browser_id: String,
+    ) {
+        if !self.spaces.iter().any(|space| space.id == space_id) {
+            self.engine.close_browser(&browser_id);
+            return;
+        }
+        if self.active_space != space_id {
+            self.activate_space(space_id);
+        }
+        if self.peek.as_ref().is_some_and(|peek| peek.id == browser_id) {
+            return;
+        }
+        self.close_peek();
+        self.emit_plugin_text("peek.opened", url.clone());
+        self.peek = Some(crate::app::state::PeekState {
+            id: browser_id,
+            space_id: space_id.to_owned(),
+            title: super::peek::peek_title_for(&url),
+            url,
+        });
+        self.peek_focused = false;
         self.save_state();
     }
 }
