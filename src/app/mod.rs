@@ -15,7 +15,7 @@ use crate::ui::{space_switcher, tab_list};
 use crate::{engine, history, persist, reader, stats, ui};
 use gpui_kit::{
     Animation, AnimationExt as _, AnyView, Context, Focusable, FontWeight, KeyDownEvent,
-    KeyUpEvent, Render, SpringAnimation, SpringConfig, StyleRefinement, Window,
+    KeyUpEvent, Render, SpringAnimation, StyleRefinement, Window,
     assets::IconName,
     component::Icon,
     component::input::{Input, InputEvent, InputState},

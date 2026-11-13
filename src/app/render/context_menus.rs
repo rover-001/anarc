@@ -558,10 +558,9 @@ impl Lumen {
                 );
             }
 
-            let ctx_menu = ctx_menu.with_animation(
+            let ctx_menu = ctx_menu.with_spring(
                 format!("space-menu-entrance-{}", target_space.id),
-                Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
-                    .with_easing(ui::motion::ease_out_quint),
+                ui::motion::popover().enter(),
                 |menu, progress| {
                     menu.w(px(224.0 * UI_SCALE * (0.96 + 0.04 * progress)))
                         .opacity(ui::motion::clamp_percentage(progress))
@@ -1020,10 +1019,9 @@ impl Lumen {
                         })),
                 );
             }
-            let panel = panel.with_animation(
+            let panel = panel.with_spring(
                 format!("tab-menu-entrance-{}", menu.tab_id),
-                Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
-                    .with_easing(ui::motion::ease_out_quint),
+                ui::motion::popover().enter(),
                 move |panel, progress| {
                     panel
                         .w(px(menu_width * (0.96 + 0.04 * progress)))
@@ -1188,7 +1186,34 @@ impl Lumen {
                     .child(Icon::new(IconName::Copy))
                     .child("Copy")
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(text) = this.engine.get_selected_text(&copy_id) {
+                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.clone()));
+                            crate::engine::clipboard::write_system_clipboard(&text);
+                        }
                         this.engine.copy(&copy_id);
+                        let script = r#"(function() {
+                            try {
+                                function getSel() {
+                                    let text = window.getSelection ? window.getSelection().toString() : '';
+                                    if (text) return text;
+                                    let el = document.activeElement;
+                                    while (el && el.shadowRoot && el.shadowRoot.activeElement) {
+                                        el = el.shadowRoot.activeElement;
+                                    }
+                                    if (el && 'selectionStart' in el && 'selectionEnd' in el && typeof el.value === 'string') {
+                                        const start = Math.min(el.selectionStart, el.selectionEnd);
+                                        const end = Math.max(el.selectionStart, el.selectionEnd);
+                                        if (end > start) return el.value.substring(start, end);
+                                    }
+                                    return '';
+                                }
+                                const s = getSel();
+                                if (s) {
+                                    console.log("[ANARC_CB_COPY]" + encodeURIComponent(s));
+                                }
+                            } catch (_) {}
+                        })();"#;
+                        this.engine.execute_script(&copy_id, script);
                         this.web_context_menu = None;
                         cx.notify();
                     })),

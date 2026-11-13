@@ -40,7 +40,11 @@ impl Render for Lumen {
             && let Ok(url) = std::env::var("ANARC_BENCH_URL")
         {
             let id = self.active_tab_id().to_owned();
-            if let Some(tab) = self.active_space_mut().tabs.iter_mut().find(|tab| tab.id == id)
+            if let Some(tab) = self
+                .active_space_mut()
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.id == id)
             {
                 tab.url = url;
                 tab.state = TabState::Discarded;
@@ -78,6 +82,7 @@ impl Render for Lumen {
                                     0,
                                     50 * direction,
                                     &Default::default(),
+                                    false,
                                 );
                             })
                             .is_err()
@@ -96,6 +101,7 @@ impl Render for Lumen {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(180))
                     .await;
+                let mut active_burst_frames: u32 = 0;
                 loop {
                     while ui_update_receiver.try_recv().is_ok() {}
                     let updated = this.update(cx, |this, cx| {
@@ -278,15 +284,25 @@ impl Render for Lumen {
                                 });
                             }
                         }
-                        Some(())
+                        Some(has_updates)
                     });
-                    let Ok(Some(())) = updated else {
+                    let Ok(Some(had_updates)) = updated else {
                         break;
                     };
+                    if had_updates {
+                        active_burst_frames = 5;
+                    } else {
+                        active_burst_frames = active_burst_frames.saturating_sub(1);
+                    }
                     let fallback_ms = ((1000.0 / refresh_rate as f64).round() as u64).max(4);
+                    let wait_ms = if active_burst_frames > 0 {
+                        fallback_ms
+                    } else {
+                        250
+                    };
                     futures_lite::future::or(
                         cx.background_executor()
-                            .timer(std::time::Duration::from_millis(fallback_ms)),
+                            .timer(std::time::Duration::from_millis(wait_ms)),
                         async {
                             let _ = ui_update_receiver.recv().await;
                         },
@@ -403,23 +419,17 @@ impl Render for Lumen {
         } else {
             self.theme_transition
                 .map_or(target_theme, |(from, started, _)| {
-                    let progress = started.elapsed().as_secs_f32()
-                        / ui::motion::MOTION_SPACE_SWITCH
-                            .as_secs_f32()
-                            .max(f32::EPSILON);
                     visual::interpolate_theme(
                         from,
                         target_theme,
-                        ui::motion::ease_out_quint(progress),
+                        ui::motion::theme().progress(started.elapsed()),
                     )
                 })
         };
-        let space_switch_transition =
-            self.space_switch_transition
-                .clone()
-                .filter(|(_, _, started, _)| {
-                    started.elapsed() < ui::motion::duration(ui::motion::MOTION_SPACE_SWITCH)
-                });
+        let space_switch_transition = self
+            .space_switch_transition
+            .clone()
+            .filter(|(_, _, started, _)| started.elapsed() < ui::motion::space_switch().duration());
         let tabs: Vec<(
             String,
             String,
@@ -452,9 +462,8 @@ impl Render for Lumen {
         let sidebar_width_f32 = self.sidebar_width_transition.map_or_else(
             || self.effective_sidebar_width(),
             |(from, to, started, _)| {
-                let progress = started.elapsed().as_secs_f32()
-                    / ui::motion::MOTION_SLOW.as_secs_f32().max(f32::EPSILON);
-                from + (to - from) * ui::motion::ease_out_quint(progress)
+                let progress = ui::motion::sidebar().progress(started.elapsed());
+                from + (to - from) * progress
             },
         );
         #[cfg(all(target_os = "linux", not(test)))]
@@ -841,8 +850,7 @@ impl Render for Lumen {
                     overlay
                         .with_animation(
                             format!("space-switch-sidebar-out-{serial}"),
-                            Animation::new(ui::motion::duration(ui::motion::MOTION_SPACE_SWITCH))
-                                .with_easing(ui::motion::ease_out_quint),
+                            ui::motion::space_switch().animation(),
                             move |overlay, progress| {
                                 overlay
                                     .left(px(initial_offset * (1.0 - progress)

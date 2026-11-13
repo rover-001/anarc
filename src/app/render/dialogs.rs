@@ -241,10 +241,9 @@ impl Lumen {
 
             overlays.push(
                 popover
-                    .with_animation(
+                    .with_spring(
                         "space-popover-entrance",
-                        Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
-                            .with_easing(ui::motion::ease_out_quint),
+                        ui::motion::popover().enter(),
                         |popover, progress| {
                             popover
                                 .w(px(224.0 * UI_SCALE * (0.96 + 0.04 * progress)))
@@ -391,10 +390,9 @@ impl Lumen {
                 );
             overlays.push(
                 popover
-                    .with_animation(
+                    .with_spring(
                         "folder-popover-entrance",
-                        Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
-                            .with_easing(ui::motion::ease_out_quint),
+                        ui::motion::popover().enter(),
                         |popover, progress| {
                             popover
                                 .w(px(224.0 * UI_SCALE * (0.96 + 0.04 * progress)))

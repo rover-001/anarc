@@ -44,17 +44,14 @@ impl Lumen {
         let sidebar_width_f32 = self.sidebar_width_transition.map_or_else(
             || self.effective_sidebar_width(),
             |(from, to, started, _)| {
-                let progress = started.elapsed().as_secs_f32()
-                    / ui::motion::MOTION_SLOW.as_secs_f32().max(f32::EPSILON);
-                from + (to - from) * ui::motion::ease_out_quint(progress)
+                let progress = ui::motion::sidebar().progress(started.elapsed());
+                from + (to - from) * progress
             },
         );
-        let space_switch_transition =
-            self.space_switch_transition
-                .clone()
-                .filter(|(_, _, started, _)| {
-                    started.elapsed() < ui::motion::duration(ui::motion::MOTION_SPACE_SWITCH)
-                });
+        let space_switch_transition = self
+            .space_switch_transition
+            .clone()
+            .filter(|(_, _, started, _)| started.elapsed() < ui::motion::space_switch().duration());
 
         let sidebar_width = px(sidebar_width_f32);
         let mut sidebar_content = div()
@@ -629,7 +626,7 @@ impl Lumen {
                         chevron
                             .with_spring(
                                 "split-group-chevron-rotation",
-                                SpringAnimation::new(SpringConfig::new(400.0, 32.0, 1.0))
+                                SpringAnimation::new(ui::motion::toggle().config())
                                     .to(target_rotation),
                                 |icon, angle| {
                                     icon.rotate(gpui_kit::percentage(ui::motion::clamp_percentage(
@@ -719,9 +716,9 @@ impl Lumen {
                     if expanded {
                         let animate_members = space_switch_transition.is_none()
                             && !ui::motion::reduced_motion()
-                            && self
-                                .split_expanded_at
-                                .is_some_and(|at| at.elapsed() < ui::motion::MOTION_BASE * 2);
+                            && self.split_expanded_at.is_some_and(|at| {
+                                at.elapsed() < ui::motion::row_enter().duration() * 2
+                            });
                         let mut member_rows = Vec::new();
                         for (pane_index, member) in [first, second].into_iter().enumerate() {
                             let member_id = member.0.clone();
@@ -731,10 +728,13 @@ impl Lumen {
                             let close_id = member_id.clone();
                             let pane = pane_index;
                             let stagger = std::time::Duration::from_millis(30 * pane_index as u64);
-                            let total_duration = ui::motion::MOTION_BASE + stagger;
-                            let base_seconds = ui::motion::MOTION_BASE.as_secs_f32();
+                            let base = ui::motion::row_enter();
+                            let base_duration = base.duration();
+                            let total_duration = base_duration + stagger;
+                            let base_seconds = base_duration.as_secs_f32().max(f32::EPSILON);
                             let delay_seconds = stagger.as_secs_f32();
                             let total_seconds = total_duration.as_secs_f32();
+                            let base_easing = base.easing();
                             crate::engine::log_favicon_row_rendered(&member.0, member.2.is_some());
                             let member_row = div()
                                 .id(format!("split-member-{member_id}"))
@@ -828,7 +828,7 @@ impl Lumen {
                                         format!("split-member-entry-{member_animation_id}"),
                                         Animation::new(ui::motion::duration(total_duration))
                                             .with_easing(move |progress| {
-                                                ui::motion::ease_out_quint(
+                                                base_easing(
                                                     ((progress * total_seconds - delay_seconds)
                                                         / base_seconds)
                                                         .clamp(0.0, 1.0),
@@ -882,7 +882,7 @@ impl Lumen {
                     && self.added_tab.as_ref().is_some_and(|(space, tab, at)| {
                         space == &active_space_id
                             && tab == id
-                            && at.elapsed() < ui::motion::MOTION_BASE * 2
+                            && at.elapsed() < ui::motion::row_enter().duration() * 2
                     });
                 let row_group = format!("tab-row-{id}");
                 let context_tab = id.clone();
@@ -1006,10 +1006,9 @@ impl Lumen {
                         }))
                         .map(|row| {
                             if animate_entry {
-                                row.with_animation(
+                                row.with_spring(
                                     format!("tab-row-entry-{active_space_id}-{id}"),
-                                    Animation::new(ui::motion::duration(ui::motion::MOTION_BASE))
-                                        .with_easing(ui::motion::ease_out_quint),
+                                    ui::motion::row_enter().enter(),
                                     move |row, progress| {
                                         let progress = ui::motion::clamp_percentage(progress);
                                         row.h(px(visual::TAB_ROW_HEIGHT * progress))
@@ -1028,7 +1027,7 @@ impl Lumen {
                 if let Some((closing_space, closing_tab, closing_index, started, serial)) =
                     &self.closing_tab
                     && closing_space == &active_space_id
-                    && started.elapsed() < ui::motion::MOTION_FAST
+                    && started.elapsed() < ui::motion::row_exit().duration()
                 {
                     let row_index = closing_tab_row_index(
                         &active_space,
@@ -1062,12 +1061,11 @@ impl Lumen {
                                     .child(tab_list::favicon(None))
                                     .child(closing_tab.title.clone()),
                             )
-                            .with_animation(
+                            .with_spring(
                                 format!("tab-row-close-{}-{serial}", closing_tab.id),
-                                Animation::new(ui::motion::duration(ui::motion::MOTION_FAST))
-                                    .with_easing(ui::motion::ease_out_quint),
-                                move |row, progress| {
-                                    let remaining = ui::motion::clamp_percentage(1.0 - progress);
+                                ui::motion::row_exit().between(1.0, 0.0),
+                                move |row, remaining| {
+                                    let remaining = ui::motion::clamp_percentage(remaining);
                                     row.h(px(visual::TAB_ROW_HEIGHT * remaining))
                                         .opacity(remaining)
                                 },
@@ -1200,8 +1198,7 @@ impl Lumen {
                 indicator
                     .with_spring(
                         "space-dock-active-indicator-position",
-                        SpringAnimation::new(SpringConfig::new(400.0, 32.0, 1.0))
-                            .to(px(indicator_left)),
+                        SpringAnimation::new(ui::motion::toggle().config()).to(px(indicator_left)),
                         |indicator, left| indicator.left(left),
                     )
                     .into_any_element()
@@ -1311,8 +1308,7 @@ impl Lumen {
             sidebar_content
                 .with_animation(
                     format!("space-switch-sidebar-in-{serial}"),
-                    Animation::new(ui::motion::duration(ui::motion::MOTION_SPACE_SWITCH))
-                        .with_easing(ui::motion::ease_out_quint),
+                    ui::motion::space_switch().animation(),
                     move |sidebar, progress| {
                         sidebar.left(px(start_offset * (1.0 - progress))).opacity(
                             ui::motion::clamp_percentage(
@@ -1326,8 +1322,7 @@ impl Lumen {
             sidebar_content
                 .with_animation(
                     format!("sidebar-width-transition-{serial}"),
-                    Animation::new(ui::motion::duration(ui::motion::MOTION_SLOW))
-                        .with_easing(ui::motion::ease_out_quint),
+                    ui::motion::sidebar().animation(),
                     move |sidebar, progress| {
                         sidebar.w(px(from + (to - from) * progress.clamp(0.0, 1.0)))
                     },

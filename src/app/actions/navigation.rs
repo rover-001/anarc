@@ -110,7 +110,7 @@ impl Lumen {
             .expect("core history service is mounted")
             .clear();
     }
-    pub(in crate::app) fn navigate(&mut self, cx: &Context<Self>) {
+    pub(in crate::app) fn navigate(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         self.close_peek();
         self.show_suggestions = false;
         self.selected_suggestion = None;
@@ -134,6 +134,13 @@ impl Lumen {
             self.engine.navigate_http_first(&id, &url);
         } else {
             self.engine.navigate(&id, &url);
+        }
+        if let Some(window) = window {
+            self.focus_browser(window, cx);
+        } else {
+            self.browser_focused = true;
+            let tab_id = self.focused_tab_id().to_string();
+            self.engine.set_focus(&tab_id, true);
         }
         self.save_state();
     }
@@ -169,6 +176,7 @@ impl Lumen {
         } else {
             self.engine.navigate(&id, &url);
         }
+        self.focus_browser(window, cx);
         self.save_state();
     }
 
@@ -321,4 +329,5 @@ fn read_address_clipboard(
     })
     .ok()
     .flatten()
+    .or_else(crate::engine::clipboard::read_system_clipboard)
 }

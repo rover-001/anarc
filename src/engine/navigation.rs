@@ -150,6 +150,14 @@ impl Engine {
             if let Some(frame) = entry.browser.main_frame() {
                 frame.load_url(Some(&CefString::from(url)));
             }
+            let _ = self.ui_update_wake.try_send(());
+        } else if let Some(state) = self.pending_browsers.get(id) {
+            if let Ok(mut state) = state.lock() {
+                state.current_url = Some(url.to_string());
+                state.current_host = crate::shield::url_host(url);
+                state.root_dirty = true;
+            }
+            let _ = self.ui_update_wake.try_send(());
         }
     }
     pub fn navigate_http_first(&mut self, id: &str, https_url: &str) {
@@ -183,16 +191,13 @@ impl Engine {
         self.shield.set_enabled(enabled);
     }
     pub fn execute_script(&self, id: &str, script: &str) {
-        if let Some(frame) = self
-            .browsers
-            .get(id)
-            .and_then(|entry| entry.browser.main_frame())
-        {
-            frame.execute_java_script(
-                Some(&CefString::from(script)),
-                Some(&CefString::from("lumen://reader-mode")),
-                1,
-            );
+        if let Some(frame) = self.browsers.get(id).and_then(|entry| {
+            entry
+                .browser
+                .focused_frame()
+                .or_else(|| entry.browser.main_frame())
+        }) {
+            frame.execute_java_script(Some(&CefString::from(script)), None, 1);
         }
     }
     pub fn reload(&self, id: &str, ignore_cache: bool) {
