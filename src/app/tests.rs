@@ -911,6 +911,55 @@ fn typing_in_the_address_bar_opens_autocomplete(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn pressing_enter_after_typing_search_navigates(cx: &mut gpui::TestAppContext) {
+    let (handle, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+
+    for key in ["y", "o", "u"] {
+        dispatch_test_key(cx, handle, key);
+    }
+    dispatch_test_key(cx, handle, "enter");
+
+    view.read_with(cx, |app, _cx| {
+        assert_eq!(
+            app.active_space().tabs[0].url,
+            "https://www.google.com/search?q=you"
+        );
+        assert!(!app.show_suggestions);
+    });
+}
+
+#[gpui::test]
+fn pressing_enter_with_popular_keyword_navigates_to_domain(cx: &mut gpui::TestAppContext) {
+    let (handle, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |app, cx| {
+            app.address.update(cx, |input, cx| {
+                input.set_value("youtube", window, cx);
+            });
+        });
+    })
+    .unwrap();
+    dispatch_test_key(cx, handle, "enter");
+
+    view.read_with(cx, |app, _cx| {
+        assert_eq!(app.active_space().tabs[0].url, "https://youtube.com");
+    });
+}
+
+#[gpui::test]
 fn focusing_web_content_moves_focus_off_the_address_bar(cx: &mut gpui::TestAppContext) {
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);

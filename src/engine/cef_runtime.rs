@@ -22,7 +22,9 @@ impl Engine {
             retired_images: Vec::new(),
             ui_update_wake,
             ui_update_receiver,
-            windowless_frame_rate: 60,
+            windowless_frame_rate: crate::engine::detect_system_refresh_rate()
+                .unwrap_or(60)
+                .clamp(60, 240),
             close_state: Arc::new((Mutex::new(0), Condvar::new())),
             shutdown_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shield: crate::shield::ShieldState::start(),
@@ -152,6 +154,19 @@ impl Engine {
                 {
                     host.set_zoom_level(zoom.clamp(-5.0, 5.0));
                     host.invalidate(cef::PaintElementType::VIEW);
+                }
+                let (pending_url, initial_url) = state
+                    .lock()
+                    .ok()
+                    .map(|guard| (guard.current_url.clone(), guard.initial_url.clone()))
+                    .unwrap_or_default();
+                if let Some(ref url) = pending_url
+                    && url != "about:blank"
+                    && url != "lumen://welcome"
+                    && url != &initial_url
+                    && let Some(frame) = browser.main_frame()
+                {
+                    frame.load_url(Some(&CefString::from(url.as_str())));
                 }
                 self.browsers
                     .insert(id.clone(), BrowserEntry { browser, state });

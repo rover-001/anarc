@@ -11,9 +11,8 @@ impl Lumen {
         let from = self.sidebar_width_transition.map_or_else(
             || self.effective_sidebar_width(),
             |(from, to, started, _)| {
-                let progress = started.elapsed().as_secs_f32()
-                    / ui::motion::MOTION_SLOW.as_secs_f32().max(f32::EPSILON);
-                from + (to - from) * ui::motion::ease_out_quint(progress)
+                let progress = ui::motion::sidebar().progress(started.elapsed());
+                from + (to - from) * progress
             },
         );
         let collapsing = !self.is_sidebar_collapsed();
@@ -35,7 +34,7 @@ impl Lumen {
         #[cfg(all(target_os = "linux", not(test)))]
         cx.spawn(async move |this, cx| {
             cx.background_executor()
-                .timer(ui::motion::duration(ui::motion::MOTION_SLOW))
+                .timer(ui::motion::sidebar().duration())
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.sidebar_transition_serial == serial {

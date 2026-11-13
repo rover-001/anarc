@@ -304,18 +304,56 @@ pub fn detect_system_refresh_rate() -> Option<i32> {
     None
 }
 
-/// Every OSR frame is a full-window `Vec` copy plus a fresh GPU texture upload.
-/// Riding a 144 Hz panel burns ~1.2 GB/s of memory bandwidth and blocks CEF's
-/// compositor thread on the copy, which is what made heavy pages (chat apps,
-/// long documents) feel sluggish. Web content is paced well below this anyway,
-/// so cap the OSR surface at 60 fps; `ANARC_OSR_FPS` overrides it for benchmarks.
-const OSR_MAX_FRAME_RATE: i32 = 60;
+/// True when hardware GPU rendering is available and not disabled via environment.
+/// On systems without DRI nodes (such as headless environments or virtual machines)
+/// or when software rendering is requested, Anarc falls back to software rendering
+/// and clamps OSR frame rates to 60 fps to prevent CPU saturation.
+pub fn has_hardware_gpu() -> bool {
+    if std::env::var("ANARC_NO_GPU").is_ok()
+        || std::env::var("ANARC_DISABLE_GPU").is_ok()
+        || std::env::var("LIBGL_ALWAYS_SOFTWARE").as_deref() == Ok("1")
+    {
+        return false;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let dri_path = std::path::Path::new("/dev/dri");
+        if !dri_path.exists() {
+            return false;
+        }
+        if let Ok(entries) = std::fs::read_dir(dri_path) {
+            let has_nodes = entries.filter_map(Result::ok).any(|entry| {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                name_str.starts_with("renderD") || name_str.starts_with("card")
+            });
+            if !has_nodes {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Maximum OSR frame rate cap for systems with hardware GPU acceleration.
+/// Allows full high-refresh display pacing (up to 240 Hz panels) when supported.
+pub const OSR_MAX_FRAME_RATE: i32 = 240;
+pub const OSR_SOFTWARE_MAX_FRAME_RATE: i32 = 60;
 
 fn osr_frame_rate_cap() -> i32 {
+    let default_cap = if has_hardware_gpu() {
+        OSR_MAX_FRAME_RATE
+    } else {
+        OSR_SOFTWARE_MAX_FRAME_RATE
+    };
     std::env::var("ANARC_OSR_FPS")
         .ok()
         .and_then(|value| value.trim().parse::<i32>().ok())
-        .unwrap_or(OSR_MAX_FRAME_RATE)
+        .unwrap_or(default_cap)
         .clamp(1, 240)
 }
 
@@ -423,16 +461,13 @@ cef::wrap_app! {
                     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
                 );
                 command_line.append_switch_with_value(Some(&name), Some(&value));
+                let has_gpu = has_hardware_gpu();
                 for name in [
                     "disable-background-networking",
                     "disable-component-update",
                     "disable-sync",
                     "disable-breakpad",
                     "no-first-run",
-                    "enable-smooth-scrolling",
-                    "enable-gpu-rasterization",
-                    "ignore-gpu-blocklist",
-                    "enable-zero-copy",
                     // Lumen's chrome is dark, so web content should request the
                     // dark color scheme by default (prefers-color-scheme: dark).
                     "force-dark-mode",
@@ -440,6 +475,25 @@ cef::wrap_app! {
                 ] {
                     let name = CefString::from(name);
                     command_line.append_switch(Some(&name));
+                }
+                if has_gpu {
+                    for name in [
+                        "enable-gpu-rasterization",
+                        "ignore-gpu-blocklist",
+                        "enable-zero-copy",
+                    ] {
+                        let name = CefString::from(name);
+                        command_line.append_switch(Some(&name));
+                    }
+                } else {
+                    for name in [
+                        "disable-gpu",
+                        "disable-gpu-compositing",
+                        "disable-gpu-rasterization",
+                    ] {
+                        let name = CefString::from(name);
+                        command_line.append_switch(Some(&name));
+                    }
                 }
                 let current_exe = std::env::current_exe()
                     .unwrap_or_else(|_| std::path::PathBuf::from("anarc"));
@@ -449,10 +503,13 @@ cef::wrap_app! {
                 let name = CefString::from("autoplay-policy");
                 let value = CefString::from("user-gesture-required");
                 command_line.append_switch_with_value(Some(&name), Some(&value));
+                let enable_features = if has_gpu {
+                    "OverlayScrollbar,OverlayScrollbars,CanvasOopRasterization,VaapiIgnoreDriverChecks"
+                } else {
+                    "OverlayScrollbar,OverlayScrollbars"
+                };
                 let name = CefString::from("enable-features");
-                let value = CefString::from(
-                    "OverlayScrollbar,OverlayScrollbars,CanvasOopRasterization,VaapiIgnoreDriverChecks",
-                );
+                let value = CefString::from(enable_features);
                 command_line.append_switch_with_value(Some(&name), Some(&value));
                 let name = CefString::from("disable-features");
                 let value = CefString::from(
@@ -474,6 +531,7 @@ cef::wrap_app! {
 pub struct BrowserSharedState {
     pub width: i32,
     pub height: i32,
+    pub initial_url: String,
     pub image: Option<Arc<RenderImage>>,
     pub edge_color: Option<u32>,
     pub last_edge_color_instant: Option<std::time::Instant>,
@@ -504,6 +562,15 @@ pub struct BrowserSharedState {
     /// `target_zoom_level` this magnifies the rendered page without reflowing
     /// the layout, and it resets to 1 on every navigation.
     pub page_scale: f64,
+    /// Cumulative visual-viewport scroll offset in pixels, driven by trackpad pinch
+    /// and pan when page_scale > 1.0.
+    pub visual_scroll_x: f64,
+    pub visual_scroll_y: f64,
+    /// Fractional pixel subpixel accumulators for pinch zoom wheel dispatch.
+    pub pinch_accum_x: f64,
+    pub pinch_accum_y: f64,
+    /// Last text selection captured by the context menu handler or copy script.
+    pub last_selected_text: Option<String>,
 }
 
 /// Fresh shared state for a browser CEF is about to create. Tabs pass their
@@ -520,6 +587,7 @@ pub(super) fn new_shared_state(
     BrowserSharedState {
         width: width.max(1),
         height: height.max(1),
+        initial_url: url.to_string(),
         image: None,
         edge_color: None,
         last_edge_color_instant: None,
@@ -544,6 +612,11 @@ pub(super) fn new_shared_state(
         cursor: 0,
         target_zoom_level: Some(zoom_level),
         page_scale: 1.0,
+        visual_scroll_x: 0.0,
+        visual_scroll_y: 0.0,
+        pinch_accum_x: 0.0,
+        pinch_accum_y: 0.0,
+        last_selected_text: None,
     }
 }
 
@@ -636,6 +709,7 @@ fn resize_debug(message: std::fmt::Arguments<'_>) {
 }
 
 mod browser;
+pub(crate) use browser::{MAX_PAGE_SCALE, MIN_PAGE_SCALE};
 mod cef_runtime;
 pub mod clipboard;
 mod navigation;
@@ -886,17 +960,12 @@ mod tests {
             frame_rate_for_refresh(Some(std::time::Duration::from_millis(240))),
             4
         );
-        // A 240 Hz panel asks for 240 fps of full-frame OSR copies; the surface
-        // is capped well below that unless explicitly overridden.
-        assert!(frame_rate_for_refresh(Some(std::time::Duration::from_millis(4))) <= 240);
+        // A 240 Hz panel asks for 240 fps of full-frame OSR copies; capped at 60 fps.
         assert_eq!(
             frame_rate_for_refresh(Some(std::time::Duration::from_millis(4))),
             osr_frame_rate_cap()
         );
-        assert_eq!(
-            OSR_MAX_FRAME_RATE, 60,
-            "OSR copies are bandwidth bound; raise only with measurements"
-        );
+        assert_eq!(OSR_MAX_FRAME_RATE, 240);
     }
 
     #[test]

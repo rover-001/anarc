@@ -33,9 +33,8 @@ impl Lumen {
         let sidebar_width_f32 = self.sidebar_width_transition.map_or_else(
             || self.effective_sidebar_width(),
             |(from, to, started, _)| {
-                let progress = started.elapsed().as_secs_f32()
-                    / ui::motion::MOTION_SLOW.as_secs_f32().max(f32::EPSILON);
-                from + (to - from) * ui::motion::ease_out_quint(progress)
+                let progress = ui::motion::sidebar().progress(started.elapsed());
+                from + (to - from) * progress
             },
         );
         let active_space = self.active_space().clone();
@@ -431,12 +430,9 @@ impl Lumen {
                                 div()
                                     .h_full()
                                     .w(px(left_width))
-                                    .with_animation(
+                                    .with_spring(
                                         format!("split-left-enter-{}", split_pair.first),
-                                        Animation::new(ui::motion::duration(
-                                            ui::motion::MOTION_SLOW,
-                                        ))
-                                        .with_easing(ui::motion::ease_out_quint),
+                                        ui::motion::row_enter().enter(),
                                         |pane, progress| {
                                             pane.opacity(ui::motion::clamp_percentage(progress))
                                         },
@@ -462,12 +458,9 @@ impl Lumen {
                                             cx.notify();
                                         }),
                                     )
-                                    .with_animation(
+                                    .with_spring(
                                         "split-divider-enter",
-                                        Animation::new(ui::motion::duration(
-                                            ui::motion::MOTION_SLOW,
-                                        ))
-                                        .with_easing(ui::motion::ease_out_quint),
+                                        ui::motion::row_enter().enter(),
                                         |divider, progress| {
                                             divider.opacity(ui::motion::clamp_percentage(
                                                 0.35 + 0.65 * progress,
@@ -479,12 +472,9 @@ impl Lumen {
                                 div()
                                     .h_full()
                                     .w(px(right_width))
-                                    .with_animation(
+                                    .with_spring(
                                         format!("split-right-enter-{}", split_pair.second),
-                                        Animation::new(ui::motion::duration(
-                                            ui::motion::MOTION_SLOW,
-                                        ))
-                                        .with_easing(ui::motion::ease_out_quint),
+                                        ui::motion::row_enter().enter(),
                                         |pane, progress| {
                                             pane.opacity(ui::motion::clamp_percentage(progress))
                                         },
@@ -627,7 +617,7 @@ impl Lumen {
             self.suggestion_closing = Some((self.suggestion_snapshot.clone(), serial));
             cx.spawn(async move |this, cx| {
                 cx.background_executor()
-                    .timer(ui::motion::duration(ui::motion::MOTION_FAST))
+                    .timer(ui::motion::pop().duration())
                     .await;
                 let _ = this.update(cx, |this, cx| {
                     if this
@@ -741,12 +731,11 @@ impl Lumen {
             }
 
             let list = if let Some(serial) = closing_suggestions {
-                list.with_animation(
+                list.with_spring(
                     format!("autocomplete-suggestions-exit-{serial}"),
-                    Animation::new(ui::motion::duration(ui::motion::MOTION_FAST))
-                        .with_easing(ui::motion::ease_out_quint),
-                    move |panel, progress| {
-                        let remaining = ui::motion::clamp_percentage(1.0 - progress);
+                    ui::motion::pop().between(1.0, 0.0),
+                    move |panel, remaining| {
+                        let remaining = ui::motion::clamp_percentage(remaining);
                         panel
                             .w(px(suggestion_width * (0.96 + 0.04 * remaining)))
                             .opacity(remaining)
@@ -754,13 +743,12 @@ impl Lumen {
                 )
                 .into_any_element()
             } else {
-                list.with_animation(
+                list.with_spring(
                     format!(
                         "autocomplete-suggestions-entrance-{}",
                         self.suggestion_animation_serial
                     ),
-                    Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
-                        .with_easing(ui::motion::ease_out_quint),
+                    ui::motion::popover().enter(),
                     move |panel, progress| {
                         panel
                             .w(px(suggestion_width * (0.96 + 0.04 * progress)))
@@ -878,10 +866,9 @@ impl Lumen {
                         ),
                 )
                 .child(list)
-                .with_animation(
+                .with_spring(
                     "command-palette-entrance",
-                    Animation::new(ui::motion::duration(ui::motion::MOTION_POPOVER))
-                        .with_easing(ui::motion::ease_out_quint),
+                    ui::motion::popover().enter(),
                     |panel, progress| {
                         panel
                             .w(px(640.0 * UI_SCALE * (0.96 + 0.04 * progress)))
@@ -976,10 +963,9 @@ impl Lumen {
                 .overflow_hidden()
                 .flex()
                 .flex_col()
-                .with_animation(
+                .with_spring(
                     format!("peek-overlay-enter-{}", peek.id),
-                    Animation::new(ui::motion::duration(ui::motion::MOTION_SLOW))
-                        .with_easing(ui::motion::ease_out_quint),
+                    ui::motion::sheet().enter(),
                     |card, progress| card.opacity(ui::motion::clamp_percentage(progress)),
                 )
                 .child(
@@ -1257,22 +1243,21 @@ impl Lumen {
                     cx.stop_propagation();
                     cx.notify();
                 } else if !event.is_held
-                    && suggestions_open
-                    && matches!(key.as_str(), "enter" | "return")
-                    && let Some(target) = this
+                    && matches!(
+                        key.as_str(),
+                        "enter" | "return" | "kp_enter" | "numpadenter"
+                    )
+                    && (address_focused || suggestions_open || this.address_editing)
+                {
+                    if let Some(target) = this
                         .selected_suggestion
                         .and_then(|index| this.suggestions.get(index))
                         .map(|item| item.target.clone())
-                {
-                    this.navigate_to(&target, window, cx);
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    cx.notify();
-                } else if !event.is_held
-                    && matches!(key.as_str(), "enter" | "return")
-                    && window.focused(cx) == Some(this.address.read(cx).focus_handle(cx))
-                {
-                    this.navigate(cx);
+                    {
+                        this.navigate_to(&target, window, cx);
+                    } else {
+                        this.navigate(Some(window), cx);
+                    }
                     window.prevent_default();
                     cx.stop_propagation();
                     cx.notify();
@@ -1357,8 +1342,7 @@ impl Lumen {
             let to_theme = target_theme;
             root.with_animation(
                 format!("space-theme-transition-{transition_id}"),
-                Animation::new(ui::motion::duration(ui::motion::MOTION_SPACE_SWITCH))
-                    .with_easing(ui::motion::ease_out_quint),
+                ui::motion::theme().animation(),
                 move |root, progress| {
                     let theme = visual::interpolate_theme(from_theme, to_theme, progress);
                     root.bg(rgb(theme.base)).text_color(rgb(theme.text))

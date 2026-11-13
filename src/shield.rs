@@ -255,6 +255,9 @@ impl ShieldState {
         if !PLUGIN_ENABLED.load(Ordering::Relaxed) || !self.enabled.load(Ordering::Relaxed) {
             return false;
         }
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return false;
+        }
         if let Some(host) = url_host(url)
             && self
                 .allowlist

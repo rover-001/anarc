@@ -1,0 +1,5 @@
+[tools]
+# Freebuff 0.2.36 is published by its established GitHub Actions publisher,
+# but upstream explicitly disables npm provenance while publishing from a
+# private source repository. Keep the trust exception limited to this release.
+"npm:freebuff" = { version = "latest", trust_policy_excludes = ["freebuff@0.2.36"] }
