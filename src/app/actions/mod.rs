@@ -218,7 +218,7 @@ impl Lumen {
         let address_subscription =
             cx.subscribe(&address, |this: &mut Lumen, _, event, cx| match event {
                 InputEvent::PressEnter { .. } => {
-                    this.navigate(cx);
+                    this.navigate(None, cx);
                     cx.notify();
                 }
                 InputEvent::Change => {

@@ -158,10 +158,7 @@ impl Lumen {
                     )
                 },
                 |(previous_space, state, started, _)| {
-                    let progress = ui::motion::ease_out_quint(
-                        started.elapsed().as_secs_f32()
-                            / ui::motion::MOTION_SPACE_SWITCH.as_secs_f32(),
-                    );
+                    let progress = ui::motion::space_switch().progress(started.elapsed());
                     let keep_incoming = progress >= 0.5;
                     let outgoing_space = if keep_incoming {
                         current_space.clone()
@@ -178,14 +175,10 @@ impl Lumen {
             let displayed_theme =
                 self.theme_transition
                     .map_or(current_theme, |(from, started, _)| {
-                        let progress = started.elapsed().as_secs_f32()
-                            / ui::motion::MOTION_SPACE_SWITCH
-                                .as_secs_f32()
-                                .max(f32::EPSILON);
                         visual::interpolate_theme(
                             from,
                             current_theme,
-                            ui::motion::ease_out_quint(progress),
+                            ui::motion::theme().progress(started.elapsed()),
                         )
                     });
             self.theme_transition_id = self.theme_transition_id.wrapping_add(1);

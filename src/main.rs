@@ -37,6 +37,7 @@ fn main() {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(|cx| {
             gpui_kit::init(cx);
+            cx.set_reduce_motion(ui::motion::reduced_motion());
             gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
             gpui_kit::component::Theme::update(cx, |theme| {
                 theme.caret = gpui_kit::rgb(0xffffff).into();
@@ -50,6 +51,12 @@ fn main() {
                         ..Default::default()
                     }),
                     app_id: Some("anarc".into()),
+                    // Pages keep animating while the window is in the
+                    // background, and the default inactive cap (~30 fps) made
+                    // them visibly stutter next to the focused window. Video
+                    // and canvas content are the reason windows stay open
+                    // beside other apps, so the same frame cadence is kept.
+                    inactive_frame_interval: None,
                     ..Default::default()
                 },
                 cx,

@@ -29,19 +29,17 @@ impl Lumen {
         {
             let is_already_active = space.active.as_deref() == Some(tab_id);
             if is_already_active {
-                if let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id) {
-                    if (tab.pinned || tab.favorite)
-                        && let Some(pinned_url) = tab.pinned_url.clone()
-                    {
-                        if tab.url != pinned_url {
-                            tab.url = pinned_url.clone();
-                            if let Some(pinned_title) = tab.pinned_title.clone() {
-                                tab.title = pinned_title;
-                            }
-                            self.engine.navigate(tab_id, &pinned_url);
-                            self.save_state();
-                        }
+                if let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id)
+                    && (tab.pinned || tab.favorite)
+                    && let Some(pinned_url) = tab.pinned_url.clone()
+                    && tab.url != pinned_url
+                {
+                    tab.url = pinned_url.clone();
+                    if let Some(pinned_title) = tab.pinned_title.clone() {
+                        tab.title = pinned_title;
                     }
+                    self.engine.navigate(tab_id, &pinned_url);
+                    self.save_state();
                 }
             } else {
                 if let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id) {
@@ -62,15 +60,14 @@ impl Lumen {
             .iter_mut()
             .find(|space| space.id == self.active_space)
             && let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id)
+            && let Some(pinned_url) = tab.pinned_url.clone()
         {
-            if let Some(pinned_url) = tab.pinned_url.clone() {
-                tab.url = pinned_url.clone();
-                if let Some(pinned_title) = tab.pinned_title.clone() {
-                    tab.title = pinned_title;
-                }
-                self.engine.navigate(tab_id, &pinned_url);
-                self.save_state();
+            tab.url = pinned_url.clone();
+            if let Some(pinned_title) = tab.pinned_title.clone() {
+                tab.title = pinned_title;
             }
+            self.engine.navigate(tab_id, &pinned_url);
+            self.save_state();
         }
     }
 

@@ -53,6 +53,11 @@ cef::wrap_load_handler! {
                             // renderer does not always drop a pinch zoom set
                             // through DevTools, so put it back explicitly.
                             state.page_scale = 1.0;
+                            state.visual_scroll_x = 0.0;
+                            state.visual_scroll_y = 0.0;
+                            state.pinch_accum_x = 0.0;
+                            state.pinch_accum_y = 0.0;
+                            state.last_selected_text = None;
                             super::browser::reset_page_scale(&host);
                             if let Some(zoom) = state.target_zoom_level {
                                 host.set_zoom_level(zoom.clamp(-5.0, 5.0));
@@ -105,51 +110,96 @@ fn inject_clipboard_script(frame: &Frame) {
             if (window.__anarc_cb_init) return;
             window.__anarc_cb_init = true;
             try {
+                const style = document.createElement('style');
+                style.id = '__anarc_overscroll_fix';
+                style.textContent = 'html, body { overscroll-behavior: none !important; }';
+                (document.head || document.documentElement).appendChild(style);
+            } catch (_) {}
+            try {
+                function getSelectedText() {
+                    try {
+                        let text = window.getSelection ? window.getSelection().toString() : '';
+                        if (text) return text;
+                        let el = document.activeElement;
+                        while (el && el.shadowRoot && el.shadowRoot.activeElement) {
+                            el = el.shadowRoot.activeElement;
+                        }
+                        if (el) {
+                            if ('selectionStart' in el && 'selectionEnd' in el && typeof el.value === 'string') {
+                                const start = Math.min(el.selectionStart, el.selectionEnd);
+                                const end = Math.max(el.selectionStart, el.selectionEnd);
+                                if (end > start) return el.value.substring(start, end);
+                            }
+                            if (el.contentDocument && el.contentDocument.getSelection) {
+                                const ifr = el.contentDocument.getSelection().toString();
+                                if (ifr) return ifr;
+                            }
+                        }
+                        return '';
+                    } catch (_) {
+                        return '';
+                    }
+                }
+
                 if (navigator.clipboard && navigator.clipboard.writeText) {
-                    const orig = navigator.clipboard.writeText.bind(navigator.clipboard);
+                    const origWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
                     navigator.clipboard.writeText = async function(text) {
                         try {
-                            console.log("[ANARC_CB_COPY]" + encodeURIComponent(text));
-                        } catch (_) {}
-                        return orig(text);
-                    };
-                }
-                document.addEventListener('copy', function() {
-                    setTimeout(function() {
-                        try {
-                            let text = window.getSelection().toString();
-                            if (!text && document.activeElement && 'selectionStart' in document.activeElement) {
-                                const el = document.activeElement;
-                                text = el.value.substring(el.selectionStart, el.selectionEnd);
-                            }
-                            if (text) {
+                            if (typeof text === 'string' && text.length > 0) {
                                 console.log("[ANARC_CB_COPY]" + encodeURIComponent(text));
                             }
                         } catch (_) {}
-                    }, 0);
-                }, true);
-                document.addEventListener('mouseup', function() {
+                        try {
+                            return await origWriteText(text);
+                        } catch (err) {
+                            return Promise.resolve();
+                        }
+                    };
+                }
+
+                function onCopyHandler(e) {
+                    let text = '';
+                    if (e && e.clipboardData) {
+                        try {
+                            text = e.clipboardData.getData('text/plain');
+                        } catch (_) {}
+                    }
+                    if (!text) {
+                        text = getSelectedText();
+                    }
+                    if (text) {
+                        console.log("[ANARC_CB_COPY]" + encodeURIComponent(text));
+                    }
                     setTimeout(function() {
                         try {
-                            let text = window.getSelection().toString();
-                            if (!text && document.activeElement && 'selectionStart' in document.activeElement) {
-                                const el = document.activeElement;
-                                text = el.value.substring(el.selectionStart, el.selectionEnd);
+                            let late = getSelectedText();
+                            if (late && late !== text) {
+                                console.log("[ANARC_CB_COPY]" + encodeURIComponent(late));
                             }
+                        } catch (_) {}
+                    }, 0);
+                }
+
+                window.addEventListener('copy', onCopyHandler, true);
+                document.addEventListener('copy', onCopyHandler, true);
+
+                function onMouseUpHandler() {
+                    setTimeout(function() {
+                        try {
+                            let text = getSelectedText();
                             if (text && text.trim().length > 0) {
                                 console.log("[ANARC_CB_PRIMARY]" + encodeURIComponent(text));
                             }
                         } catch (_) {}
                     }, 10);
-                }, true);
+                }
+
+                window.addEventListener('mouseup', onMouseUpHandler, true);
+                document.addEventListener('mouseup', onMouseUpHandler, true);
             } catch (_) {}
         })();
     "#;
-    frame.execute_java_script(
-        Some(&CefString::from(script)),
-        Some(&CefString::from("anarc://clipboard-sync")),
-        1,
-    );
+    frame.execute_java_script(Some(&CefString::from(script)), None, 1);
 }
 
 #[derive(Default)]
@@ -296,6 +346,7 @@ cef::wrap_request_handler! {
 
 cef::wrap_context_menu_handler! {
     pub(super) struct LumenContextMenuHandler {
+        shared: Arc<Mutex<BrowserSharedState>>,
         events: Arc<Mutex<EngineEvents>>,
     }
 
@@ -309,6 +360,13 @@ cef::wrap_context_menu_handler! {
         ) {
             if let Some(params) = params {
                 let selection = CefStringUtf16::from(&params.selection_text()).to_string();
+                if let Ok(mut state) = self.shared.lock() {
+                    state.last_selected_text = if selection.is_empty() {
+                        None
+                    } else {
+                        Some(selection.clone())
+                    };
+                }
                 if !selection.is_empty() {
                     crate::engine::clipboard::write_system_clipboard(&selection);
                     crate::engine::clipboard::write_primary_clipboard(&selection);
@@ -746,9 +804,13 @@ cef::wrap_display_handler! {
                 CursorType::CONTEXTMENU => 12,
                 _ => 0,
             };
-            if let Ok(mut state) = self.shared.lock() {
+            if let Ok(mut state) = self.shared.lock()
+                && state.cursor != cursor
+            {
                 state.cursor = cursor;
                 state.dirty = true;
+                drop(state);
+                let _ = self.ui_update_wake.try_send(());
             }
             1
         }
@@ -1022,7 +1084,7 @@ fn start_popup_browser(
         handler.events.clone(),
         tab_id.clone(),
     );
-    let context_menu_handler = LumenContextMenuHandler::new(handler.events.clone());
+    let context_menu_handler = LumenContextMenuHandler::new(shared.clone(), handler.events.clone());
     let request_handler = LumenRequestHandler::new(
         handler.shield.clone(),
         tab_id.clone(),

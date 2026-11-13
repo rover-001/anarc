@@ -42,30 +42,26 @@ fn write_clipboard_internal(text: &str, primary: bool) {
 }
 
 pub fn read_system_clipboard() -> Option<String> {
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        if let Ok(output) = std::process::Command::new("wl-paste")
+    if std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && let Ok(output) = std::process::Command::new("wl-paste")
             .arg("--no-newline")
             .output()
-        {
-            if output.status.success() && !output.stdout.is_empty() {
-                if let Ok(text) = String::from_utf8(output.stdout) {
-                    return Some(text);
-                }
-            }
-        }
+        && output.status.success()
+        && !output.stdout.is_empty()
+        && let Ok(text) = String::from_utf8(output.stdout)
+    {
+        return Some(text);
     }
 
-    if std::env::var_os("DISPLAY").is_some() {
-        if let Ok(output) = std::process::Command::new("xclip")
+    if std::env::var_os("DISPLAY").is_some()
+        && let Ok(output) = std::process::Command::new("xclip")
             .args(["-selection", "clipboard", "-o"])
             .output()
-        {
-            if output.status.success() && !output.stdout.is_empty() {
-                if let Ok(text) = String::from_utf8(output.stdout) {
-                    return Some(text);
-                }
-            }
-        }
+        && output.status.success()
+        && !output.stdout.is_empty()
+        && let Ok(text) = String::from_utf8(output.stdout)
+    {
+        return Some(text);
     }
 
     None
@@ -75,15 +71,15 @@ pub fn url_decode(s: &str) -> String {
     let mut bytes = Vec::new();
     let mut chars = s.as_bytes().iter();
     while let Some(&b) = chars.next() {
-        if b == b'%' {
-            if let (Some(&h1), Some(&h2)) = (chars.next(), chars.next()) {
-                let hex_slice = [h1, h2];
-                if let Ok(hex_str) = std::str::from_utf8(&hex_slice)
-                    && let Ok(val) = u8::from_str_radix(hex_str, 16)
-                {
-                    bytes.push(val);
-                    continue;
-                }
+        if b == b'%'
+            && let (Some(&h1), Some(&h2)) = (chars.next(), chars.next())
+        {
+            let hex_slice = [h1, h2];
+            if let Ok(hex_str) = std::str::from_utf8(&hex_slice)
+                && let Ok(val) = u8::from_str_radix(hex_str, 16)
+            {
+                bytes.push(val);
+                continue;
             }
         }
         bytes.push(b);

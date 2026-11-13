@@ -1,0 +1,6 @@
+---
+type: decision
+title: "Physics-based motion system (springs) for all UI animations"
+timestamp: 2026-11-13T14:48:17.605935409+00:00
+---
+Replaced duration+easing animations with Apple (response, dampingFraction) springs in src/ui/motion.rs. SpringSpec converts (response, zeta) into gpui SpringConfig (k=(2pi/response)^2, c=4pi*zeta/response, m=1) and exposes config(), settle_time(), duration(), progress(elapsed), easing(), animation(), enter(), between(), to(). Presets (response, zeta): pop 0.26/0.75, popover 0.28/0.85, toggle 0.26/0.80, sheet 0.38/0.85, content 0.33/0.90, space_switch 0.40/0.90, sidebar 0.40/0.90, row_enter 0.30/0.85, row_exit 0.22/1.0, theme 0.28/1.0, pinch_settle 0.18/1.0. Element entrances/exits use with_spring (interruptible, state per element id); Instant-driven interpolations (theme colors, sidebar width, space switch, browser frame crossfade) use spec.progress()/spec.animation() so the guard/timer duration always equals the animation duration. ANARC_REDUCED_MOTION maps to cx.set_reduce_motion in main.rs so with_spring/with_animation snap. Pinch release within 1.05 of 100% snaps to 1.0 via spring ticker (8 ms) driving Engine::pinch_zoom; Engine::page_scale reads state. Scroll fling/inertia intentionally not added (compositor kinetic scroll).
