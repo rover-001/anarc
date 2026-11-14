@@ -99,7 +99,7 @@ impl Lumen {
                     cx.notify();
                 }),
             );
-        if !self.is_sidebar_collapsed() {
+        if !self.is_sidebar_collapsed() || self.sidebar_hovered {
             sidebar_content = sidebar_content.child(
                 div()
                     .id("active-space-name")
@@ -1272,34 +1272,54 @@ impl Lumen {
             sidebar_content = sidebar_content.child(bottom_bar);
         } else {
             let active_space_icon = self.active_space().icon.clone();
+            if self.preferences.sidebar_mode == crate::settings::SidebarMode::Icons {
+                for (tab_id, _, favicon) in &tabs {
+                    let id = tab_id.clone();
+                    let selected = active_tab_id.as_ref() == Some(tab_id);
+                    sidebar_content = sidebar_content.child(
+                        div()
+                            .id(format!("collapsed-tab-{tab_id}"))
+                            .w_full()
+                            .h(px(visual::TAB_ROW_HEIGHT))
+                            .rounded_lg()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .when(selected, |row| row.bg(rgb(theme.surface)))
+                            .hover(|row| row.bg(rgb(theme.surface_hover)))
+                            .child(tab_list::favorite_favicon(favicon.clone()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.activate_tab_in_active_space(&id);
+                                cx.notify();
+                            })),
+                    );
+                }
+            }
+            sidebar_content = sidebar_content.child(div().flex_1()).child(
+                div()
+                    .id("collapsed-space-icon")
+                    .flex()
+                    .justify_center()
+                    .w_full()
+                    .child(space_switcher::space_icon_button(
+                        &active_space_icon,
+                        true,
+                        theme,
+                    )),
+            );
+        }
+
+        let fully_hidden = self.is_sidebar_collapsed()
+            && self.preferences.sidebar_mode == crate::settings::SidebarMode::Hidden
+            && !self.sidebar_hovered;
+        if fully_hidden {
             sidebar_content = sidebar_content
-                .child(
-                    div()
-                        .id("expand-sidebar")
-                        .px_3()
-                        .py_2()
-                        .rounded_md()
-                        .text_color(rgb(theme.muted))
-                        .hover(|style| style.bg(rgb(theme.surface_hover)))
-                        .cursor_pointer()
-                        .child("›")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.animate_sidebar_toggle(window, cx);
-                        })),
-                )
-                .child(div().flex_1())
-                .child(
-                    div()
-                        .id("collapsed-space-icon")
-                        .flex()
-                        .justify_center()
-                        .w_full()
-                        .child(space_switcher::space_icon_button(
-                            &active_space_icon,
-                            true,
-                            theme,
-                        )),
-                );
+                .px_0()
+                .py_0()
+                .when(self.sidebar_width_transition.is_none(), |sidebar| {
+                    sidebar.opacity(0.0)
+                });
         }
 
         if let Some((_, state, _, serial)) = &space_switch_transition {
@@ -1324,7 +1344,17 @@ impl Lumen {
                     format!("sidebar-width-transition-{serial}"),
                     ui::motion::sidebar().animation(),
                     move |sidebar, progress| {
-                        sidebar.w(px(from + (to - from) * progress.clamp(0.0, 1.0)))
+                        let progress = progress.clamp(0.0, 1.0);
+                        let opacity = if to == 0.0 && from > 0.0 {
+                            1.0 - progress
+                        } else if from == 0.0 && to > 0.0 {
+                            progress
+                        } else {
+                            1.0
+                        };
+                        sidebar
+                            .w(px(from + (to - from) * progress))
+                            .opacity(ui::motion::clamp_percentage(opacity))
                     },
                 )
                 .into_any_element()

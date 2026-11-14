@@ -14,8 +14,8 @@ use crate::ui::web_view::WebViewport;
 use crate::ui::{space_switcher, tab_list};
 use crate::{engine, history, persist, reader, stats, ui};
 use gpui_kit::{
-    Animation, AnimationExt as _, AnyView, Context, Focusable, FontWeight, KeyDownEvent,
-    KeyUpEvent, Render, SpringAnimation, StyleRefinement, Window,
+    Animation, AnimationExt as _, AnyView, Context, Focusable, FontWeight, KeyDownEvent, Render,
+    SpringAnimation, StyleRefinement, Window,
     assets::IconName,
     component::Icon,
     component::input::{Input, InputEvent, InputState},
@@ -153,6 +153,7 @@ fn make_tab_ids_unique(spaces: &mut [Space]) {
     }
 }
 
+#[cfg(test)]
 fn sidebar_width_for(collapsed: bool, width: f32) -> f32 {
     if collapsed {
         SIDEBAR_COLLAPSED_WIDTH

@@ -10,6 +10,7 @@ impl Engine {
         Self {
             browsers: HashMap::new(),
             resize_state: HashMap::new(),
+            pressed_mouse_buttons: HashMap::new(),
             pending_browsers: HashMap::new(),
             canceled_browsers: HashSet::new(),
             contexts: HashMap::new(),

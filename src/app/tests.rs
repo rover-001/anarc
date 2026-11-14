@@ -32,6 +32,7 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         spaces,
         active_space,
         sidebar_collapsed: false,
+        sidebar_hovered: false,
         sidebar_width: 240.0 * UI_SCALE,
         sidebar_resizing: false,
         sidebar_width_transition: None,
