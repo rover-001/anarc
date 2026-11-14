@@ -53,6 +53,9 @@ impl Lumen {
         if !control {
             return false;
         }
+        if !shift && key == "s" {
+            return true;
+        }
         if !shift && key.len() == 1 && matches!(key.as_bytes()[0], b'1'..=b'9') {
             return true;
         }

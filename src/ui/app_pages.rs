@@ -6,7 +6,7 @@ use gpui_kit::{
 use crate::app::SettingsSection;
 use crate::app::{AppPage, Lumen};
 use crate::engine::DownloadRecord;
-use crate::settings::SearchEngine;
+use crate::settings::{SearchEngine, SidebarMode};
 use crate::ui::visual::{self, SpaceTheme, UI_SCALE};
 
 #[allow(clippy::too_many_arguments)] // Settings receives the current page state and its controls.
@@ -19,6 +19,7 @@ pub fn render(
     has_web_site: bool,
     settings_section: SettingsSection,
     search_engine: SearchEngine,
+    sidebar_mode: SidebarMode,
     active_space_color: u32,
     plugin_rows: Vec<crate::plugin::PluginRow>,
     pending_plugin_review: Option<crate::ui::plugin_manager::PluginReview>,
@@ -37,6 +38,7 @@ pub fn render(
             has_web_site,
             settings_section,
             search_engine,
+            sidebar_mode,
             active_space_color,
             downloads.clone(),
             plugin_rows,
@@ -127,6 +129,7 @@ fn settings_content(
     has_web_site: bool,
     selected_section: SettingsSection,
     search_engine: SearchEngine,
+    sidebar_mode: SidebarMode,
     _active_space_color: u32,
     downloads: Vec<DownloadRecord>,
     plugin_rows: Vec<crate::plugin::PluginRow>,
@@ -313,12 +316,60 @@ fn settings_content(
                 zoom_controls,
                 theme,
             );
+            let sidebar_choices = div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .child(action_button(
+                    if sidebar_mode == SidebarMode::Hidden {
+                        "✓ Hide"
+                    } else {
+                        "Hide"
+                    },
+                    theme,
+                    cx.listener(|this, _, window, cx| {
+                        this.set_sidebar_mode(SidebarMode::Hidden, window, cx);
+                        cx.notify();
+                    }),
+                ))
+                .child(action_button(
+                    if sidebar_mode == SidebarMode::Icons {
+                        "✓ Icons"
+                    } else {
+                        "Icons"
+                    },
+                    theme,
+                    cx.listener(|this, _, window, cx| {
+                        this.set_sidebar_mode(SidebarMode::Icons, window, cx);
+                        cx.notify();
+                    }),
+                ))
+                .child(action_button(
+                    if sidebar_mode == SidebarMode::Hover {
+                        "✓ Reveal on hover"
+                    } else {
+                        "Reveal on hover"
+                    },
+                    theme,
+                    cx.listener(|this, _, window, cx| {
+                        this.set_sidebar_mode(SidebarMode::Hover, window, cx);
+                        cx.notify();
+                    }),
+                ));
+            let sidebar_card = setting_card(
+                "Sidebar",
+                "Collapsed appearance",
+                "Choose whether a collapsed sidebar is hidden, keeps tab icons, or opens when you point at the window edge.",
+                sidebar_choices,
+                theme,
+            );
             div()
                 .flex()
                 .flex_col()
                 .gap_4()
                 .child(theme_card)
                 .child(zoom_card)
+                .child(sidebar_card)
                 .into_any_element()
         }
         SettingsSection::Search => {
@@ -417,6 +468,7 @@ fn settings_content(
                 ("Ctrl + T", "Open a tab"),
                 ("Ctrl + W", "Close the active tab or this settings window"),
                 ("Ctrl + K", "Open the command palette"),
+                ("Ctrl + S", "Collapse or expand the sidebar"),
                 ("Ctrl + Shift + S", "Split the active tab with another tab"),
                 ("Ctrl + + / − / 0", "Change or reset page zoom"),
             ],

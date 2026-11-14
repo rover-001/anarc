@@ -49,16 +49,7 @@ cef::wrap_load_handler! {
             if let Some(browser) = browser
                 && let Some(host) = browser.host()
                     && let Ok(mut state) = self.shared.lock() {
-                            // A new document starts at its natural scale; the
-                            // renderer does not always drop a pinch zoom set
-                            // through DevTools, so put it back explicitly.
-                            state.page_scale = 1.0;
-                            state.visual_scroll_x = 0.0;
-                            state.visual_scroll_y = 0.0;
-                            state.pinch_accum_x = 0.0;
-                            state.pinch_accum_y = 0.0;
                             state.last_selected_text = None;
-                            super::browser::reset_page_scale(&host);
                             if let Some(zoom) = state.target_zoom_level {
                                 host.set_zoom_level(zoom.clamp(-5.0, 5.0));
                             }
@@ -114,6 +105,26 @@ fn inject_clipboard_script(frame: &Frame) {
                 style.id = '__anarc_overscroll_fix';
                 style.textContent = 'html, body { overscroll-behavior: none !important; }';
                 (document.head || document.documentElement).appendChild(style);
+            } catch (_) {}
+            try {
+                function focusedElementIsEditable() {
+                    let el = document.activeElement;
+                    while (el && el.shadowRoot && el.shadowRoot.activeElement) {
+                        el = el.shadowRoot.activeElement;
+                    }
+                    return !!el && (
+                        el.isContentEditable ||
+                        (el.matches && el.matches('input, textarea, select'))
+                    );
+                }
+                function reportEditableFocus() {
+                    console.log('[ANARC_CB_EDITABLE]' + (focusedElementIsEditable() ? '1' : '0'));
+                }
+                window.addEventListener('focusin', reportEditableFocus, true);
+                window.addEventListener('focusout', function() {
+                    setTimeout(reportEditableFocus, 0);
+                }, true);
+                reportEditableFocus();
             } catch (_) {}
             try {
                 function getSelectedText() {
@@ -655,6 +666,12 @@ cef::wrap_display_handler! {
         ) -> i32 {
             if let Some(msg) = message {
                 let text = msg.to_string();
+                    if let Some(editable) = text.strip_prefix("[ANARC_CB_EDITABLE]") {
+                        if let Ok(mut state) = self.shared.lock() {
+                            state.focus_on_editable_field = editable == "1";
+                        }
+                        return 1;
+                    }
                 if let Some(encoded) = text.strip_prefix("[ANARC_CB_COPY]") {
                     let decoded = crate::engine::clipboard::url_decode(encoded);
                     crate::engine::clipboard::write_system_clipboard(&decoded);

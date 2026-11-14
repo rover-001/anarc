@@ -6,6 +6,41 @@ impl Lumen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let collapsing = !self.is_sidebar_collapsed();
+        let target = if collapsing {
+            match self.preferences.sidebar_mode {
+                crate::settings::SidebarMode::Hidden => 0.0,
+                crate::settings::SidebarMode::Icons => SIDEBAR_COLLAPSED_WIDTH,
+                crate::settings::SidebarMode::Hover => 0.0,
+            }
+        } else {
+            self.sidebar_width
+        };
+        self.animate_sidebar_width_to(target, collapsing, window, cx);
+    }
+
+    pub(in crate::app) fn animate_sidebar_hover(
+        &mut self,
+        hovered: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sidebar_hovered == hovered {
+            return;
+        }
+        let target = if hovered { self.sidebar_width } else { 0.0 };
+        self.animate_sidebar_width_to(target, true, window, cx);
+        self.sidebar_hovered = hovered;
+        cx.notify();
+    }
+
+    pub(in crate::app) fn animate_sidebar_width_to(
+        &mut self,
+        target: f32,
+        collapsed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         #[cfg(test)]
         let _ = window;
         let from = self.sidebar_width_transition.map_or_else(
@@ -15,12 +50,6 @@ impl Lumen {
                 from + (to - from) * progress
             },
         );
-        let collapsing = !self.is_sidebar_collapsed();
-        let target = if collapsing {
-            SIDEBAR_COLLAPSED_WIDTH
-        } else {
-            self.sidebar_width
-        };
         #[cfg(all(target_os = "linux", not(test)))]
         self.begin_browser_resize_drag(window, false);
         #[cfg(all(target_os = "linux", not(test)))]
@@ -28,8 +57,11 @@ impl Lumen {
         self.sidebar_transition_serial = self.sidebar_transition_serial.wrapping_add(1);
         let serial = self.sidebar_transition_serial;
         self.sidebar_width_transition = Some((from, target, Instant::now(), serial));
-        self.sidebar_collapsed = collapsing;
-        self.save_state();
+        let collapsed_changed = self.sidebar_collapsed != collapsed;
+        self.sidebar_collapsed = collapsed;
+        if collapsed_changed {
+            self.save_state();
+        }
 
         #[cfg(all(target_os = "linux", not(test)))]
         cx.spawn(async move |this, cx| {

@@ -255,9 +255,17 @@ impl Engine {
         }
     }
     pub fn send_key_down(&self, id: &str, event: &KeyDownEvent) {
-        let Some(host) = self.browsers.get(id).and_then(|entry| entry.browser.host()) else {
+        let Some(entry) = self.browsers.get(id) else {
             return;
         };
+        let Some(host) = entry.browser.host() else {
+            return;
+        };
+        let focus_on_editable_field = entry
+            .state
+            .lock()
+            .map(|state| state.focus_on_editable_field)
+            .unwrap_or(false);
         let key = &event.keystroke.key;
         let is_control_or_platform =
             event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
@@ -283,7 +291,7 @@ impl Engine {
             &event.keystroke.modifiers,
             KeyEventType::RAWKEYDOWN,
             character,
-            true,
+            focus_on_editable_field,
         );
         host.send_key_event(Some(&base));
         if character != 0 && !is_control_or_platform {
@@ -292,22 +300,31 @@ impl Engine {
                 &event.keystroke.modifiers,
                 KeyEventType::CHAR,
                 character,
-                true,
+                focus_on_editable_field,
             );
             host.send_key_event(Some(&text));
         }
     }
     pub fn send_key_up(&self, id: &str, event: &KeyUpEvent) {
-        if let Some(host) = self.browsers.get(id).and_then(|entry| entry.browser.host()) {
-            let key = &event.keystroke.key;
-            let key_event = cef_key_event(
-                key,
-                &event.keystroke.modifiers,
-                KeyEventType::KEYUP,
-                0,
-                true,
-            );
-            host.send_key_event(Some(&key_event));
-        }
+        let Some(entry) = self.browsers.get(id) else {
+            return;
+        };
+        let Some(host) = entry.browser.host() else {
+            return;
+        };
+        let focus_on_editable_field = entry
+            .state
+            .lock()
+            .map(|state| state.focus_on_editable_field)
+            .unwrap_or(false);
+        let key = &event.keystroke.key;
+        let key_event = cef_key_event(
+            key,
+            &event.keystroke.modifiers,
+            KeyEventType::KEYUP,
+            0,
+            focus_on_editable_field,
+        );
+        host.send_key_event(Some(&key_event));
     }
 }
