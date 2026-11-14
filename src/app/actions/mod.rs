@@ -254,6 +254,7 @@ impl Lumen {
             spaces,
             active_space,
             sidebar_collapsed,
+            sidebar_hovered: false,
             sidebar_width,
             sidebar_resizing: false,
             sidebar_width_transition: None,
@@ -351,6 +352,28 @@ impl Lumen {
     pub(crate) fn set_settings_section(&mut self, section: SettingsSection) {
         self.settings_section = section;
     }
+    pub(crate) fn set_sidebar_mode(
+        &mut self,
+        mode: crate::settings::SidebarMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = if self.is_sidebar_collapsed() {
+            match mode {
+                crate::settings::SidebarMode::Hidden => 0.0,
+                crate::settings::SidebarMode::Icons => SIDEBAR_COLLAPSED_WIDTH,
+                crate::settings::SidebarMode::Hover if self.sidebar_hovered => self.sidebar_width,
+                crate::settings::SidebarMode::Hover => 0.0,
+            }
+        } else {
+            self.sidebar_width
+        };
+        self.animate_sidebar_width_to(target, self.sidebar_collapsed, window, cx);
+        self.sidebar_hovered = mode == crate::settings::SidebarMode::Hover && self.sidebar_hovered;
+        self.preferences.sidebar_mode = mode;
+        crate::settings::save_preferences(&self.preferences);
+        cx.notify();
+    }
     pub(crate) fn active_space(&self) -> &Space {
         self.spaces
             .iter()
@@ -358,7 +381,15 @@ impl Lumen {
             .expect("active space must exist")
     }
     pub(in crate::app) fn effective_sidebar_width(&self) -> f32 {
-        sidebar_width_for(self.is_sidebar_collapsed(), self.sidebar_width)
+        if !self.is_sidebar_collapsed() {
+            return self.sidebar_width;
+        }
+        match self.preferences.sidebar_mode {
+            crate::settings::SidebarMode::Hidden => 0.0,
+            crate::settings::SidebarMode::Icons => SIDEBAR_COLLAPSED_WIDTH,
+            crate::settings::SidebarMode::Hover if self.sidebar_hovered => self.sidebar_width,
+            crate::settings::SidebarMode::Hover => 0.0,
+        }
     }
     pub(crate) fn is_sidebar_collapsed(&self) -> bool {
         crate::plugin::active_layout_preset()

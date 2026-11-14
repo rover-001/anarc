@@ -59,6 +59,7 @@ impl Render for Lumen {
                 eprintln!("Lumen OSR requested frame rate: {refresh_rate} fps");
             }
             self.engine.set_windowless_frame_rate(refresh_rate);
+
             // Synthetic input for repeatable OSR benchmarks on Wayland, where X11
             // window automation cannot target this GPUI window.
             if std::env::var_os("ANARC_AUTOSCROLL").is_some_and(|value| value == "1") {

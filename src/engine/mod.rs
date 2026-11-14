@@ -307,7 +307,7 @@ pub fn detect_system_refresh_rate() -> Option<i32> {
 /// True when hardware GPU rendering is available and not disabled via environment.
 /// On systems without DRI nodes (such as headless environments or virtual machines)
 /// or when software rendering is requested, Anarc falls back to software rendering
-/// and clamps OSR frame rates to 60 fps to prevent CPU saturation.
+/// and lowers the OSR quality settings.
 pub fn has_hardware_gpu() -> bool {
     if std::env::var("ANARC_NO_GPU").is_ok()
         || std::env::var("ANARC_DISABLE_GPU").is_ok()
@@ -339,21 +339,15 @@ pub fn has_hardware_gpu() -> bool {
     true
 }
 
-/// Maximum OSR frame rate cap for systems with hardware GPU acceleration.
-/// Allows full high-refresh display pacing (up to 240 Hz panels) when supported.
+/// OSR frame rate ceiling. The engine paints at the display's refresh rate and
+/// never below it: there is no low-rate fallback that could make pages stutter.
 pub const OSR_MAX_FRAME_RATE: i32 = 240;
-pub const OSR_SOFTWARE_MAX_FRAME_RATE: i32 = 60;
 
 fn osr_frame_rate_cap() -> i32 {
-    let default_cap = if has_hardware_gpu() {
-        OSR_MAX_FRAME_RATE
-    } else {
-        OSR_SOFTWARE_MAX_FRAME_RATE
-    };
     std::env::var("ANARC_OSR_FPS")
         .ok()
         .and_then(|value| value.trim().parse::<i32>().ok())
-        .unwrap_or(default_cap)
+        .unwrap_or(OSR_MAX_FRAME_RATE)
         .clamp(1, 240)
 }
 
@@ -452,6 +446,11 @@ cef::wrap_app! {
                     let name = CefString::from("ozone-platform");
                     let value = CefString::from("x11");
                     command_line.append_switch_with_value(Some(&name), Some(&value));
+                    // Chromium exposes smooth-scroll animation as an opt-in
+                    // switch on Linux. Enable it in CEF so wheel scrolling
+                    // feels like the standalone Chromium browser.
+                    let name = CefString::from("enable-smooth-scrolling");
+                    command_line.append_switch(Some(&name));
                 }
                 let name = CefString::from("renderer-process-limit");
                 let value = CefString::from("4");
@@ -558,17 +557,9 @@ pub struct BrowserSharedState {
     pub screen_origin_y: i32,
     pub cursor: i32,
     pub target_zoom_level: Option<f64>,
-    /// Blink's visual-viewport page scale, driven by trackpad pinch. Unlike
-    /// `target_zoom_level` this magnifies the rendered page without reflowing
-    /// the layout, and it resets to 1 on every navigation.
-    pub page_scale: f64,
-    /// Cumulative visual-viewport scroll offset in pixels, driven by trackpad pinch
-    /// and pan when page_scale > 1.0.
-    pub visual_scroll_x: f64,
-    pub visual_scroll_y: f64,
-    /// Fractional pixel subpixel accumulators for pinch zoom wheel dispatch.
-    pub pinch_accum_x: f64,
-    pub pinch_accum_y: f64,
+    /// Whether the page currently has focus in an editable control. CEF uses
+    /// this to decide if standard key events (such as Space) are intercepted.
+    pub focus_on_editable_field: bool,
     /// Last text selection captured by the context menu handler or copy script.
     pub last_selected_text: Option<String>,
 }
@@ -611,11 +602,7 @@ pub(super) fn new_shared_state(
         screen_origin_y: 0,
         cursor: 0,
         target_zoom_level: Some(zoom_level),
-        page_scale: 1.0,
-        visual_scroll_x: 0.0,
-        visual_scroll_y: 0.0,
-        pinch_accum_x: 0.0,
-        pinch_accum_y: 0.0,
+        focus_on_editable_field: false,
         last_selected_text: None,
     }
 }
@@ -663,6 +650,9 @@ pub struct BrowserEntry {
 pub struct Engine {
     browsers: HashMap<String, BrowserEntry>,
     resize_state: HashMap<String, (Instant, i32, i32)>,
+    /// Button state survives GPUI mouse-move events that omit `pressed_button`
+    /// during trackpad tap-and-drag gestures.
+    pressed_mouse_buttons: HashMap<String, u32>,
     pending_browsers: HashMap<String, Arc<Mutex<BrowserSharedState>>>,
     canceled_browsers: HashSet<String>,
     contexts: HashMap<String, RequestContext>,
@@ -709,7 +699,6 @@ fn resize_debug(message: std::fmt::Arguments<'_>) {
 }
 
 mod browser;
-pub(crate) use browser::{MAX_PAGE_SCALE, MIN_PAGE_SCALE};
 mod cef_runtime;
 pub mod clipboard;
 mod navigation;
@@ -783,10 +772,18 @@ fn cef_mouse_modifiers(modifiers: &gpui_kit::Modifiers) -> u32 {
 /// (and every other drag gesture in page content) never starts.
 fn cef_button_flag(button: gpui_kit::MouseButton) -> u32 {
     match button {
-        gpui_kit::MouseButton::Left => 1,    // EVENTFLAG_LEFT_MOUSE_BUTTON
-        gpui_kit::MouseButton::Middle => 16, // EVENTFLAG_MIDDLE_MOUSE_BUTTON
-        gpui_kit::MouseButton::Right => 32,  // EVENTFLAG_RIGHT_MOUSE_BUTTON
+        gpui_kit::MouseButton::Left => 1 << 4, // EVENTFLAG_LEFT_MOUSE_BUTTON
+        gpui_kit::MouseButton::Middle => 1 << 5, // EVENTFLAG_MIDDLE_MOUSE_BUTTON
+        gpui_kit::MouseButton::Right => 1 << 6, // EVENTFLAG_RIGHT_MOUSE_BUTTON
         gpui_kit::MouseButton::Navigate(_) => 0,
+    }
+}
+
+fn update_pressed_button_flags(current: u32, button_flag: u32, mouse_up: bool) -> u32 {
+    if mouse_up {
+        current & !button_flag
+    } else {
+        current | button_flag
     }
 }
 
@@ -960,7 +957,8 @@ mod tests {
             frame_rate_for_refresh(Some(std::time::Duration::from_millis(240))),
             4
         );
-        // A 240 Hz panel asks for 240 fps of full-frame OSR copies; capped at 60 fps.
+        // A 240 Hz panel asks for 240 fps of full-frame OSR copies, the engine
+        // ceiling; pacing follows the display refresh below that.
         assert_eq!(
             frame_rate_for_refresh(Some(std::time::Duration::from_millis(4))),
             osr_frame_rate_cap()
@@ -1008,15 +1006,15 @@ mod tests {
 
     #[test]
     fn mouse_button_flags_match_cef_event_flags() {
-        assert_eq!(cef_button_flag(gpui_kit::MouseButton::Left), 1);
-        assert_eq!(cef_button_flag(gpui_kit::MouseButton::Middle), 16);
-        assert_eq!(cef_button_flag(gpui_kit::MouseButton::Right), 32);
+        assert_eq!(cef_button_flag(gpui_kit::MouseButton::Left), 1 << 4);
+        assert_eq!(cef_button_flag(gpui_kit::MouseButton::Middle), 1 << 5);
+        assert_eq!(cef_button_flag(gpui_kit::MouseButton::Right), 1 << 6);
         assert_eq!(
             cef_mouse_flags(
                 &gpui_kit::Modifiers::default(),
                 Some(gpui_kit::MouseButton::Left)
             ),
-            1
+            1 << 4
         );
         let shift = gpui_kit::Modifiers {
             shift: true,
@@ -1024,9 +1022,27 @@ mod tests {
         };
         assert_eq!(
             cef_mouse_flags(&shift, Some(gpui_kit::MouseButton::Left)),
-            1 | 2
+            (1 << 4) | 2
         );
         assert_eq!(cef_mouse_flags(&shift, None), 2);
+    }
+
+    #[test]
+    fn pressed_button_state_survives_moves_until_release() {
+        let left = cef_button_flag(gpui_kit::MouseButton::Left);
+        let after_down = update_pressed_button_flags(0, left, false);
+        assert_eq!(after_down, 1 << 4);
+        assert_eq!(
+            cef_mouse_flags(&gpui_kit::Modifiers::default(), None) | after_down,
+            1 << 4
+        );
+
+        let after_up = update_pressed_button_flags(after_down, left, true);
+        assert_eq!(after_up, 0);
+        assert_eq!(
+            update_pressed_button_flags((1 << 4) | (1 << 5), 1 << 4, true),
+            1 << 5
+        );
     }
 
     #[test]

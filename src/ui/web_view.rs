@@ -3,13 +3,15 @@ use std::sync::Arc;
 use gpui_kit::{AnimationExt as _, Context, Render, Window, div, prelude::*, px, rgb};
 
 use crate::app::{CARD_RADIUS, CONTENT_BEZEL_X, Lumen};
-use crate::engine::{MAX_PAGE_SCALE, MIN_PAGE_SCALE};
 #[cfg(test)]
 use crate::ui::visual::TOPBAR_HEIGHT;
 use crate::ui::{
     split_view::frame_logical_size,
     visual::{SpaceTheme, active_topbar_height, space_theme},
 };
+
+mod pinch;
+use pinch::{PinchPreview, clamp_pinch_offset};
 
 /// Crossfading old->new frame on drag release made centred pages visibly bounce
 /// sideways; with live resizing the final frame differs by a few pixels, so swap directly.
@@ -29,43 +31,6 @@ impl ResizeFrameHandoff {
             std::mem::take(&mut self.retaining_old_frame)
         }
     }
-}
-
-/// Live pinch-to-zoom preview.
-///
-/// Blink re-rasterizes the page for every page-scale change — roughly 20 ms per
-/// painted frame in OSR — so forwarding each trackpad step caps a gesture at
-/// ~45 fps however fast the steps arrive. Instead the last painted frame is
-/// scaled and re-anchored here at display rate, and the accumulated scale is
-/// forwarded to Blink once, when the fingers lift.
-struct PinchPreview {
-    /// Tab the gesture started on, so a late release cannot move another tab.
-    tab_id: String,
-    /// Absolute page scale the previewed frame is drawn at.
-    scale: f64,
-    /// Page scale of the frame being scaled; equal to `scale` at 1:1.
-    base_scale: f64,
-    /// Page scale Blink is at, or will be at once an in-flight commit lands.
-    /// Gestures multiply against this instead of the on-screen frame's scale,
-    /// so a pinch started before the previous repaint still commits the right
-    /// factor.
-    page_scale: f64,
-    /// Pane-local focal point in logical pixels, fixed for the whole gesture so
-    /// the preview and the single commit land on the same geometry.
-    anchor: (f32, f32),
-    /// Last gesture update; a preview that stops updating without an end event
-    /// is committed instead of being left on screen.
-    last_update: std::time::Instant,
-    /// Set once the scale has been forwarded and the repaint at that scale is
-    /// still outstanding. Holding the preview until that frame arrives keeps
-    /// the page from flashing back to the previous scale on release.
-    awaiting_frame: bool,
-    /// Set when a new gesture starts while the committed repaint is still
-    /// outstanding: the frame that arrives is already at `page_scale`, so it
-    /// becomes the new `base_scale` instead of ending the preview.
-    rebase: bool,
-    /// Min-scale snap animation started by the release: `(started, from)`.
-    settle: Option<(std::time::Instant, f64)>,
 }
 
 pub struct WebViewport {
@@ -91,10 +56,10 @@ pub struct WebViewport {
     theme: SpaceTheme,
     scroll_accum_x: f32,
     scroll_accum_y: f32,
-    /// Live pinch preview; see [`PinchPreview`].
+    /// Persistent bitmap magnification; see [`PinchPreview`].
     pinch_preview: Option<PinchPreview>,
-    /// Cancels the preview driver when a new gesture or tab takes over.
-    pinch_serial: u64,
+    /// Whether a touch/trackpad pinch gesture is currently active between Started and Ended.
+    pinch_active: bool,
     /// Absolute window-space origin of this viewport. Used by the peek overlay,
     /// which floats outside the regular content column.
     origin_override: Option<(f32, f32)>,
@@ -129,7 +94,7 @@ impl WebViewport {
             scroll_accum_x: 0.0,
             scroll_accum_y: 0.0,
             pinch_preview: None,
-            pinch_serial: 0,
+            pinch_active: false,
             origin_override: None,
             peek_mode: false,
         }
@@ -141,208 +106,6 @@ impl WebViewport {
 
     pub fn set_peek_mode(&mut self, peek_mode: bool) {
         self.peek_mode = peek_mode;
-    }
-
-    /// Starts (or restarts) the local preview for a pinch gesture.
-    ///
-    /// `base_scale` is the page scale of the frame currently on screen. A
-    /// preview still waiting for its committed frame keeps that frame's
-    /// geometry, so two quick pinches never flash back to the old scale.
-    fn begin_pinch(
-        &mut self,
-        tab_id: &str,
-        base_scale: f64,
-        anchor: (f32, f32),
-        cx: &mut Context<Self>,
-    ) {
-        let (scale, base_scale, page_scale, rebase) = match self.pinch_preview.as_ref() {
-            Some(preview) if preview.awaiting_frame => {
-                (preview.scale, preview.base_scale, preview.page_scale, true)
-            }
-            _ => (base_scale, base_scale, base_scale, false),
-        };
-        self.pinch_preview = Some(PinchPreview {
-            tab_id: tab_id.to_owned(),
-            scale,
-            base_scale,
-            page_scale,
-            anchor,
-            last_update: std::time::Instant::now(),
-            awaiting_frame: false,
-            rebase,
-            settle: None,
-        });
-        self.pinch_serial = self.pinch_serial.wrapping_add(1);
-        let serial = self.pinch_serial;
-        self.spawn_pinch_driver(cx, serial);
-    }
-
-    /// Folds one trackpad step into the preview. Every step repaints locally,
-    /// so this is the path that runs at display rate during a gesture.
-    fn step_pinch(&mut self, delta: f32, cx: &mut Context<Self>) {
-        let Some(preview) = self.pinch_preview.as_mut() else {
-            return;
-        };
-        if preview.awaiting_frame || preview.settle.is_some() {
-            return;
-        }
-        let Some(scale) = pinch_step_scale(preview.scale, delta) else {
-            return;
-        };
-        preview.scale = scale;
-        preview.last_update = std::time::Instant::now();
-        cx.notify();
-    }
-
-    /// Ends the gesture: spring back to 100 % when it stopped just above it,
-    /// otherwise hand the accumulated scale to Blink in one go.
-    fn release_pinch(&mut self, cx: &mut Context<Self>) {
-        let Some(preview) = self.pinch_preview.as_mut() else {
-            return;
-        };
-        if preview.awaiting_frame || preview.settle.is_some() {
-            return;
-        }
-        let scale = preview.scale;
-        if (1.0..=PINCH_SNAP_TO_MIN).contains(&scale) && (scale - 1.0).abs() > 1e-3 {
-            preview.settle = Some((std::time::Instant::now(), scale));
-            return;
-        }
-        self.commit_pinch(cx);
-    }
-
-    /// Forwards the accumulated scale to Blink once and keeps the preview up
-    /// until the repaint at the new scale arrives.
-    fn commit_pinch(&mut self, cx: &mut Context<Self>) {
-        let Some(mut preview) = self.pinch_preview.take() else {
-            return;
-        };
-        let factor = preview.scale / preview.page_scale;
-        if !factor.is_finite()
-            || (preview.scale - preview.page_scale).abs() < PINCH_COMMIT_MIN_SCALE_DELTA
-        {
-            cx.notify();
-            return;
-        }
-        let anchor = preview.anchor;
-        let tab_id = preview.tab_id.clone();
-        let forwarded = self
-            .parent
-            .update(cx, |lumen, _| {
-                lumen.engine.pinch_zoom(
-                    &tab_id,
-                    anchor.0.round() as i32,
-                    anchor.1.round() as i32,
-                    factor,
-                );
-            })
-            .is_ok();
-        if forwarded {
-            preview.page_scale = preview.scale;
-            preview.awaiting_frame = true;
-            preview.last_update = std::time::Instant::now();
-            self.pinch_preview = Some(preview);
-        }
-        cx.notify();
-    }
-
-    /// Drops the preview without touching the page, e.g. on a tab switch.
-    fn cancel_pinch(&mut self) {
-        self.pinch_serial = self.pinch_serial.wrapping_add(1);
-        self.pinch_preview = None;
-    }
-
-    /// Reconciles a freshly painted frame with a live preview.
-    ///
-    /// A frame that lands after a commit is already drawn at the committed
-    /// scale, so it ends the preview — or, when a new gesture started while
-    /// that frame was outstanding, becomes the gesture's new base. Without the
-    /// re-base the preview would scale an already-scaled frame a second time.
-    fn on_frame_arrived(&mut self, frame_changed: bool) {
-        if !frame_changed {
-            return;
-        }
-        if self
-            .pinch_preview
-            .as_ref()
-            .is_some_and(|preview| preview.awaiting_frame)
-        {
-            self.cancel_pinch();
-        } else if let Some(preview) = self.pinch_preview.as_mut()
-            && preview.rebase
-        {
-            preview.base_scale = preview.page_scale;
-            preview.rebase = false;
-        }
-    }
-
-    /// Drives the preview: animates the min-scale snap, commits a gesture that
-    /// stopped updating, and exits as soon as the preview is no longer live.
-    fn spawn_pinch_driver(&mut self, cx: &mut Context<Self>, serial: u64) {
-        cx.spawn(async move |this, cx| {
-            loop {
-                let next = this
-                    .update(cx, |this, cx| this.pinch_driver_tick(serial, cx))
-                    .unwrap_or(None);
-                let Some(delay) = next else {
-                    break;
-                };
-                cx.background_executor().timer(delay).await;
-            }
-        })
-        .detach();
-    }
-
-    fn pinch_driver_tick(
-        &mut self,
-        serial: u64,
-        cx: &mut Context<Self>,
-    ) -> Option<std::time::Duration> {
-        if self.pinch_serial != serial {
-            return None;
-        }
-        let (awaiting_frame, settle, idle) = {
-            let preview = self.pinch_preview.as_ref()?;
-            (
-                preview.awaiting_frame,
-                preview.settle,
-                preview.last_update.elapsed(),
-            )
-        };
-        if awaiting_frame {
-            if idle >= PINCH_FRAME_TIMEOUT {
-                self.cancel_pinch();
-                cx.notify();
-                return None;
-            }
-            return Some(PINCH_FRAME_TICK);
-        }
-        if let Some((started, from)) = settle {
-            let progress =
-                f64::from(crate::ui::motion::pinch_settle().progress(started.elapsed())).min(1.0);
-            let done = progress >= 1.0;
-            if let Some(preview) = self.pinch_preview.as_mut() {
-                preview.scale = if done {
-                    1.0
-                } else {
-                    from + (1.0 - from) * progress
-                };
-                if done {
-                    preview.settle = None;
-                }
-            }
-            if done {
-                self.commit_pinch(cx);
-                return None;
-            }
-            cx.notify();
-            return Some(PINCH_SETTLE_TICK);
-        }
-        if idle >= PINCH_STALE_AFTER {
-            self.commit_pinch(cx);
-            return None;
-        }
-        Some(PINCH_ACTIVE_TICK)
     }
 
     pub fn has_content(&self) -> bool {
@@ -374,11 +137,6 @@ impl WebViewport {
         split_layout: bool,
         drag_edge_color: Option<u32>,
     ) {
-        let frame_changed = match (&self.image, &image) {
-            (Some(current), Some(incoming)) => !Arc::ptr_eq(current, incoming),
-            (None, None) => false,
-            _ => true,
-        };
         if self.tab_id != tab_id {
             self.scroll_accum_x = 0.0;
             self.scroll_accum_y = 0.0;
@@ -427,10 +185,6 @@ impl WebViewport {
             self.transition_id = self.transition_id.wrapping_add(1);
             self.transition_cleanup_scheduled = false;
         }
-        // A fresh frame may be the repaint at the committed scale: it either
-        // ends the preview or becomes the new base for a gesture that already
-        // restarted.
-        self.on_frame_arrived(frame_changed);
         self.tab_id = tab_id;
         self.sidebar_width = effective_sidebar_width;
         self.image = image;
@@ -450,11 +204,6 @@ impl WebViewport {
         cursor: i32,
         retired_images: Vec<Arc<gpui_kit::RenderImage>>,
     ) {
-        let frame_changed = match (&self.image, &image) {
-            (Some(current), Some(incoming)) => !Arc::ptr_eq(current, incoming),
-            (None, None) => false,
-            _ => true,
-        };
         if self.tab_id != tab_id {
             self.cancel_pinch();
             if image.is_some() {
@@ -468,7 +217,6 @@ impl WebViewport {
                 self.transition_cleanup_scheduled = false;
             }
         }
-        self.on_frame_arrived(frame_changed);
         self.tab_id = tab_id;
         self.image = image;
         self.cursor = cursor;
@@ -507,54 +255,6 @@ fn step_scroll_accum(accum: &mut f32, delta: f32) -> i32 {
         *accum -= step as f32;
     }
     step
-}
-
-/// Trackpad steps arrive faster than the window repaints, and every step is a
-/// local frame transform, so nothing is coalesced here: each one updates the
-/// preview and the compositor takes the newest state at its next vsync.
-const PINCH_ACTIVE_TICK: std::time::Duration = std::time::Duration::from_millis(16);
-
-/// Tick rate for the min-scale snap, matching a 120 Hz display.
-const PINCH_SETTLE_TICK: std::time::Duration = std::time::Duration::from_millis(8);
-
-/// A gesture that stops updating without an end event (focus loss, cancelled
-/// platform gesture) is committed after this long instead of sticking.
-const PINCH_STALE_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
-
-/// Scale changes below this are not worth a page-scale round trip. Blink
-/// ignores anything under 0.0005, and a commit it ignores would never produce
-/// the repaint the preview waits for.
-const PINCH_COMMIT_MIN_SCALE_DELTA: f64 = 5e-4;
-
-/// While a commit is waiting for its repaint the preview holds its geometry;
-/// it is polled on this cadence so a lost frame cannot pin the preview up.
-const PINCH_FRAME_TICK: std::time::Duration = std::time::Duration::from_millis(100);
-
-/// Longest a committed preview waits for the repaint before giving up.
-const PINCH_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(700);
-
-/// A released pinch that stopped this close to 100 % snaps back to it, matching
-/// Blink's min-scale snap threshold.
-const PINCH_SNAP_TO_MIN: f64 = 1.05;
-
-/// Absolute page scale after one trackpad step. Steps are relative factors
-/// (0.05 == 5 % larger), so they multiply; the result stays inside Blink's
-/// visual-viewport range, and non-finite or sub-pixel steps are ignored.
-fn pinch_step_scale(current: f64, delta: f32) -> Option<f64> {
-    if !delta.is_finite() || !current.is_finite() || current <= 0.0 {
-        return None;
-    }
-    let factor = f64::from((1.0 + delta).clamp(0.5, 2.0));
-    let next = (current * factor).clamp(MIN_PAGE_SCALE, MAX_PAGE_SCALE);
-    ((next - current).abs() > 1e-6).then_some(next)
-}
-
-/// Top-left offset of the previewed frame inside the pane. Scaling around the
-/// focal point keeps the page content under the cursor stationary, which is
-/// the same geometry the single commit re-anchors to.
-fn pinch_preview_offset(anchor: (f32, f32), factor: f32) -> (f32, f32) {
-    let travel = factor - 1.0;
-    (-anchor.0 * travel, -anchor.1 * travel)
 }
 
 fn browser_point_in_pane(
@@ -602,7 +302,6 @@ impl Render for WebViewport {
         let tab_id_up = self.tab_id.clone();
         let tab_id_move = self.tab_id.clone();
         let tab_id_scroll = self.tab_id.clone();
-        let tab_id_pinch = self.tab_id.clone();
         let tab_id_exit = self.tab_id.clone();
         let down_sidebar = self.sidebar_width;
         let pane_offset = self.pane_offset;
@@ -610,12 +309,10 @@ impl Render for WebViewport {
         let up_sidebar = self.sidebar_width;
         let move_sidebar = self.sidebar_width;
         let scroll_sidebar = self.sidebar_width;
-        let pinch_sidebar = self.sidebar_width;
         let parent_down = self.parent.clone();
         let parent_up = self.parent.clone();
         let parent_move = self.parent.clone();
         let parent_scroll = self.parent.clone();
-        let parent_pinch = self.parent.clone();
         let parent_right_down = self.parent.clone();
         let parent_right_up = self.parent.clone();
         let parent_middle_down = self.parent.clone();
@@ -841,16 +538,16 @@ impl Render for WebViewport {
             )
             .on_mouse_down(
                 gpui_kit::MouseButton::Left,
-                cx.listener(move |_, event: &gpui_kit::MouseDownEvent, window, cx| {
+                cx.listener(move |this, event: &gpui_kit::MouseDownEvent, window, cx| {
                     let parent = parent_down.clone();
                     let tab_id = tab_id_down.clone();
-                    let (x, y) = browser_point_at(
+                    let (x, y) = this.map_browser_point(browser_point_at(
                         event.position,
                         down_sidebar,
                         pane_offset,
                         fullscreen,
                         origin_override,
-                    );
+                    ));
                     parent
                         .update(cx, |this, cx| {
                             if peek_mode {
@@ -875,14 +572,14 @@ impl Render for WebViewport {
             )
             .on_mouse_up(
                 gpui_kit::MouseButton::Left,
-                cx.listener(move |_, event: &gpui_kit::MouseUpEvent, _, cx| {
-                    let (x, y) = browser_point_at(
+                cx.listener(move |this, event: &gpui_kit::MouseUpEvent, _, cx| {
+                    let (x, y) = this.map_browser_point(browser_point_at(
                         event.position,
                         up_sidebar,
                         pane_offset,
                         fullscreen,
                         origin_override,
-                    );
+                    ));
                     parent_up
                         .update(cx, |this, _| {
                             this.engine.send_mouse_click(
@@ -900,14 +597,14 @@ impl Render for WebViewport {
             )
             .on_mouse_down(
                 gpui_kit::MouseButton::Right,
-                cx.listener(move |_, event: &gpui_kit::MouseDownEvent, window, cx| {
-                    let (x, y) = browser_point_at(
+                cx.listener(move |this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                    let (x, y) = this.map_browser_point(browser_point_at(
                         event.position,
                         sidebar_right_down,
                         pane_offset,
                         fullscreen,
                         origin_override,
-                    );
+                    ));
                     let screen_x = f32::from(event.position.x);
                     let screen_y = f32::from(event.position.y);
                     let menu_tab_id = tab_id_right_down.clone();
@@ -936,14 +633,14 @@ impl Render for WebViewport {
             )
             .on_mouse_up(
                 gpui_kit::MouseButton::Right,
-                cx.listener(move |_, event: &gpui_kit::MouseUpEvent, _, cx| {
-                    let (x, y) = browser_point_at(
+                cx.listener(move |this, event: &gpui_kit::MouseUpEvent, _, cx| {
+                    let (x, y) = this.map_browser_point(browser_point_at(
                         event.position,
                         sidebar_right_up,
                         pane_offset,
                         fullscreen,
                         origin_override,
-                    );
+                    ));
                     parent_right_up
                         .update(cx, |this, _| {
                             this.engine.send_mouse_click(
@@ -961,14 +658,14 @@ impl Render for WebViewport {
             )
             .on_mouse_down(
                 gpui_kit::MouseButton::Middle,
-                cx.listener(move |_, event: &gpui_kit::MouseDownEvent, window, cx| {
-                    let (x, y) = browser_point_at(
+                cx.listener(move |this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                    let (x, y) = this.map_browser_point(browser_point_at(
                         event.position,
                         sidebar_middle_down,
                         pane_offset,
                         fullscreen,
                         origin_override,
-                    );
+                    ));
                     parent_middle_down
                         .update(cx, |this, cx| {
                             if peek_mode {
@@ -992,14 +689,14 @@ impl Render for WebViewport {
             )
             .on_mouse_up(
                 gpui_kit::MouseButton::Middle,
-                cx.listener(move |_, event: &gpui_kit::MouseUpEvent, _, cx| {
-                    let (x, y) = browser_point_at(
+                cx.listener(move |this, event: &gpui_kit::MouseUpEvent, _, cx| {
+                    let (x, y) = this.map_browser_point(browser_point_at(
                         event.position,
                         sidebar_middle_up,
                         pane_offset,
                         fullscreen,
                         origin_override,
-                    );
+                    ));
                     parent_middle_up
                         .update(cx, |this, _| {
                             this.engine.send_mouse_click(
@@ -1032,14 +729,14 @@ impl Render for WebViewport {
                 }),
             )
             .on_mouse_move(
-                cx.listener(move |_, event: &gpui_kit::MouseMoveEvent, _, cx| {
-                    let (x, y) = browser_point_at(
+                cx.listener(move |this, event: &gpui_kit::MouseMoveEvent, _, cx| {
+                    let (x, y) = this.map_browser_point(browser_point_at(
                         event.position,
                         move_sidebar,
                         pane_offset,
                         fullscreen,
                         origin_override,
-                    );
+                    ));
                     parent_move
                         .update(cx, |this, _| {
                             this.engine.send_mouse_move(
@@ -1069,48 +766,44 @@ impl Render for WebViewport {
                     .ok();
             }))
             .on_pinch(cx.listener(
-                move |this, event: &gpui_kit::PinchEvent, _, cx| {
+                move |this, event: &gpui_kit::PinchEvent, window, cx| {
                     let (x, y) = browser_point_at(
                         event.position,
-                        pinch_sidebar,
+                        this.sidebar_width,
                         pane_offset,
                         fullscreen,
                         origin_override,
                     );
+                    let viewport_size = this.image.as_ref().map_or((1.0, 1.0), |image| {
+                        let size = image.size(0);
+                        frame_logical_size(
+                            u32::from(size.width),
+                            u32::from(size.height),
+                            window.scale_factor(),
+                        )
+                    });
                     match event.phase {
                         gpui_kit::TouchPhase::Started => {
-                            let base_scale = parent_pinch
-                                .update(cx, |lumen, _| lumen.engine.page_scale(&tab_id_pinch))
-                                .unwrap_or(1.0);
-                            this.begin_pinch(
-                                &tab_id_pinch,
-                                base_scale,
-                                (x as f32, y as f32),
-                                cx,
-                            );
+                            this.begin_pinch((x as f32, y as f32));
                         }
                         gpui_kit::TouchPhase::Ended | gpui_kit::TouchPhase::Cancelled => {
-                            this.release_pinch(cx);
+                            this.pinch_active = false;
                         }
                         _ => {
-                            if this.pinch_preview.is_none() {
-                                let base_scale = parent_pinch
-                                    .update(cx, |lumen, _| lumen.engine.page_scale(&tab_id_pinch))
-                                    .unwrap_or(1.0);
-                                this.begin_pinch(
-                                    &tab_id_pinch,
-                                    base_scale,
+                            if this.pinch_active {
+                                this.step_pinch(
+                                    event.delta,
                                     (x as f32, y as f32),
+                                    viewport_size,
                                     cx,
                                 );
                             }
-                            this.step_pinch(event.delta, cx);
                         }
                     }
                 },
             ))
             .on_scroll(
-                cx.listener(move |this, event: &gpui_kit::ScrollEvent, _, cx| {
+                cx.listener(move |this, event: &gpui_kit::ScrollEvent, window, cx| {
                     let (x, y) = browser_point_at(
                         event.position,
                         scroll_sidebar,
@@ -1123,6 +816,22 @@ impl Render for WebViewport {
                         gpui_kit::ScrollDelta::Pixels(p) => (f32::from(p.x), f32::from(p.y)),
                         gpui_kit::ScrollDelta::Lines(l) => (l.x * 100.0, l.y * 100.0),
                     };
+                    if this
+                        .pinch_preview
+                        .as_ref()
+                        .is_some_and(|preview| preview.scale > 1.0 + 1e-3)
+                    {
+                        let viewport_size = this.image.as_ref().map_or((1.0, 1.0), |image| {
+                            let size = image.size(0);
+                            frame_logical_size(
+                                u32::from(size.width),
+                                u32::from(size.height),
+                                window.scale_factor(),
+                            )
+                        });
+                        this.pan_image((-dx, -dy), viewport_size, cx);
+                        return;
+                    }
                     let step_x = step_scroll_accum(&mut this.scroll_accum_x, dx);
                     let step_y = step_scroll_accum(&mut this.scroll_accum_y, dy);
                     if step_x != 0 || step_y != 0 {
@@ -1143,18 +852,18 @@ impl Render for WebViewport {
                 }),
             )
             .on_drop(
-                cx.listener(move |_, drag: &gpui_kit::ExternalPaths, window, cx| {
+                cx.listener(move |this, drag: &gpui_kit::ExternalPaths, window, cx| {
                     let paths = drag.paths().to_vec();
                     if paths.is_empty() {
                         return;
                     }
-                    let (x, y) = browser_point_at(
+                    let (x, y) = this.map_browser_point(browser_point_at(
                         window.mouse_position(),
                         drop_sidebar,
                         pane_offset,
                         fullscreen,
                         origin_override,
-                    );
+                    ));
                     let _ = drop_parent.update(cx, |this, _| {
                         this.engine.send_drag_drop_files(&drop_tab_id, &paths, x, y);
                     });
@@ -1184,20 +893,12 @@ impl Render for WebViewport {
         }
         if transitioning {
             if let Some(image) = self.previous_image.clone() {
-                let size = image.size(0);
-                let (width, height) = frame_logical_size(
-                    u32::from(size.width),
-                    u32::from(size.height),
-                    window.scale_factor(),
-                );
                 viewport = viewport.child(
                     div()
                         .absolute()
                         .top_0()
                         .left_0()
-                        .w(px(width))
-                        .h(px(height))
-                        .rounded(px(CARD_RADIUS))
+                        .size_full()
                         .overflow_hidden()
                         .with_animation(
                             format!("web-view-outgoing-{transition_id}"),
@@ -1206,29 +907,21 @@ impl Render for WebViewport {
                                 element.opacity(crate::ui::motion::clamp_percentage(1.0 - progress))
                             },
                         )
-                        .child(gpui_kit::img(image).size_full().rounded(px(CARD_RADIUS))),
+                        .child(gpui_kit::img(image).size_full()),
                 );
             }
         } else if self.transition_waiting_for_image
             && self.transition_tab.as_deref() == Some(self.tab_id.as_str())
         {
             if let Some(image) = self.previous_image.clone() {
-                let size = image.size(0);
-                let (width, height) = frame_logical_size(
-                    u32::from(size.width),
-                    u32::from(size.height),
-                    window.scale_factor(),
-                );
                 viewport = viewport.child(
                     div()
                         .absolute()
                         .top_0()
                         .left_0()
-                        .w(px(width))
-                        .h(px(height))
-                        .rounded(px(CARD_RADIUS))
+                        .size_full()
                         .overflow_hidden()
-                        .child(gpui_kit::img(image).size_full().rounded(px(CARD_RADIUS))),
+                        .child(gpui_kit::img(image).size_full()),
                 );
             }
         } else if self.transition_tab.as_deref() == Some(self.tab_id.as_str()) {
@@ -1237,33 +930,37 @@ impl Render for WebViewport {
 
         if let Some(image) = self.image.clone() {
             let size = image.size(0);
-            let (width, height) = frame_logical_size(
-                u32::from(size.width),
-                u32::from(size.height),
-                window.scale_factor(),
-            );
-            // A live pinch scales this frame around the gesture focal point at
-            // display rate; Blink only repaints once, on release.
+            let pane_scale = window.scale_factor();
+            let (width, height) =
+                frame_logical_size(u32::from(size.width), u32::from(size.height), pane_scale);
             let (pinch_factor, pinch_offset) =
                 self.pinch_preview
                     .as_ref()
                     .map_or((1.0, (0.0, 0.0)), |preview| {
-                        let factor = (preview.scale / preview.base_scale) as f32;
-                        if !factor.is_finite() || (factor - 1.0).abs() <= 1e-4 {
-                            (1.0, (0.0, 0.0))
-                        } else {
-                            (factor, pinch_preview_offset(preview.anchor, factor))
-                        }
+                        (
+                            preview.scale as f32,
+                            clamp_pinch_offset(
+                                preview.offset,
+                                preview.scale as f32,
+                                (width, height),
+                            ),
+                        )
                     });
-            let current = div()
-                .absolute()
-                .top(px(pinch_offset.1))
-                .left(px(pinch_offset.0))
-                .w(px(width * pinch_factor))
-                .h(px(height * pinch_factor))
-                .rounded(px(CARD_RADIUS))
-                .overflow_hidden()
-                .child(gpui_kit::img(image).size_full().rounded(px(CARD_RADIUS)));
+            let current = if pinch_factor > 1.0 + 1e-4 {
+                div()
+                    .absolute()
+                    .top(px(pinch_offset.1.min(0.0)))
+                    .left(px(pinch_offset.0.min(0.0)))
+                    .w(px(width * pinch_factor))
+                    .h(px(height * pinch_factor))
+                    .overflow_hidden()
+                    .child(gpui_kit::img(image).size_full())
+            } else {
+                div()
+                    .size_full()
+                    .overflow_hidden()
+                    .child(gpui_kit::img(image).size_full())
+            };
             let current = if transitioning {
                 current
                     .with_animation(
@@ -1401,26 +1098,5 @@ mod tests {
         assert!((accum - 0.1).abs() < 1e-5);
         assert_eq!(step_scroll_accum(&mut accum, -1.3), -1);
         assert!((accum - (-0.2)).abs() < 1e-5);
-    }
-
-    #[test]
-    fn pinch_steps_scale_around_the_gesture_and_ignore_noise() {
-        assert_eq!(pinch_step_scale(1.0, f32::NAN), None);
-        assert_eq!(pinch_step_scale(1.0, -1.0), None);
-        assert!((pinch_step_scale(1.0, 0.1).unwrap() - 1.1).abs() < 1e-6);
-        // Blink clamps the visual viewport to 100 %..400 %.
-        assert_eq!(pinch_step_scale(1.0, 5.0), Some(2.0));
-        assert_eq!(pinch_step_scale(4.0, 1.0), None);
-        // Steps smaller than the tracked precision leave the frame alone.
-        assert_eq!(pinch_step_scale(1.5, 1e-9), None);
-    }
-
-    #[test]
-    fn pinch_preview_keeps_the_focal_point_stationary() {
-        let (offset_x, offset_y) = pinch_preview_offset((100.0, 40.0), 2.0);
-        assert!((offset_x + 100.0).abs() < 1e-4);
-        assert!((offset_y + 40.0).abs() < 1e-4);
-        // 1:1 leaves the frame exactly where it is drawn without a preview.
-        assert_eq!(pinch_preview_offset((100.0, 40.0), 1.0), (0.0, 0.0));
     }
 }

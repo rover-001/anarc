@@ -116,6 +116,7 @@ pub(crate) struct Lumen {
     pub(super) spaces: Vec<Space>,
     pub(super) active_space: String,
     pub(super) sidebar_collapsed: bool,
+    pub(super) sidebar_hovered: bool,
     pub(super) sidebar_width: f32,
     pub(super) sidebar_resizing: bool,
     pub(super) sidebar_width_transition: Option<(f32, f32, Instant, u64)>,

@@ -209,8 +209,18 @@ pub(crate) fn unregister_owned_search_engines(owner: &str) -> usize {
 pub(crate) struct BrowserPreferences {
     pub(crate) default_zoom_factor: f64,
     pub(crate) search_engine: SearchEngine,
+    pub(crate) sidebar_mode: SidebarMode,
     #[serde(default = "default_ad_blocker_enabled")]
     pub(crate) ad_blocker_enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SidebarMode {
+    Hidden,
+    #[default]
+    Icons,
+    Hover,
 }
 
 fn default_ad_blocker_enabled() -> bool {
@@ -222,6 +232,7 @@ impl Default for BrowserPreferences {
         Self {
             default_zoom_factor: crate::ui::visual::DEFAULT_PAGE_ZOOM_FACTOR,
             search_engine: SearchEngine::Google,
+            sidebar_mode: SidebarMode::Icons,
             ad_blocker_enabled: true,
         }
     }
