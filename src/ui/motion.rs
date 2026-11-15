@@ -186,11 +186,6 @@ pub fn theme() -> SpringSpec {
     spec(0.28, 1.0)
 }
 
-/// Visual-viewport zoom settling after a pinch ends.
-pub fn pinch_settle() -> SpringSpec {
-    spec(0.18, 1.0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,7 +231,6 @@ mod tests {
         };
         assert!(peak(theme()) <= 1.0001);
         assert!(peak(row_exit()) <= 1.0001);
-        assert!(peak(pinch_settle()) <= 1.0001);
         assert!(peak(pop()) > 1.0);
         assert!(peak(pop()) < 1.1);
     }
@@ -263,7 +257,6 @@ mod tests {
             row_enter(),
             row_exit(),
             theme(),
-            pinch_settle(),
         ] {
             assert!(
                 spec.settle_time() <= Duration::from_millis(900),

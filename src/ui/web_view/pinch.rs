@@ -26,6 +26,7 @@ impl WebViewport {
             anchor,
             gesture_scale: 1.0,
         });
+        self.scroll_motion.cancel();
         self.pinch_active = true;
     }
 
