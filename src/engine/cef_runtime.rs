@@ -83,6 +83,12 @@ impl Engine {
             external_message_pump: 0,
             multi_threaded_message_loop: 1,
             windowless_rendering_enabled: 1,
+            // Opt-in CDP access for tools/scroll-benchmark. Disabled in normal runs.
+            remote_debugging_port: std::env::var("ANARC_REMOTE_DEBUGGING_PORT")
+                .ok()
+                .and_then(|port| port.parse::<u16>().ok())
+                .filter(|port| *port >= 1024)
+                .map_or(0, i32::from),
             browser_subprocess_path: CefString::from(current_exe.to_string_lossy().as_ref()),
             resources_dir_path: CefString::from(cef_resources_dir.to_string_lossy().as_ref()),
             locales_dir_path: CefString::from(locales_dir.to_string_lossy().as_ref()),
