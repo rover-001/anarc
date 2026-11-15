@@ -6,6 +6,9 @@ title: "Memory Index"
 
 | Title | Type | Date | Tags | Summary |
 | :--- | :--- | :--- | :--- | :--- |
+| **Web view container enforces size_full layout and suppresses trailing pinch moves** (`web-view-container-enforces-sizefull-layout-and-suppresses-trailing-pinch-moves.md`) | `decision` | 2026-11-14 | - | Root cause of the floating 50% card shrinkage on trackpad... |
+| **Pinch preview enforces floor factor of 1.0 to prevent card shrinkage** (`pinch-preview-enforces-floor-factor-of-10-to-prevent-card-shrinkage.md`) | `decision` | 2026-11-14 | - | Render for WebViewport previously calculated factor = sca... |
+| **Pinch-in releases clean preview state and restores zero horizontal drift** (`pinch-in-releases-clean-preview-state-and-restores-zero-horizontal-drift.md`) | `decision` | 2026-11-14 | - | When returning to natural scale (scale <= 1.0005) or rele... |
 | **Window disables GPUI inactive frame interval so background pages keep full cadence** (`window-disables-gpui-inactive-frame-interval-so-background-pages-keep-full-cadence.md`) | `decision` | 2026-11-13 | - | GPUI caps unfocused/inactive windows at ~30 fps via Windo... |
 | **Pinch zoom is previewed locally and committed once on release** (`pinch-zoom-is-previewed-locally-and-committed-once-on-release.md`) | `decision` | 2026-11-13 | - | Blink re-rasterizes on every page-scale change (~20 ms/fr... |
 | **Physics-based motion system (springs) for all UI animations** (`physics-based-motion-system-springs-for-all-ui-animations.md`) | `decision` | 2026-11-13 | - | Replaced duration+easing animations with Apple (response,... |

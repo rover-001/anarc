@@ -282,3 +282,23 @@ Implemented physics-based motion per ios-fluid-motion: rewrote src/ui/motion.rs 
 ## Session 2026-11-13T16:22:00.529849073+00:00
 
 Fixed background-window lag: src/main.rs opens the GPUI window with inactive_frame_interval: None (GPUI/default ~30 fps cap for unfocused windows was the cause; rendering remains demand-driven). Finished the page_scale refactor in the pinch preview: commit_pinch scales by preview.scale/preview.page_scale, records page_scale on success, and on_frame_arrived re-bases to page_scale. Verified cargo fmt, clippy --all-targets clean, 190 tests pass, release build stable with 0 panics, RSS ~397 MB, 77-119 root UI renders/s at OSR 144 fps; all temporary instrumentation removed and the ui_update wake-up wait restored. Recorded both architecture decisions in heald memory.
+
+## Session 2026-11-14T05:13:33.167910142+00:00
+
+Fixed trackpad pinch-in release causing websites to shrink/adapt and breaking subsequent pinch-out gestures. WebViewport now clears pinch preview immediately on return to natural scale (<= 1.0005) instead of holding awaiting_frame=true with stale base_scale, and Engine::pinch_zoom locks horizontal scroll to 0.0 and resets page scale and pinch view.
+
+## Session 2026-11-14T05:30:05.651344882+00:00
+
+Eliminated floating card shrinkage on pinch-in by enforcing floor factor of 1.0 on WebViewport pinch preview and resetting preview immediately on release. Built and installed release binary to ~/.local/share/anarc.
+
+## Session 2026-11-14T05:51:30.941184572+00:00
+
+Added three configurable collapsed sidebar modes (hidden, tab icons, reveal on hover), Ctrl+S toggle, spring width/fade transitions, and an address bar copy-page-link button. cargo fmt, cargo check, and git diff --check passed.
+
+## Session 2026-11-14T06:10:27.780033853+00:00
+
+Fixed trackpad pinch-in release causing the webpage to shrink into a 50% floating card. WebViewport container now enforces size_full() layout whenever unzoomed or returning to natural scale (pinch_factor <= 1.0), offsets are clamped to non-positive min(0.0) so content never detaches from the viewport edges, and pinch_active drops trailing TouchPhase::Moved events after gesture release. Built and installed release binary.
+
+## Session 2026-11-14T09:11:29.200164072+00:00
+
+Trimmed browser wheel scroll speed by 8% in WebViewport while preserving CEF native smooth scrolling and compositor momentum; no per-frame animation was added. Diff check passed; tests not run.
