@@ -627,9 +627,15 @@ cef::wrap_render_handler! {
                 let render_image = Arc::new(RenderImage::new(smallvec::smallvec![frame]));
                 let mut state = self.shared.lock().unwrap();
                 let now = std::time::Instant::now();
+                // OSR buffers are physical pixels; pane dimensions are DIPs.
+                // Compare consecutive buffers so HiDPI does not resample every paint.
+                let frame_size_changed = state.image.as_ref().is_none_or(|image| {
+                    let size = image.size(0);
+                    u32::from(size.width) != width as u32
+                        || u32::from(size.height) != height as u32
+                });
                 let should_calc_edge = state.edge_color.is_none()
-                    || state.width != width
-                    || state.height != height
+                    || frame_size_changed
                     || state.last_edge_color_instant.is_none_or(|t| {
                         now.duration_since(t) >= std::time::Duration::from_millis(1000)
                     });
