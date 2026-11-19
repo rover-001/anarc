@@ -308,6 +308,11 @@ impl Lumen {
         self.engine.close_browser(tab_id);
         let closed = space.tabs.remove(index);
         self.recently_closed_tabs.push((space.id.clone(), closed));
+        const MAX_RECENTLY_CLOSED: usize = 25;
+        if self.recently_closed_tabs.len() > MAX_RECENTLY_CLOSED {
+            let excess = self.recently_closed_tabs.len() - MAX_RECENTLY_CLOSED;
+            self.recently_closed_tabs.drain(..excess);
+        }
         if space.tabs.is_empty() {
             let id = next_tab_id(space);
             space.tabs.push(Tab::new(&id, "New tab", "about:blank"));
