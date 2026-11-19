@@ -631,8 +631,6 @@ cef::wrap_render_handler! {
             width: ::std::os::raw::c_int,
             height: ::std::os::raw::c_int,
         ) {
-            let paint_started = std::time::Instant::now();
-            let copy_started = paint_started;
             // Popup widgets (e.g. <select> dropdowns) arrive as separate PET_POPUP
             // buffers; they must not replace the main view frame.
             if type_ != PaintElementType::VIEW {
@@ -644,7 +642,6 @@ cef::wrap_render_handler! {
             let len = (width as usize) * (height as usize) * 4;
             let slice = unsafe { std::slice::from_raw_parts(buffer, len) };
             let pixels = copy_frame_pixels(slice);
-            crate::stats::record_image_copy(copy_started.elapsed());
             if let Some(img_buffer) = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
                 width as u32,
                 height as u32,
@@ -670,15 +667,9 @@ cef::wrap_render_handler! {
                     state.edge_color = median_edge_color_bgra(slice, width as usize, height as usize);
                     state.last_edge_color_instant = Some(std::time::Instant::now());
                 }
-                let superseded = state.pending_image.replace(render_image);
-                state.pending_image_at = Some(std::time::Instant::now());
+                state.pending_image = Some(render_image);
                 state.dirty = true;
-                drop(state);
-                if superseded.is_some() {
-                    crate::stats::record_coalesced_cef_paint();
-                }
             }
-            crate::stats::record_cef_paint(paint_started.elapsed());
             let _ = self.paint_wake.try_send(());
         }
     }
@@ -974,9 +965,6 @@ cef::wrap_life_span_handler! {
             if let Some(host) = browser.host() {
                 host.set_windowless_frame_rate(self.frame_rate);
                 host.set_zoom_level(self.initial_zoom_level.clamp(-5.0, 5.0));
-                if std::env::var_os("ANARC_STATS").is_some_and(|value| value == "1") {
-                    eprintln!("Lumen CEF OSR frame rate: {} fps", host.windowless_frame_rate());
-                }
             }
             if self.shutdown_requested.load(std::sync::atomic::Ordering::Acquire) {
                 if let Some(host) = browser.host() {

@@ -12,7 +12,6 @@ mod plugins;
 mod reader;
 mod settings;
 mod shield;
-mod stats;
 mod ui;
 
 use gpui_kit::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};

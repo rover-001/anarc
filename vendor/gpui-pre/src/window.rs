@@ -60,165 +60,12 @@ use std::{
     rc::Rc,
     sync::{
         Arc, Weak,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering, Ordering::SeqCst},
+        atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
     },
     thread::AccessError,
     time::Duration,
 };
 use uuid::Uuid;
-
-static GPUI_PHASE_EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-static GPUI_PHASE_LAST_LOG: AtomicU64 = AtomicU64::new(0);
-static GPUI_LAYOUT_NANOS: AtomicU64 = AtomicU64::new(0);
-static GPUI_PREPAINT_NANOS: AtomicU64 = AtomicU64::new(0);
-static GPUI_PAINT_NANOS: AtomicU64 = AtomicU64::new(0);
-static GPUI_PRESENT_NANOS: AtomicU64 = AtomicU64::new(0);
-static GPUI_PHASE_FRAMES: AtomicU64 = AtomicU64::new(0);
-static GPUI_NATIVE_FRAMES: AtomicU64 = AtomicU64::new(0);
-static GPUI_LOCAL_FRAMES: AtomicU64 = AtomicU64::new(0);
-static GPUI_NATIVE_CALLBACKS: AtomicU64 = AtomicU64::new(0);
-static GPUI_SCHEDULED_TICKS: AtomicU64 = AtomicU64::new(0);
-static GPUI_RETRY_TICKS: AtomicU64 = AtomicU64::new(0);
-static GPUI_WAYLAND_TICKS: AtomicU64 = AtomicU64::new(0);
-static GPUI_X11_TICKS: AtomicU64 = AtomicU64::new(0);
-static GPUI_X11_MAX_LATENESS_NANOS: AtomicU64 = AtomicU64::new(0);
-static GPUI_SIGNAL_DELAY_NANOS: AtomicU64 = AtomicU64::new(0);
-static GPUI_FRAME_SIGNALS: AtomicU64 = AtomicU64::new(0);
-static GPUI_CALLBACK_DELAY_NANOS: AtomicU64 = AtomicU64::new(0);
-static GPUI_CALLBACKS: AtomicU64 = AtomicU64::new(0);
-static GPUI_LOCAL_RECOVERIES: AtomicU64 = AtomicU64::new(0);
-static GPUI_RECOVERY_DELAY_NANOS: AtomicU64 = AtomicU64::new(0);
-static GPUI_PHASE_LOG_SENDER: std::sync::OnceLock<std::sync::mpsc::SyncSender<String>> =
-    std::sync::OnceLock::new();
-
-fn emit_gpui_phase_log(line: String) {
-    let sender = GPUI_PHASE_LOG_SENDER.get_or_init(|| {
-        let (sender, receiver) = std::sync::mpsc::sync_channel::<String>(8);
-        let _ = std::thread::Builder::new()
-            .name("gpui-phase-log-writer".into())
-            .spawn(move || {
-                let log_path = std::env::var_os("ANARC_SCROLL_LOG")
-                    .unwrap_or_else(|| "scroll.log".into());
-                let mut file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(log_path)
-                    .ok();
-                while let Ok(line) = receiver.recv() {
-                    eprint!("{line}");
-                    if let Some(file) = &mut file {
-                        use std::io::Write as _;
-                        let _ = file.write_all(line.as_bytes());
-                    }
-                }
-            });
-        sender
-    });
-    let _ = sender.try_send(line);
-}
-
-fn record_gpui_phase(layout: Duration, prepaint: Duration, paint: Duration) {
-    GPUI_LAYOUT_NANOS.fetch_add(layout.as_nanos() as u64, Ordering::Relaxed);
-    GPUI_PREPAINT_NANOS.fetch_add(prepaint.as_nanos() as u64, Ordering::Relaxed);
-    GPUI_PAINT_NANOS.fetch_add(paint.as_nanos() as u64, Ordering::Relaxed);
-    let frames = GPUI_PHASE_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
-    let epoch = GPUI_PHASE_EPOCH.get_or_init(Instant::now);
-    let now = epoch.elapsed().as_nanos() as u64;
-    let last = GPUI_PHASE_LAST_LOG.load(Ordering::Relaxed);
-    if now.saturating_sub(last) < 500_000_000
-        || GPUI_PHASE_LAST_LOG
-            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
-            .is_err()
-    {
-        return;
-    }
-    let frames = frames.max(1);
-    let layout = GPUI_LAYOUT_NANOS.swap(0, Ordering::Relaxed) as f64 / frames as f64 / 1e6;
-    let prepaint = GPUI_PREPAINT_NANOS.swap(0, Ordering::Relaxed) as f64 / frames as f64 / 1e6;
-    let paint = GPUI_PAINT_NANOS.swap(0, Ordering::Relaxed) as f64 / frames as f64 / 1e6;
-    let present = GPUI_PRESENT_NANOS.swap(0, Ordering::Relaxed) as f64 / frames as f64 / 1e6;
-    let native = GPUI_NATIVE_FRAMES.swap(0, Ordering::Relaxed);
-    let local = GPUI_LOCAL_FRAMES.swap(0, Ordering::Relaxed);
-    let native_callbacks = GPUI_NATIVE_CALLBACKS.swap(0, Ordering::Relaxed);
-    let scheduled_ticks = GPUI_SCHEDULED_TICKS.swap(0, Ordering::Relaxed);
-    let retry_ticks = GPUI_RETRY_TICKS.swap(0, Ordering::Relaxed);
-    let wayland_ticks = GPUI_WAYLAND_TICKS.swap(0, Ordering::Relaxed);
-    let x11_ticks = GPUI_X11_TICKS.swap(0, Ordering::Relaxed);
-    let x11_max_lateness = GPUI_X11_MAX_LATENESS_NANOS.swap(0, Ordering::Relaxed) as f64 / 1e6;
-    let signals = GPUI_FRAME_SIGNALS.swap(0, Ordering::Relaxed);
-    let signal_delay = GPUI_SIGNAL_DELAY_NANOS.swap(0, Ordering::Relaxed) as f64
-        / signals.max(1) as f64
-        / 1e6;
-    let callbacks = GPUI_CALLBACKS.swap(0, Ordering::Relaxed);
-    let callback_delay = GPUI_CALLBACK_DELAY_NANOS.swap(0, Ordering::Relaxed) as f64
-        / callbacks.max(1) as f64
-        / 1e6;
-    let recoveries = GPUI_LOCAL_RECOVERIES.swap(0, Ordering::Relaxed);
-    let recovery_delay = GPUI_RECOVERY_DELAY_NANOS.swap(0, Ordering::Relaxed) as f64
-        / recoveries.max(1) as f64
-        / 1e6;
-    GPUI_PHASE_FRAMES.store(0, Ordering::Relaxed);
-    let line = format!(
-        "[GPUI FRAME] frames={frames} layout={layout:.2}ms prepaint={prepaint:.2}ms paint={paint:.2}ms present={present:.2}ms native={native} local={local} callbacks={native_callbacks} scheduled={scheduled_ticks} retries={retry_ticks} wayland={wayland_ticks} x11={x11_ticks} x11-max-late={x11_max_lateness:.2}ms signal-delay={signal_delay:.2}ms callback-delay={callback_delay:.2}ms recoveries={recoveries} recovery-late={recovery_delay:.2}ms\n"
-    );
-    emit_gpui_phase_log(line);
-}
-
-#[doc(hidden)]
-pub fn record_platform_frame_source(source: crate::FrameRequestSource) {
-    match source {
-        crate::FrameRequestSource::NativeCallback => {
-            GPUI_NATIVE_FRAMES.fetch_add(1, Ordering::Relaxed);
-        }
-        crate::FrameRequestSource::LocalSchedule => {
-            GPUI_LOCAL_FRAMES.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-}
-
-#[doc(hidden)]
-pub fn record_platform_native_callback() {
-    GPUI_NATIVE_CALLBACKS.fetch_add(1, Ordering::Relaxed);
-}
-
-#[doc(hidden)]
-pub fn record_platform_scheduled_tick() {
-    GPUI_SCHEDULED_TICKS.fetch_add(1, Ordering::Relaxed);
-}
-
-#[doc(hidden)]
-pub fn record_platform_retry_tick() {
-    GPUI_RETRY_TICKS.fetch_add(1, Ordering::Relaxed);
-}
-
-#[doc(hidden)]
-pub fn record_platform_wayland_tick() {
-    GPUI_WAYLAND_TICKS.fetch_add(1, Ordering::Relaxed);
-}
-
-#[doc(hidden)]
-pub fn record_platform_x11_tick(lateness: Duration) {
-    GPUI_X11_TICKS.fetch_add(1, Ordering::Relaxed);
-    GPUI_X11_MAX_LATENESS_NANOS.fetch_max(lateness.as_nanos() as u64, Ordering::Relaxed);
-}
-
-#[doc(hidden)]
-pub fn record_platform_frame_signal_delay(delay: Duration) {
-    GPUI_SIGNAL_DELAY_NANOS.fetch_add(delay.as_nanos() as u64, Ordering::Relaxed);
-    GPUI_FRAME_SIGNALS.fetch_add(1, Ordering::Relaxed);
-}
-
-#[doc(hidden)]
-pub fn record_platform_frame_callback_delay(delay: Duration) {
-    GPUI_CALLBACK_DELAY_NANOS.fetch_add(delay.as_nanos() as u64, Ordering::Relaxed);
-    GPUI_CALLBACKS.fetch_add(1, Ordering::Relaxed);
-}
-
-#[doc(hidden)]
-pub fn record_platform_frame_recovery_delay(delay: Duration) {
-    GPUI_RECOVERY_DELAY_NANOS.fetch_add(delay.as_nanos() as u64, Ordering::Relaxed);
-    GPUI_LOCAL_RECOVERIES.fetch_add(1, Ordering::Relaxed);
-}
 
 pub(crate) mod a11y;
 mod prompts;
@@ -2039,13 +1886,6 @@ impl Window {
             let mut deferred_force_render = false;
             let mut frame_pacer = FramePacer::default();
             move |request_frame_options| {
-                let signal_handled_at = Instant::now();
-                record_platform_frame_source(request_frame_options.signal_source);
-                if let Some(signal_at) = request_frame_options.signal_at {
-                    record_platform_frame_signal_delay(
-                        signal_handled_at.saturating_duration_since(signal_at),
-                    );
-                }
                 #[cfg(feature = "profiler")]
                 let (_foreground_turn, window_id) = {
                     let foreground_turn = profiler::journal::foreground_turn();
@@ -3993,9 +3833,7 @@ impl Window {
         let _foreground_turn = profiler::journal::foreground_turn();
         #[cfg(feature = "profiler")]
         let present_start = Instant::now();
-        let present_started = Instant::now();
         self.platform_window.draw(&self.rendered_frame.scene);
-        GPUI_PRESENT_NANOS.fetch_add(present_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
         #[cfg(feature = "profiler")]
         self.window_profiler.record_present(
@@ -4057,7 +3895,6 @@ impl Window {
     }
 
     fn draw_roots(&mut self, cx: &mut App) {
-        let __probe_t0 = std::time::Instant::now();
         self.invalidator.set_phase(DrawPhase::Prepaint);
         self.tooltip_bounds.take();
 
@@ -4092,22 +3929,18 @@ impl Window {
         let request_layout_start = Instant::now();
         let mut root_element = self.root.as_ref().unwrap().clone().into_any_element();
         let root_layout_id = root_element.request_layout(self, cx);
-        let __probe_t1 = std::time::Instant::now();
         #[cfg(feature = "profiler")]
         let prepaint_start = Instant::now();
         self.layout_engine
             .as_mut()
             .unwrap()
             .stretch_auto_size_to_fill(root_layout_id, root_size, scale_factor);
-        let __probe_p0 = std::time::Instant::now();
         root_element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
-        let __probe_p1 = std::time::Instant::now();
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         let inspector_element = self.prepaint_inspector(_inspector_width, cx);
 
         self.prepaint_deferred_draws(cx);
-        let __probe_p2 = std::time::Instant::now();
 
         let mut prompt_element = None;
         let mut active_drag_element = None;
@@ -4137,10 +3970,8 @@ impl Window {
         // Now actually paint the elements.
         #[cfg(feature = "profiler")]
         let paint_start = Instant::now();
-        let __probe_t2 = std::time::Instant::now();
         self.invalidator.set_phase(DrawPhase::Paint);
         root_element.paint(self, cx);
-        let __probe_t3 = std::time::Instant::now();
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.paint_inspector(inspector_element, cx);
@@ -4158,21 +3989,6 @@ impl Window {
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.paint_inspector_hitbox(cx);
 
-        if std::env::var_os("ANARC_FRAME_TIMING").is_some() {
-            eprintln!(
-                "PHASE layout={:.2}ms prepaint_root={:.2}ms deferred={:.2}ms paint={:.2}ms total={:.2}ms",
-                (__probe_t1 - __probe_t0).as_secs_f64() * 1e3,
-                (__probe_p1 - __probe_p0).as_secs_f64() * 1e3,
-                (__probe_p2 - __probe_p1).as_secs_f64() * 1e3,
-                (__probe_t3 - __probe_t2).as_secs_f64() * 1e3,
-                __probe_t3.duration_since(__probe_t0).as_secs_f64() * 1e3,
-            );
-        }
-        record_gpui_phase(
-            __probe_t1.duration_since(__probe_t0),
-            __probe_p2.duration_since(__probe_p0),
-            __probe_t3.duration_since(__probe_t2),
-        );
         #[cfg(feature = "profiler")]
         self.window_profiler
             .record_draw_phases(profiler::DrawPhases {

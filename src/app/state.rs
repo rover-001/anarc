@@ -128,8 +128,6 @@ pub(crate) struct Lumen {
     pub(super) space_switch_transition_id: u64,
     #[cfg(all(target_os = "linux", not(test)))]
     pub(super) resize_drag: split_view::ResizeDrag,
-    pub(super) started_at: Instant,
-    pub(super) first_frame_logged: bool,
     pub(super) address: gpui_kit::Entity<InputState>,
     pub(super) address_active_tab: Option<(String, String, String)>,
     pub(super) address_editing: bool,
