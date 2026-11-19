@@ -1,228 +1,88 @@
 # Anarc
 
-<div align="center">
-  <img src="assets/anarc_logo.png" alt="Anarc Logo" width="128" height="128" />
-  <h3>Arc-style keyboard-centric native browser built with Rust, GPUI Kit, and CEF</h3>
-</div>
+**Anarc is a keyboard-first browser for Linux.** Organize tabs into spaces, keep your go-to sites in the sidebar, and work across two pages in a split view. Anarc uses a native Rust interface built with GPUI Kit and renders web pages with Chromium Embedded Framework (CEF).
 
----
-
-**Anarc** is a fast, minimal, keyboard-first browser designed for Linux. It combines the ergonomic spaces, pinned tabs, and split-screen workflow of Arc with the high-performance GPU-rendered UI of GPUI Kit and the web compatibility of Chromium Embedded Framework (CEF).
-
----
+![Anarc's Personal space with favorites, pinned tabs, folders, and the address bar](assets/anarc-screenshot.png)
 
 ## Features
 
-- **Spaces & Folders**: Seamlessly organize work into isolated spaces with per-space theme accents, separate CEF profiles, and pinned folders.
-- **Fast GPU-accelerated UI**: Fluid animations, responsive layouts, and spring physics rendered natively via GPUI.
-- **Split Views**: Open multiple tabs side-by-side with live draggable dividers and synchronized keyboard focus.
-- **Command Palette & Quick Switcher**: Rapid tab jumping, history searches, and browser command dispatching.
-- **Built-in AdBlock Shield**: High-speed EasyList-compatible blocking running on an isolated background worker.
-- **Extensible Plugin Platform**: Cordis-style microkernel architecture supporting declarative packs, custom user styles, search engines, and sandboxed WASM plugins.
-
----
-
-## Prerequisites
-
-### 1. Rust Toolchain
-
-Ensure you have Rust stable (edition 2024 support, Rust 1.85+) installed:
-
-```sh
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-### 2. System Dependencies (Linux)
-
-Anarc embeds native child windows and uses system X11 / Wayland interfaces and SQLite. Install the required development packages for your distribution:
-
-#### Arch Linux / EndeavourOS
-```sh
-sudo pacman -S --needed base-devel libx11 libxcursor libxrandr libxi libxkbcommon pkgconf sqlite
-```
-
-#### Ubuntu / Debian / Pop!_OS
-```sh
-sudo apt-get update
-sudo apt-get install -y build-essential libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
-    libxkbcommon-dev libxkbcommon-x11-dev pkg-config libsqlite3-dev
-```
-
-#### Fedora
-```sh
-sudo dnf install -y @development-tools libX11-devel libXcursor-devel libXrandr-devel \
-    libXi-devel libxkbcommon-devel libxkbcommon-x11-devel pkgconf-pkg-config sqlite-devel
-```
-
----
-
-## CEF (Chromium Embedded Framework) Setup
-
-Anarc pins `cef = 156.4.0+156.0.26`.
-
-### Option A: Automatic Download (Default)
-When building without `CEF_PATH` specified, the `cef-dll-sys` build script automatically downloads and extracts the matching CEF binary distribution on the first build. This requires active internet access during build time.
-
-### Option B: Pre-downloaded / Reusable CEF Distribution
-If you already have the CEF distribution extracted, point `CEF_PATH` to its location and ensure it is on your dynamic linker search path:
-
-```sh
-export CEF_PATH="$HOME/.local/share/cef"
-export LD_LIBRARY_PATH="$CEF_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-```
-
-> **Note for Wayland users:** CEF window embedding currently uses the Linux X11 child-window interface. Anarc runs seamlessly under XWayland (`--ozone-platform=x11`).
-
----
+- **Spaces** with their own colors, pinned tabs, favorites, folders, and browser profiles.
+- **Split views** for viewing tabs side by side with a draggable divider.
+- **Command palette** for switching tabs, searching history, and running browser commands.
+- **Built-in Shield** for blocking ads and trackers and upgrading eligible HTTP URLs to HTTPS.
+- **Reader mode** and an importer for bookmarks from Chrome, Chromium, Brave, and Edge.
+- **Plugin packs** for themes, site styles, search engines, and extensions. Sandboxed WebAssembly plugins are available with the optional `wasm-plugins` build feature.
 
 ## Installation & Building
 
-### 1. Clone the Repository
+Build Anarc from source on Linux. Use a current stable Rust toolchain, a C/C++ compiler, CMake, `pkg-config`, and the X11 and keyboard development libraries. On a Wayland desktop, install XWayland so Anarc can use its X11 backend.
+
+<details>
+<summary>Install build dependencies</summary>
+
+**Arch Linux**
+
+```sh
+sudo pacman -S --needed base-devel cmake pkgconf libx11 libxcursor libxrandr libxi libxkbcommon libxkbcommon-x11
+```
+
+**Debian and Ubuntu**
+
+```sh
+sudo apt install build-essential cmake pkg-config libx11-dev libxcursor-dev \
+  libxrandr-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev
+```
+
+**Fedora**
+
+```sh
+sudo dnf install gcc gcc-c++ make cmake pkgconf-pkg-config libX11-devel libXcursor-devel \
+  libXrandr-devel libXi-devel libxkbcommon-devel libxkbcommon-x11-devel
+```
+
+</details>
 
 ```sh
 git clone https://github.com/rover-001/anarc.git
 cd anarc
-```
-
-### 2. Build
-
-#### Standard Release Build
-```sh
-cargo build --release
-```
-
-#### Optional: Build with WebAssembly Plugin Support
-```sh
-cargo build --release --features wasm-plugins
-```
-
----
-
-## Running Anarc
-
-Run via cargo:
-
-```sh
-cargo run --release
-```
-
-Or run the built binary directly:
-
-```sh
-# If CEF is in a custom path, ensure LD_LIBRARY_PATH is set:
-LD_LIBRARY_PATH="${CEF_PATH:-$HOME/.local/share/cef}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ./target/release/lumen
-```
-
----
-
-## Desktop Install (Linux)
-
-**Easy way:** run the installer script — it builds (or uses a bundled binary), installs the CEF runtime, wrapper, icon, and desktop entry:
-
-```sh
 ./install.sh
 ```
 
-Options: `--prefix DIR`, `--skip-build`, `--no-desktop-entry`. It also works next to a prebuilt release bundle (`lumen` + `cef_linux_x86_64/` + `anarc_logo.png`) with no Rust toolchain needed.
+The installer builds Anarc, installs the CEF runtime, and adds a desktop launcher. Open **Anarc** from your app launcher or run `~/.local/bin/anarc`. The first build downloads the version of CEF pinned in [Cargo.lock](Cargo.lock). If you already have the matching CEF distribution, set `CEF_PATH` to the extracted directory containing `libcef.so` and the CEF archive metadata, then run the installer.
 
-**Manual way:** to install Anarc so it appears in your application launcher:
+Run `./install.sh --help` for installer options.
 
-```sh
-# 1. Build
-cargo build --release
+To run directly from the checkout, use `cargo run --locked --release`. For a build with WebAssembly plugin support, use `cargo run --locked --release --features wasm-plugins`.
 
-# 2. Install the CEF runtime (skip build-only files like cmake/, include/)
-CEF_SRC="$(find target/release/build -type d -name cef_linux_x86_64 | head -1)"
-mkdir -p "$HOME/.local/share/anarc-cef"
-cd "$CEF_SRC"
-cp -r libcef.so libcef_dll chrome-sandbox chrome_100_percent.pak chrome_200_percent.pak \
-    icudtl.dat resources.pak v8_context_snapshot.bin vk_swiftshader_icd.json \
-    libvk_swiftshader.so libvulkan.so.1 locales "$HOME/.local/share/anarc-cef/"
+## Keyboard shortcuts
 
-# 3. Install the binary and a wrapper that sets LD_LIBRARY_PATH
-mkdir -p "$HOME/.local/share/anarc/bin" "$HOME/.local/bin"
-cp target/release/lumen "$HOME/.local/share/anarc/bin/lumen"
-cat > "$HOME/.local/bin/anarc" <<'WRAPPER'
-#!/bin/sh
-export LD_LIBRARY_PATH="$HOME/.local/share/anarc-cef${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-exec "$HOME/.local/share/anarc/bin/lumen" "$@"
-WRAPPER
-chmod +x "$HOME/.local/bin/anarc"
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+L` | Focus the address bar |
+| `Ctrl+K` | Open the command palette |
+| `Ctrl+T` / `Ctrl+W` | Open or close a tab |
+| `Ctrl+Shift+T` | Reopen a closed tab |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Cycle through tabs |
+| `Ctrl+Shift+S` | Split the view |
+| `Ctrl+F` | Find on the current page |
+| `Ctrl+Shift+B` | Toggle Shield for the active tab |
 
-# 4. Icon + desktop entry
-mkdir -p "$HOME/.local/share/icons/hicolor/256x256/apps" "$HOME/.local/share/applications" "$HOME/.local/share/pixmaps"
-magick assets/anarc_logo.png -resize 256x256 "$HOME/.local/share/icons/hicolor/256x256/apps/anarc.png"  # or just `cp` the PNG as-is
-cp "$HOME/.local/share/icons/hicolor/256x256/apps/anarc.png" "$HOME/.local/share/pixmaps/anarc.png"
-cat > "$HOME/.local/share/applications/anarc.desktop" <<'DESKTOP'
-[Desktop Entry]
-Type=Application
-Name=Anarc
-Comment=Anarc browser
-Exec=anarc
-Icon=anarc
-Terminal=false
-Categories=Network;WebBrowser;
-StartupNotify=true
-DESKTOP
-update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
-gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
-```
+## Configuration
 
-If the icon does not appear in your launcher, restart your shell/panel or re-login so it rescans icons and desktop entries. To update later, repeat steps 1–3.
+| Environment variable | Default | Contents |
+| --- | --- | --- |
+| `ANARC_CONFIG_DIR` | `~/.config/anarc` | Spaces and plugin configuration |
+| `ANARC_DATA_DIR` | `~/.local/share/anarc` | Browser preferences, history, and per-space CEF profiles |
 
----
+Set both variables to fresh directories to test with a separate profile.
 
-## Configuration & Paths
+## Development
 
-Anarc stores its runtime state according to XDG base directory specifications (or custom environment variables):
+- [`src/app`](src/app) contains browser actions, application state, and the window shell.
+- [`src/engine`](src/engine) integrates with CEF and handles input and page rendering.
+- [`src/plugin`](src/plugin), [`lumen-plugin-sdk`](lumen-plugin-sdk), and [`wit`](wit) define the plugin runtime and interfaces.
+- [`examples/plugins`](examples/plugins) contains example themes, styles, and other plugin packs.
 
-| Variable | Default Path | Description |
-|---|---|---|
-| `ANARC_CONFIG_DIR` | `~/.config/anarc` | Spaces, folders, and browser preferences (`spaces.json`, settings) |
-| `ANARC_DATA_DIR` | `~/.local/share/anarc` | SQLite visit history, recent searches, and CEF storage root (`cef/space-*`) |
-| `ANARC_CACHE_DIR` | `~/.cache/anarc` | Temporary caches and runtime scratch |
+Report bugs in [GitHub Issues](https://github.com/rover-001/anarc/issues). Include your Linux distribution, desktop environment, and steps to reproduce.
 
-### Isolated Test Run
-To run Anarc without touching your standard user profile:
-
-```sh
-test_root="$(mktemp -d)"
-mkdir -p "$test_root/home" "$test_root/config" "$test_root/data" "$test_root/cache"
-
-HOME="$test_root/home" \
-ANARC_CONFIG_DIR="$test_root/config" \
-ANARC_DATA_DIR="$test_root/data" \
-ANARC_CACHE_DIR="$test_root/cache" \
-ANARC_STATS=1 \
-LD_LIBRARY_PATH="$CEF_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-./target/release/lumen
-```
-
----
-
-## Project Structure
-
-```
-.
-├── assets/                  # Icons, branding logos, and bundled filter lists (EasyList)
-├── examples/plugins/        # Reference plugin packs and WASM components
-├── lumen-plugin-sdk/        # Rust SDK and WIT definitions for plugins
-├── wit/                     # Component model WebAssembly interface definitions
-└── src/
-    ├── main.rs              # CLI initialization, process bootstrap, and GPUI runner
-    ├── app/                 # Application state, actions, and UI shell composition
-    ├── engine/              # Stable browser engine API and CEF runtime implementation
-    ├── navigation/          # Address normalization, URL routing, and smart autocomplete
-    ├── model/               # Serializable Space, Folder, Tab, and Split types
-    ├── plugin/              # Cordis-style microkernel, pack loader, and WASM runtime
-    ├── ui/                  # Reusable GPUI components (sidebar, command palette, tabs)
-    ├── shield.rs            # AdBlock filter engine and background worker
-    ├── history.rs           # SQLite history storage and search indexing
-    └── paths.rs             # Multi-space filesystem paths and profiles
-```
-
----
-
-## License
-
-This project is licensed under the Apache-2.0 / MIT license or project-specific terms. See [LICENSE](LICENSE) for details.
+Third-party notices for the bundled reader and filter lists are in [assets](assets).
