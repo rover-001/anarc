@@ -419,13 +419,18 @@ pub fn display_refresh_rate(refresh_interval: Option<std::time::Duration>) -> i3
 
 pub fn frame_rate_for_refresh(refresh_interval: Option<std::time::Duration>) -> i32 {
     let refresh_rate = display_refresh_rate(refresh_interval).clamp(1, OSR_MAX_FRAME_RATE);
-    // CEF and the compositor run on separate clocks. A little headroom on
-    // fast displays gives CEF time to publish before the next display tick.
-    let requested = if refresh_rate >= 120 {
-        refresh_rate + (refresh_rate + 19) / 20
-    } else {
-        refresh_rate
-    };
+    // CEF and the compositor run on separate clocks. Ask CEF for extra frames
+    // so a fresh OSR image is more likely to be ready for each display tick.
+    // This is configurable because oversampling trades additional CPU/GPU work
+    // for lower frame age on fast displays.
+    let default_headroom_percent = if refresh_rate >= 120 { 5 } else { 0 };
+    let headroom_percent = std::env::var("ANARC_OSR_HEADROOM_PERCENT")
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .unwrap_or(default_headroom_percent)
+        .clamp(0, 100);
+    let requested = refresh_rate
+        + (refresh_rate * headroom_percent + 99) / 100;
     requested.min(osr_frame_rate_cap())
 }
 
@@ -599,6 +604,8 @@ pub struct BrowserSharedState {
     /// Latest CEF frame awaiting handoff to GPUI. Only the UI may publish it
     /// as `image`, so replacing this slot never leaves an atlas entry behind.
     pub pending_image: Option<Arc<RenderImage>>,
+    /// Time the latest pending OSR frame completed, for handoff-latency telemetry.
+    pub pending_image_at: Option<std::time::Instant>,
     pub title: Option<String>,
     pub url: Option<String>,
     pub is_loading: bool,
@@ -646,6 +653,7 @@ pub(super) fn new_shared_state(
         dirty: false,
         root_dirty: false,
         pending_image: None,
+        pending_image_at: None,
         title: None,
         url: None,
         is_loading: true,
