@@ -204,6 +204,10 @@ impl Render for Lumen {
                                 if let Some(peek_id) = peek_id.clone() {
                                     visible_ids.push(peek_id);
                                 }
+                                this.engine.reset_external_begin_frames();
+                                for tab_id in &visible_ids {
+                                    this.engine.send_external_begin_frame(tab_id);
+                                }
                                 let visible_refs =
                                     visible_ids.iter().map(String::as_str).collect::<Vec<_>>();
                                 let (has_updates, has_root_updates) =
