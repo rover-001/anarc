@@ -74,6 +74,12 @@ static GPUI_PREPAINT_NANOS: AtomicU64 = AtomicU64::new(0);
 static GPUI_PAINT_NANOS: AtomicU64 = AtomicU64::new(0);
 static GPUI_PRESENT_NANOS: AtomicU64 = AtomicU64::new(0);
 static GPUI_PHASE_FRAMES: AtomicU64 = AtomicU64::new(0);
+static GPUI_NATIVE_FRAMES: AtomicU64 = AtomicU64::new(0);
+static GPUI_LOCAL_FRAMES: AtomicU64 = AtomicU64::new(0);
+static GPUI_CALLBACK_DELAY_NANOS: AtomicU64 = AtomicU64::new(0);
+static GPUI_CALLBACKS: AtomicU64 = AtomicU64::new(0);
+static GPUI_LOCAL_RECOVERIES: AtomicU64 = AtomicU64::new(0);
+static GPUI_RECOVERY_DELAY_NANOS: AtomicU64 = AtomicU64::new(0);
 static GPUI_PHASE_LOG_SENDER: std::sync::OnceLock<std::sync::mpsc::SyncSender<String>> =
     std::sync::OnceLock::new();
 
@@ -83,8 +89,19 @@ fn emit_gpui_phase_log(line: String) {
         let _ = std::thread::Builder::new()
             .name("gpui-phase-log-writer".into())
             .spawn(move || {
+                let log_path = std::env::var_os("ANARC_SCROLL_LOG")
+                    .unwrap_or_else(|| "scroll.log".into());
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(log_path)
+                    .ok();
                 while let Ok(line) = receiver.recv() {
                     eprint!("{line}");
+                    if let Some(file) = &mut file {
+                        use std::io::Write as _;
+                        let _ = file.write_all(line.as_bytes());
+                    }
                 }
             });
         sender
@@ -112,11 +129,45 @@ fn record_gpui_phase(layout: Duration, prepaint: Duration, paint: Duration) {
     let prepaint = GPUI_PREPAINT_NANOS.swap(0, Ordering::Relaxed) as f64 / frames as f64 / 1e6;
     let paint = GPUI_PAINT_NANOS.swap(0, Ordering::Relaxed) as f64 / frames as f64 / 1e6;
     let present = GPUI_PRESENT_NANOS.swap(0, Ordering::Relaxed) as f64 / frames as f64 / 1e6;
+    let native = GPUI_NATIVE_FRAMES.swap(0, Ordering::Relaxed);
+    let local = GPUI_LOCAL_FRAMES.swap(0, Ordering::Relaxed);
+    let callbacks = GPUI_CALLBACKS.swap(0, Ordering::Relaxed);
+    let callback_delay = GPUI_CALLBACK_DELAY_NANOS.swap(0, Ordering::Relaxed) as f64
+        / callbacks.max(1) as f64
+        / 1e6;
+    let recoveries = GPUI_LOCAL_RECOVERIES.swap(0, Ordering::Relaxed);
+    let recovery_delay = GPUI_RECOVERY_DELAY_NANOS.swap(0, Ordering::Relaxed) as f64
+        / recoveries.max(1) as f64
+        / 1e6;
     GPUI_PHASE_FRAMES.store(0, Ordering::Relaxed);
     let line = format!(
-        "[GPUI FRAME] frames={frames} layout={layout:.2}ms prepaint={prepaint:.2}ms paint={paint:.2}ms present={present:.2}ms\n"
+        "[GPUI FRAME] frames={frames} layout={layout:.2}ms prepaint={prepaint:.2}ms paint={paint:.2}ms present={present:.2}ms native={native} local={local} callback-delay={callback_delay:.2}ms recoveries={recoveries} recovery-late={recovery_delay:.2}ms\n"
     );
     emit_gpui_phase_log(line);
+}
+
+#[doc(hidden)]
+pub fn record_platform_frame_source(source: crate::FrameRequestSource) {
+    match source {
+        crate::FrameRequestSource::NativeCallback => {
+            GPUI_NATIVE_FRAMES.fetch_add(1, Ordering::Relaxed);
+        }
+        crate::FrameRequestSource::LocalSchedule => {
+            GPUI_LOCAL_FRAMES.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+#[doc(hidden)]
+pub fn record_platform_frame_callback_delay(delay: Duration) {
+    GPUI_CALLBACK_DELAY_NANOS.fetch_add(delay.as_nanos() as u64, Ordering::Relaxed);
+    GPUI_CALLBACKS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[doc(hidden)]
+pub fn record_platform_frame_recovery_delay(delay: Duration) {
+    GPUI_RECOVERY_DELAY_NANOS.fetch_add(delay.as_nanos() as u64, Ordering::Relaxed);
+    GPUI_LOCAL_RECOVERIES.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) mod a11y;

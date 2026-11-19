@@ -950,6 +950,7 @@ impl WaylandWindowStatePtr {
     }
 
     pub fn frame(&self, signal_at: Option<Instant>, signal_source: FrameRequestSource) {
+        gpui::record_platform_frame_source(signal_source);
         self.frame_loop.set(FrameLoop::Ticking);
         let mut state = self.state.borrow_mut();
         state.resize_throttle = false;
@@ -1021,6 +1022,11 @@ impl WaylandWindowStatePtr {
     }
 
     pub fn frame_callback_fired(&self, signal_at: Option<Instant>) {
+        if let Some(submitted_at) = self.last_submission.get() {
+            gpui::record_platform_frame_callback_delay(
+                Instant::now().saturating_duration_since(submitted_at),
+            );
+        }
         self.late_callback_deadline.set(None);
         // Another wl_surface commit may have carried this callback while a retry
         // timer owned the render-loop wakeup.
@@ -1075,6 +1081,9 @@ impl WaylandWindowStatePtr {
         if self.late_callback_deadline.get() != Some(deadline) {
             return;
         }
+        gpui::record_platform_frame_recovery_delay(
+            Instant::now().saturating_duration_since(deadline),
+        );
         self.late_callback_deadline.set(None);
         let state = self.state.borrow();
         let can_draw = state.active && state.visibility.is_visible();
