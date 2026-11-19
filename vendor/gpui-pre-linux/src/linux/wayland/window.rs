@@ -1060,7 +1060,10 @@ impl WaylandWindowStatePtr {
         let Some(submitted_at) = self.last_submission.get() else {
             return;
         };
-        let deadline = submitted_at + interval + Duration::from_micros(750);
+        // A replacement draw needs most of one refresh interval to reach the
+        // renderer. Recover at the expected callback deadline so scheduler
+        // latency does not push the submission past the next compositor frame.
+        let deadline = submitted_at + interval;
         self.late_callback_deadline.set(Some(deadline));
         let client = state.client.clone();
         let surface_id = state.surface.id();
