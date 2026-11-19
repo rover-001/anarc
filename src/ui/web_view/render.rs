@@ -1,14 +1,184 @@
 use gpui_kit::{AnimationExt as _, Context, Render, Window, div, prelude::*, px, rgb};
 
 use crate::app::CARD_RADIUS;
+use crate::ui::split_view::frame_logical_size;
 
 use super::pinch::clamp_pinch_offset;
 use super::*;
 
 impl Render for WebViewport {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        for image in self.retired_images.drain(..) {
-            let _ = window.drop_image(image);
+        let viewport_render_started = std::time::Instant::now();
+        // TEMPORARY probe: ANARC_LIGHT_UI=3 misses the listener plumbing,
+        // ANARC_LIGHT_UI=4 renders an empty surface.
+        if let Ok(mode) = std::env::var("ANARC_LIGHT_UI") {
+            if mode == "4" {
+                return div().size_full().into_any_element();
+            }
+            if mode == "5" || mode == "6" || mode == "7" || mode == "8" || mode == "9" || mode == "10" {
+                let surface = div()
+                    .id("web-view-viewport")
+                    .relative()
+                    .size_full()
+                    .bg(rgb(self.theme.surface))
+                    .rounded(px(CARD_RADIUS))
+                    .overflow_hidden();
+                let surface = if mode == "6" {
+                    surface.track_focus(&self.focus_handle).cursor(
+                        match self.cursor {
+                            1 => gpui_kit::CursorStyle::IBeam,
+                            _ => gpui_kit::CursorStyle::Arrow,
+                        },
+                    )
+                } else {
+                    surface
+                };
+                let surface = if mode == "7" || mode == "10" {
+                    surface
+                        .on_mouse_down(
+                            gpui_kit::MouseButton::Left,
+                            cx.listener(|_: &mut Self, _: &gpui_kit::MouseDownEvent, _, _| {}),
+                        )
+                        .on_mouse_up(
+                            gpui_kit::MouseButton::Left,
+                            cx.listener(|_: &mut Self, _: &gpui_kit::MouseUpEvent, _, _| {}),
+                        )
+                        .on_mouse_down(
+                            gpui_kit::MouseButton::Right,
+                            cx.listener(|_: &mut Self, _: &gpui_kit::MouseDownEvent, _, _| {}),
+                        )
+                        .on_mouse_up(
+                            gpui_kit::MouseButton::Right,
+                            cx.listener(|_: &mut Self, _: &gpui_kit::MouseUpEvent, _, _| {}),
+                        )
+                        .on_mouse_down(
+                            gpui_kit::MouseButton::Middle,
+                            cx.listener(|_: &mut Self, _: &gpui_kit::MouseDownEvent, _, _| {}),
+                        )
+                        .on_mouse_up(
+                            gpui_kit::MouseButton::Middle,
+                            cx.listener(|_: &mut Self, _: &gpui_kit::MouseUpEvent, _, _| {}),
+                        )
+                        .on_mouse_move(
+                            cx.listener(|_: &mut Self, _: &gpui_kit::MouseMoveEvent, _, _| {}),
+                        )
+                        .on_mouse_exit(
+                            cx.listener(|_: &mut Self, _: &gpui_kit::MouseExitEvent, _, _| {}),
+                        )
+                } else {
+                    surface
+                };
+                let surface = if mode == "8" || mode == "10" {
+                    surface
+                        .on_key_down(
+                            cx.listener(|_: &mut Self, _: &gpui_kit::KeyDownEvent, _, _| {}),
+                        )
+                        .on_key_up(
+                            cx.listener(|_: &mut Self, _: &gpui_kit::KeyUpEvent, _, _| {}),
+                        )
+                } else {
+                    surface
+                };
+                let surface = if mode == "9" || mode == "10" {
+                    surface
+                        .on_scroll(
+                            cx.listener(|_: &mut Self, _: &gpui_kit::ScrollEvent, _, _| {}),
+                        )
+                        .on_pinch(
+                            cx.listener(|_: &mut Self, _: &gpui_kit::PinchEvent, _, _| {}),
+                        )
+                        .on_drop(
+                            cx.listener(|_: &mut Self, _: &gpui_kit::ExternalPaths, _, _| {}),
+                        )
+                } else {
+                    surface
+                };
+                let child = match self.image.clone() {
+                    Some(image) => gpui_kit::img(image).size_full().into_any_element(),
+                    None => div().into_any_element(),
+                };
+                let surface = surface.child(child);
+                let surface = if mode == "11" {
+                    // TEMPORARY probe: the four rounded corner rings.
+                    let radius = CARD_RADIUS;
+                    let ring_size = px(radius * 3.0);
+                    let ring_offset = px(-radius);
+                    let outer_corner_radius = px(radius * 2.0);
+                    let border_width = px(radius);
+                    let color = rgb(self.theme.base);
+                    surface
+                        .child(
+                            div()
+                                .absolute()
+                                .top(ring_offset)
+                                .left(ring_offset)
+                                .w(ring_size)
+                                .h(ring_size)
+                                .border_t(border_width)
+                                .border_l(border_width)
+                                .border_color(color)
+                                .rounded_tl(outer_corner_radius),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .top(ring_offset)
+                                .right(ring_offset)
+                                .w(ring_size)
+                                .h(ring_size)
+                                .border_t(border_width)
+                                .border_r(border_width)
+                                .border_color(color)
+                                .rounded_tr(outer_corner_radius),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .bottom(ring_offset)
+                                .left(ring_offset)
+                                .w(ring_size)
+                                .h(ring_size)
+                                .border_b(border_width)
+                                .border_l(border_width)
+                                .border_color(color)
+                                .rounded_bl(outer_corner_radius),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .bottom(ring_offset)
+                                .right(ring_offset)
+                                .w(ring_size)
+                                .h(ring_size)
+                                .border_b(border_width)
+                                .border_r(border_width)
+                                .border_color(color)
+                                .rounded_br(outer_corner_radius),
+                        )
+                } else {
+                    surface
+                };
+                return surface.into_any_element();
+            }
+            if mode == "3" {
+                return match self.image.clone() {
+                    Some(image) => div()
+                        .size_full()
+                        .overflow_hidden()
+                        .child(gpui_kit::img(image).size_full())
+                        .into_any_element(),
+                    None => div().size_full().into_any_element(),
+                };
+            }
+        }
+        let hz = crate::engine::display_refresh_rate(window.refresh_interval(cx)) as u32;
+        crate::stats::record_scroll_frame(hz);
+
+        if self.retired_images.len() > 2 {
+            let to_drop = self.retired_images.len() - 2;
+            for image in self.retired_images.drain(..to_drop) {
+                let _ = window.drop_image(image);
+            }
         }
 
         let tab_id_down = self.tab_id.clone();
@@ -518,6 +688,7 @@ impl Render for WebViewport {
             ))
             .on_scroll(
                 cx.listener(move |this, event: &gpui_kit::ScrollEvent, window, cx| {
+                    crate::stats::record_scroll_input();
                     let (x, y) = browser_point_at(
                         event.position,
                         scroll_sidebar,
@@ -525,6 +696,10 @@ impl Render for WebViewport {
                         fullscreen,
                         origin_override,
                     );
+                    if event.touch_phase == gpui_kit::TouchPhase::Cancelled {
+                        this.scroll_motion.cancel();
+                        return;
+                    }
                     let (dx, dy, is_precision) = match event.delta {
                         gpui_kit::ScrollDelta::Pixels(p) => {
                             (f32::from(p.x), f32::from(p.y), true)
@@ -532,16 +707,12 @@ impl Render for WebViewport {
                         gpui_kit::ScrollDelta::Lines(l) => {
                             let continuous = l.x.fract().abs().max(l.y.fract().abs()) > 0.001
                                 || this.scroll_motion.continuous_recent();
-                            (l.x * 100.0, l.y * 100.0, continuous)
+                            // GPUI on Linux emits 3.0 lines per discrete mouse wheel notch.
+                            // 1 line = 17.67px -> 3 lines = 53.0px total per notch (scaled).
+                            let px_per_line = (53.0 / 3.0) * wheel_scroll_scale();
+                            (l.x * px_per_line, l.y * px_per_line, continuous)
                         }
                     };
-                    let (dx, dy) = (dx * WHEEL_SCROLL_SCALE, dy * WHEEL_SCROLL_SCALE);
-                    if event.touch_phase == gpui_kit::TouchPhase::Cancelled {
-                        this.scroll_motion.cancel();
-                        return;
-                    }
-                    // Platforms can finish a trackpad gesture with a zero-delta
-                    // event. It releases the fingers, not the inertial driver.
                     if dx == 0.0 && dy == 0.0 {
                         return;
                     }
@@ -561,24 +732,22 @@ impl Render for WebViewport {
                         this.pan_image((-dx, -dy), viewport_size, cx);
                         return;
                     }
-                    if is_precision
+                    let (step_x, step_y) = if is_precision
                         && event.source == gpui_kit::ScrollSource::Pointer
-                        && (dx != 0.0 || dy != 0.0)
                     {
                         this.scroll_motion.record_pointer_scroll(
                             (dx, dy), (x, y), event.modifiers, window, cx,
-                        );
-                        return;
-                    }
-                    this.scroll_motion.interrupt();
-                    let (step_x, step_y) = this.scroll_motion.accumulate((dx, dy));
+                        )
+                    } else {
+                        this.scroll_motion.interrupt();
+                        this.scroll_motion.accumulate((dx, dy))
+                    };
                     if step_x != 0 || step_y != 0 {
                         parent_scroll.update(cx, |this, _| {
                             this.engine.send_mouse_wheel(
                                 &tab_id_scroll, x, y, step_x, step_y,
                                 &event.modifiers, is_precision,
                             );
-                            this.engine.send_external_begin_frame(&tab_id_scroll);
                         }).ok();
                     }
                 }),
@@ -660,38 +829,33 @@ impl Render for WebViewport {
             self.previous_image = None;
         }
 
+        // TEMPORARY A/B probe: ANARC_NO_IMAGE=1 skips the per-frame texture upload.
+        if std::env::var_os("ANARC_NO_IMAGE").is_some() {
+            return viewport.child(div().size_full().bg(rgb(0x101010))).into_any_element();
+        }
         if let Some(image) = self.image.clone() {
-            let size = image.size(0);
-            let pane_scale = window.scale_factor();
-            let (width, height) =
-                frame_logical_size(u32::from(size.width), u32::from(size.height), pane_scale);
-            let (pinch_factor, pinch_offset) =
-                self.pinch_preview
-                    .as_ref()
-                    .map_or((1.0, (0.0, 0.0)), |preview| {
-                        (
-                            preview.scale as f32,
-                            clamp_pinch_offset(
-                                preview.offset,
-                                preview.scale as f32,
-                                (width, height),
-                            ),
-                        )
-                    });
-            let current = if pinch_factor > 1.0 + 1e-4 {
-                div()
+            let preview = self
+                .pinch_preview
+                .as_ref()
+                .filter(|preview| preview.scale as f32 > 1.0 + 1e-4);
+            let current = if let Some(preview) = preview {
+                let size = image.size(0);
+                let (width, height) = frame_logical_size(
+                    u32::from(size.width),
+                    u32::from(size.height),
+                    window.scale_factor(),
+                );
+                let factor = preview.scale as f32;
+                let (offset_x, offset_y) =
+                    clamp_pinch_offset(preview.offset, factor, (width, height));
+                browser_frame(image)
                     .absolute()
-                    .top(px(pinch_offset.1.min(0.0)))
-                    .left(px(pinch_offset.0.min(0.0)))
-                    .w(px(width * pinch_factor))
-                    .h(px(height * pinch_factor))
-                    .overflow_hidden()
-                    .child(gpui_kit::img(image).size_full())
+                    .top(px(offset_y.min(0.0)))
+                    .left(px(offset_x.min(0.0)))
+                    .w(px(width * factor))
+                    .h(px(height * factor))
             } else {
-                div()
-                    .size_full()
-                    .overflow_hidden()
-                    .child(gpui_kit::img(image).size_full())
+                browser_frame(image).size_full()
             };
             let current = if transitioning {
                 current
@@ -715,10 +879,8 @@ impl Render for WebViewport {
         // the rest of each ring. The peek overlay draws its own card border.
         if !peek_mode {
             let radius = CARD_RADIUS;
-            let ring_size = px(radius * 3.0);
-            let ring_offset = px(-radius);
-            let outer_corner_radius = px(radius * 2.0);
-            let border_width = px(radius);
+            let outer_corner_radius = radius * 2.0;
+            let border_width = radius;
             let outer_color = rgb(self.theme.base);
             let inner_color = rgb(self.theme.surface);
             let (top_left_color, top_right_color, bottom_left_color, bottom_right_color) =
@@ -729,56 +891,94 @@ impl Render for WebViewport {
                 } else {
                     (inner_color, outer_color, inner_color, outer_color)
                 };
-            viewport = viewport
-                .child(
-                    div()
-                        .absolute()
-                        .top(ring_offset)
-                        .left(ring_offset)
-                        .w(ring_size)
-                        .h(ring_size)
-                        .border_t(border_width)
-                        .border_l(border_width)
-                        .border_color(top_left_color)
-                        .rounded_tl(outer_corner_radius),
+            // Painted from a single canvas instead of four corner divs: those
+            // extra children cost ~10 ms of prepaint per frame, which capped
+            // the OSR paint rate far below the display refresh.
+            viewport = viewport.child(
+                gpui_kit::canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        let ring = gpui_kit::size(px(radius * 3.0), px(radius * 3.0));
+                        let left = bounds.origin.x - px(radius);
+                        let top = bounds.origin.y - px(radius);
+                        let right = bounds.origin.x + bounds.size.width - px(outer_corner_radius);
+                        let bottom =
+                            bounds.origin.y + bounds.size.height - px(outer_corner_radius);
+                        let invisible = gpui_kit::hsla(0.0, 0.0, 0.0, 0.0);
+                        let ring_quad = |origin, corner_radii, border_widths, color| {
+                            gpui_kit::quad(
+                                gpui_kit::Bounds { origin, size: ring },
+                                corner_radii,
+                                invisible,
+                                border_widths,
+                                color,
+                                gpui_kit::BorderStyle::Solid,
+                            )
+                        };
+                        use gpui_kit::{Corners, Edges};
+                        let corner = |top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32| {
+                            Corners {
+                                top_left: px(top_left),
+                                top_right: px(top_right),
+                                bottom_right: px(bottom_right),
+                                bottom_left: px(bottom_left),
+                            }
+                        };
+                        let edges = |top: f32, right: f32, bottom: f32, left: f32| Edges {
+                            top: px(top),
+                            right: px(right),
+                            bottom: px(bottom),
+                            left: px(left),
+                        };
+                        window.paint_quad(ring_quad(
+                            gpui_kit::point(left, top),
+                            corner(outer_corner_radius, 0.0, 0.0, 0.0),
+                            edges(border_width, 0.0, 0.0, border_width),
+                            top_left_color,
+                        ));
+                        window.paint_quad(ring_quad(
+                            gpui_kit::point(right, top),
+                            corner(0.0, outer_corner_radius, 0.0, 0.0),
+                            edges(border_width, border_width, 0.0, 0.0),
+                            top_right_color,
+                        ));
+                        window.paint_quad(ring_quad(
+                            gpui_kit::point(left, bottom),
+                            corner(0.0, 0.0, 0.0, outer_corner_radius),
+                            edges(0.0, 0.0, border_width, border_width),
+                            bottom_left_color,
+                        ));
+                        window.paint_quad(ring_quad(
+                            gpui_kit::point(right, bottom),
+                            corner(0.0, 0.0, outer_corner_radius, 0.0),
+                            edges(0.0, border_width, border_width, 0.0),
+                            bottom_right_color,
+                        ));
+                    },
                 )
-                .child(
-                    div()
-                        .absolute()
-                        .top(ring_offset)
-                        .right(ring_offset)
-                        .w(ring_size)
-                        .h(ring_size)
-                        .border_t(border_width)
-                        .border_r(border_width)
-                        .border_color(top_right_color)
-                        .rounded_tr(outer_corner_radius),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .bottom(ring_offset)
-                        .left(ring_offset)
-                        .w(ring_size)
-                        .h(ring_size)
-                        .border_b(border_width)
-                        .border_l(border_width)
-                        .border_color(bottom_left_color)
-                        .rounded_bl(outer_corner_radius),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .bottom(ring_offset)
-                        .right(ring_offset)
-                        .w(ring_size)
-                        .h(ring_size)
-                        .border_b(border_width)
-                        .border_r(border_width)
-                        .border_color(bottom_right_color)
-                        .rounded_br(outer_corner_radius),
-                );
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            );
         }
-        viewport
+        crate::stats::record_viewport_render(viewport_render_started.elapsed());
+        viewport.into_any_element()
     }
+}
+
+fn browser_frame(image: Arc<gpui_kit::RenderImage>) -> impl gpui_kit::Styled + IntoElement {
+    gpui_kit::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let size = image.size(0);
+            if u32::from(size.width) == 0 || u32::from(size.height) == 0 {
+                return;
+            }
+            let image_bounds = gpui_kit::ObjectFit::Contain.get_bounds(bounds, size);
+            if let Err(error) = window.paint_image(bounds, image_bounds, px(0.0).into(), image, 0, false) {
+                eprintln!("Lumen browser frame paint failed: {error}");
+            }
+        },
+    )
 }
