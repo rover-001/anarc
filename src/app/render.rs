@@ -2,8 +2,6 @@ use super::*;
 
 // TEMPORARY benchmark hook.
 static BENCH_OPENED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-// TEMPORARY probe: ANARC_WAIT=<ms> pins the inter-frame wait.
-static WAIT_OVERRIDE: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
 
 #[cfg(all(target_os = "linux", not(test)))]
 use super::actions::peek::peek_layout;
@@ -17,7 +15,6 @@ mod theme_picker;
 impl Render for Lumen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         _window.set_rem_size(px(16.0 * UI_SCALE));
-        stats::record_ui_render();
         let auto_light = matches!(
             _window.appearance(),
             gpui_kit::WindowAppearance::Light | gpui_kit::WindowAppearance::VibrantLight
@@ -28,14 +25,6 @@ impl Render for Lumen {
         for space in &mut self.spaces {
             space.theme_auto_light = auto_light;
         }
-        if !self.first_frame_logged {
-            self.first_frame_logged = true;
-            eprintln!(
-                "Lumen time-to-first-frame: {:.1} ms",
-                self.started_at.elapsed().as_secs_f64() * 1000.0
-            );
-        }
-
         // TEMPORARY benchmark hook.
         if std::env::var_os("ANARC_BENCH_URL").is_some()
             && !BENCH_OPENED.swap(true, std::sync::atomic::Ordering::Relaxed)
@@ -57,11 +46,7 @@ impl Render for Lumen {
         if !self.cef_task_started {
             self.cef_task_started = true;
             let interval = _window.refresh_interval(cx);
-            let display_hz = engine::display_refresh_rate(interval);
             let paint_cap = engine::frame_rate_for_refresh(interval);
-            eprintln!(
-                "Lumen OSR scheduler: CEF-owned; display={display_hz} Hz; requested paint cap={paint_cap} fps"
-            );
             self.engine.set_windowless_frame_rate(paint_cap);
             cx.observe_window_display(_window, |this, window, cx| {
                 let paint_cap = engine::frame_rate_for_refresh(window.refresh_interval(cx));
@@ -112,7 +97,6 @@ impl Render for Lumen {
                     .timer(std::time::Duration::from_millis(180))
                     .await;
                 loop {
-                    let iter_started = Instant::now();
                     // A queued wake can be coalesced into this update. A wake that
                     // arrives during the update stays queued for the next pass.
                     let _ = ui_update_receiver.try_recv();
@@ -206,7 +190,6 @@ impl Render for Lumen {
                         let (dirty_tabs, has_root_updates) =
                             this.engine.collect_browser_updates(&visible_ids);
                         if has_root_updates {
-                            stats::record_root_metadata_update();
                             for tab_id in &visible_ids {
                                 if let Some((title, url)) = this.engine.take_updates(tab_id)
                                 {
@@ -265,24 +248,14 @@ impl Render for Lumen {
                     if !matches!(scheduled, Ok(Some(()))) {
                         break;
                     }
-                    let update_elapsed = iter_started.elapsed();
-                    // TEMPORARY probe: ANARC_WAIT=<ms> pins the inter-frame wait.
-                    let wait_ms = WAIT_OVERRIDE
-                        .get_or_init(|| {
-                            std::env::var("ANARC_WAIT")
-                                .ok()
-                                .and_then(|value| value.parse::<u64>().ok())
-                        })
-                        .unwrap_or(250);
                     futures_lite::future::or(
                         cx.background_executor()
-                            .timer(std::time::Duration::from_millis(wait_ms)),
+                            .timer(std::time::Duration::from_millis(250)),
                         async {
                             let _ = ui_update_receiver.recv().await;
                         },
                     )
                     .await;
-                    stats::record_ui_loop(update_elapsed, iter_started.elapsed() - update_elapsed);
                 }
             })
             .detach();
