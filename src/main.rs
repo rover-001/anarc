@@ -18,8 +18,30 @@ mod ui;
 use gpui_kit::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("ANARC_PTRACE").is_some() {
+            unsafe extern "C" {
+                fn prctl(option: i32, ...) -> i32;
+            }
+            unsafe {
+                prctl(0x5961_6d61, -1i64, 0i64, 0i64, 0i64);
+            }
+        }
+    }
     if handle_import_cli() {
         return;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Prevent glibc from thrashing mmap/munmap syscalls and page faults on 8.3MB frame buffers
+        unsafe extern "C" {
+            fn mallopt(param: std::os::raw::c_int, value: std::os::raw::c_int) -> std::os::raw::c_int;
+        }
+        unsafe {
+            mallopt(1 /* M_MMAP_THRESHOLD */, 64 * 1024 * 1024);
+            mallopt(-1 /* M_TRIM_THRESHOLD */, 64 * 1024 * 1024);
+        }
     }
     #[cfg(target_os = "linux")]
     if std::env::var_os("DISPLAY").is_some() {

@@ -6,10 +6,7 @@ use crate::ui::visual::TOPBAR_HEIGHT;
 #[cfg(test)]
 use gpui_kit::px;
 
-use crate::ui::{
-    split_view::frame_logical_size,
-    visual::{SpaceTheme, active_topbar_height, space_theme},
-};
+use crate::ui::visual::{SpaceTheme, active_topbar_height, space_theme};
 
 mod pinch;
 mod render;
@@ -19,9 +16,17 @@ use scroll::ScrollMotion;
 #[cfg(test)]
 use scroll::step_scroll_accum;
 
-/// A slight wheel-speed trim leaves CEF's compositor in charge of smooth
-/// scrolling and momentum, without adding a per-frame animation on the UI thread.
-const WHEEL_SCROLL_SCALE: f32 = 0.40;
+/// Wheel scroll scale. Default is 1.0 (53px per notch, matching standard 3-line scroll).
+/// Can be overridden via ANARC_SCROLL_SCALE env var.
+pub fn wheel_scroll_scale() -> f32 {
+    static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| {
+        std::env::var("ANARC_SCROLL_SCALE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1.0)
+    })
+}
 
 /// Crossfading old->new frame on drag release made centred pages visibly bounce
 /// sideways; with live resizing the final frame differs by a few pixels, so swap directly.
@@ -108,12 +113,12 @@ impl WebViewport {
         }
     }
 
-    pub fn set_origin_override(&mut self, origin: Option<(f32, f32)>) {
-        self.origin_override = origin;
+    pub fn set_origin_override(&mut self, origin: Option<(f32, f32)>) -> bool {
+        std::mem::replace(&mut self.origin_override, origin) != origin
     }
 
-    pub fn set_peek_mode(&mut self, peek_mode: bool) {
-        self.peek_mode = peek_mode;
+    pub fn set_peek_mode(&mut self, peek_mode: bool) -> bool {
+        std::mem::replace(&mut self.peek_mode, peek_mode) != peek_mode
     }
 
     pub fn has_content(&self) -> bool {
@@ -145,7 +150,16 @@ impl WebViewport {
         pane_index: usize,
         split_layout: bool,
         drag_edge_color: Option<u32>,
-    ) {
+    ) -> bool {
+        let changed = self.tab_id != tab_id
+            || self.sidebar_width != effective_sidebar_width
+            || self.image != image
+            || self.cursor != cursor
+            || self.pane_offset != pane_offset
+            || self.pane_index != pane_index
+            || self.split_layout != split_layout
+            || self.drag_edge_color != drag_edge_color
+            || !retired_images.is_empty();
         if self.tab_id != tab_id {
             self.scroll_motion.cancel();
             self.cancel_pinch();
@@ -185,10 +199,10 @@ impl WebViewport {
             // final-size frame arrives. Keep its newest frame for the handoff.
             self.resize_source_image = image.clone();
         }
-        if self.transition_tab.as_deref() == Some(tab_id.as_str())
+        let transition_started = self.transition_tab.as_deref() == Some(tab_id.as_str())
             && self.transition_waiting_for_image
-            && image.is_some()
-        {
+            && image.is_some();
+        if transition_started {
             self.transition_waiting_for_image = false;
             self.transition_id = self.transition_id.wrapping_add(1);
             self.transition_cleanup_scheduled = false;
@@ -202,6 +216,29 @@ impl WebViewport {
         self.pane_index = pane_index;
         self.split_layout = split_layout;
         self.drag_edge_color = drag_edge_color;
+        changed || transition_started
+    }
+
+    #[cfg(not(test))]
+    pub fn update_frame(
+        &mut self,
+        tab_id: String,
+        image: Option<Arc<gpui_kit::RenderImage>>,
+        cursor: i32,
+        retired_images: Vec<Arc<gpui_kit::RenderImage>>,
+        drag_edge_color: Option<u32>,
+    ) -> bool {
+        self.set_frame(
+            tab_id,
+            self.sidebar_width,
+            image,
+            cursor,
+            retired_images,
+            self.pane_offset,
+            self.pane_index,
+            self.split_layout,
+            drag_edge_color,
+        )
     }
 
     #[cfg(not(test))]
@@ -211,7 +248,11 @@ impl WebViewport {
         image: Option<Arc<gpui_kit::RenderImage>>,
         cursor: i32,
         retired_images: Vec<Arc<gpui_kit::RenderImage>>,
-    ) {
+    ) -> bool {
+        let changed = self.tab_id != tab_id
+            || self.image != image
+            || self.cursor != cursor
+            || !retired_images.is_empty();
         if self.tab_id != tab_id {
             self.scroll_motion.cancel();
             self.cancel_pinch();
@@ -230,18 +271,25 @@ impl WebViewport {
         self.image = image;
         self.cursor = cursor;
         self.retired_images.extend(retired_images);
+        changed
     }
 
-    pub fn set_theme(&mut self, theme: SpaceTheme) {
-        self.theme = theme;
+    pub fn set_theme(&mut self, theme: SpaceTheme) -> bool {
+        std::mem::replace(&mut self.theme, theme) != theme
     }
 
-    pub fn set_fullscreen(&mut self, fullscreen: bool) {
-        self.fullscreen = fullscreen;
+    pub fn set_fullscreen(&mut self, fullscreen: bool) -> bool {
+        std::mem::replace(&mut self.fullscreen, fullscreen) != fullscreen
     }
 
     /// Drops the previous tab's frame before an immediate cross-space jump.
-    pub fn clear_transition_image(&mut self) {
+    pub fn clear_transition_image(&mut self) -> bool {
+        let changed = self.image.is_some()
+            || self.previous_image.is_some()
+            || self.resize_source_image.is_some()
+            || self.pinch_preview.is_some()
+            || self.transition_tab.is_some()
+            || self.transition_waiting_for_image;
         self.cancel_pinch();
         self.scroll_motion.cancel();
         self.image = None;
@@ -250,6 +298,7 @@ impl WebViewport {
         self.transition_tab = None;
         self.transition_waiting_for_image = false;
         self.transition_cleanup_scheduled = false;
+        changed
     }
 }
 

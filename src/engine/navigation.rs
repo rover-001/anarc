@@ -1,6 +1,19 @@
 use super::*;
 
 impl Engine {
+    /// Returns true if any CEF-generated events are pending (plugin events,
+    /// popups, close requests, fullscreen changes, or created browsers).
+    /// Used by the render loop to skip heavy event processing when idle.
+    pub fn has_pending_events(&self) -> bool {
+        self.events.lock().map_or(false, |events| {
+            !events.plugin_events.is_empty()
+                || !events.popups.is_empty()
+                || !events.close_requests.is_empty()
+                || !events.fullscreen.is_empty()
+                || !events.created.is_empty()
+        })
+    }
+
     pub fn take_plugin_events(&self) -> Vec<(String, String)> {
         self.events
             .lock()
@@ -35,6 +48,10 @@ impl Engine {
     #[cfg(test)]
     pub(crate) fn push_download_test(&self, record: DownloadRecord) {
         if let Ok(mut events) = self.events.lock() {
+            const MAX_DOWNLOAD_RECORDS: usize = 128;
+            if events.downloads.len() >= MAX_DOWNLOAD_RECORDS {
+                events.downloads.remove(0);
+            }
             events.downloads.push(record);
         }
     }

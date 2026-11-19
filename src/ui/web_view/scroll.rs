@@ -37,8 +37,8 @@ impl ScrollMotion {
         )
     }
 
-    // Input and inertia share one display-paced driver. Coalescing prevents
-    // high-frequency trackpad events from flooding CEF between painted frames.
+    // Send the start of a gesture immediately. Coalesce subsequent input with
+    // the display-paced driver to avoid flooding CEF between painted frames.
     pub(super) fn record_pointer_scroll(
         &mut self,
         delta: (f32, f32),
@@ -46,7 +46,7 @@ impl ScrollMotion {
         modifiers: Modifiers,
         window: &mut Window,
         cx: &mut Context<WebViewport>,
-    ) {
+    ) -> (i32, i32) {
         let now = Instant::now();
         let interval = self.last_event.map(|previous| now.duration_since(previous));
         let seconds = interval
@@ -70,6 +70,12 @@ impl ScrollMotion {
             cx.on_next_frame(window, move |view, window, cx| {
                 view.scroll_momentum_tick(generation, window, cx);
             });
+        }
+        if fresh {
+            let pending = std::mem::take(&mut self.pending);
+            self.accumulate(pending)
+        } else {
+            (0, 0)
         }
     }
 
@@ -134,7 +140,6 @@ impl WebViewport {
                 lumen.engine.send_mouse_wheel(
                     &tab_id, position.0, position.1, steps.0, steps.1, &modifiers, true,
                 );
-                lumen.engine.send_external_begin_frame(&tab_id);
             });
         }
         if keep_running {

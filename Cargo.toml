@@ -35,8 +35,14 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 panic = "abort"
-strip = "symbols"
+strip = "none"
+debug = 1
 
 [profile.release.package."*"]
 opt-level = 3
 
+
+[patch.crates-io]
+gpui-pre = { path = "vendor/gpui-pre" }
+gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
+gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }

@@ -76,7 +76,8 @@ impl Engine {
             );
 
             let mut window_info = WindowInfo::default().set_as_windowless(0);
-            window_info.external_begin_frame_enabled = 1;
+            // Let CEF pace OSR from windowless_frame_rate. External BeginFrames
+            // can be dropped while a previous compositor frame is in flight.
             window_info.runtime_style = cef::RuntimeStyle::ALLOY;
             let start_url = CefString::from(url);
 
@@ -204,7 +205,7 @@ impl Engine {
                 host.close_browser(1);
             }
             if let Ok(mut state) = entry.state.lock() {
-                self.retired_images.append(&mut state.retired);
+                state.pending_image = None;
                 if let Some(image) = state.image.take() {
                     self.retired_images.push(image);
                 }
@@ -309,6 +310,27 @@ impl Engine {
             .and_then(|entry| entry.state.lock().ok().map(|state| state.cursor))
             .unwrap_or(0)
     }
+    /// Promote the latest pending frame and sample its cursor in one lock.
+    pub fn take_viewport_frame(
+        &self,
+        tab_id: &str,
+        retired_images: &mut Vec<Arc<RenderImage>>,
+    ) -> (Option<Arc<RenderImage>>, i32) {
+        self.browsers
+            .get(tab_id)
+            .and_then(|entry| entry.state.lock().ok())
+            .map(|mut state| {
+                state.dirty = false;
+                if let Some(image) = state.pending_image.take()
+                    && let Some(previous) = state.image.replace(image)
+                {
+                    retired_images.push(previous);
+                }
+                (state.image.clone(), state.cursor)
+            })
+            .unwrap_or_default()
+    }
+
     pub fn get_selected_text(&self, tab_id: &str) -> Option<String> {
         self.browsers.get(tab_id).and_then(|entry| {
             entry
@@ -319,23 +341,10 @@ impl Engine {
         })
     }
 
-    /// Drains frames replaced since the last call so the caller can evict them from
-    /// GPUI's sprite atlas (each OSR frame is a distinct RenderImage/texture).
+    /// Drains images from closed browsers for eviction from GPUI's atlas.
+    /// Images replaced by new paints are handed directly to the viewport.
     pub fn take_retired_images(&mut self) -> Vec<Arc<RenderImage>> {
-        let mut retired = std::mem::take(&mut self.retired_images);
-        retired.extend(
-            self.browsers
-                .values()
-                .flat_map(|entry| {
-                    entry
-                        .state
-                        .lock()
-                        .map(|mut state| std::mem::take(&mut state.retired))
-                        .unwrap_or_default()
-                })
-                .collect::<Vec<_>>(),
-        );
-        retired
+        std::mem::take(&mut self.retired_images)
     }
     pub fn get_favicon_image(
         &self,
@@ -375,7 +384,7 @@ impl Engine {
                 }
 
                 if let Some(ref host) = target_host
-                    && let Some(img) = load_favicon_from_disk(host)
+                    && let Some(img) = render_favicon(host)
                 {
                     state.favicon = Some(img.clone());
                     state.favicon_host = Some(host.clone());
@@ -384,7 +393,7 @@ impl Engine {
                 }
             }
         } else if let Some(ref host) = fallback_host {
-            return load_favicon_from_disk(host);
+            return render_favicon(host);
         }
         None
     }
@@ -526,19 +535,6 @@ impl Engine {
             };
             host.send_mouse_wheel_event(Some(&event), delta_x, delta_y);
         }
-    }
-
-    pub fn send_external_begin_frame(&mut self, tab_id: &str) {
-        if self.begin_frames_sent.insert(tab_id.to_string())
-            && let Some(entry) = self.browsers.get(tab_id)
-            && let Some(host) = entry.browser.host()
-        {
-            host.send_external_begin_frame();
-        }
-    }
-
-    pub fn reset_external_begin_frames(&mut self) {
-        self.begin_frames_sent.clear();
     }
 
     pub fn send_drag_drop_files(
