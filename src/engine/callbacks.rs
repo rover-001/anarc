@@ -671,6 +671,7 @@ cef::wrap_render_handler! {
                     state.last_edge_color_instant = Some(std::time::Instant::now());
                 }
                 let superseded = state.pending_image.replace(render_image);
+                state.pending_image_at = Some(std::time::Instant::now());
                 state.dirty = true;
                 drop(state);
                 if superseded.is_some() {

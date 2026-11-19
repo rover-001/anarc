@@ -2056,6 +2056,8 @@ impl X11ClientState {
             .insert_source(calloop::timer::Timer::immediate(), {
                 let this = self.this.clone();
                 move |mut instant, (), _| {
+                    let tick_started = Instant::now();
+                    gpui::record_platform_x11_tick(tick_started.saturating_duration_since(instant));
                     let Some(client) = this.get_client() else {
                         return calloop::timer::TimeoutAction::Drop;
                     };
