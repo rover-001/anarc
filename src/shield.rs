@@ -285,7 +285,6 @@ impl ShieldState {
                     }
                     *counts.entry(tab_id.to_owned()).or_default() += 1;
                 }
-                crate::stats::record_blocked_request(tab_id);
             }
             return blocked;
         }
@@ -312,7 +311,6 @@ impl ShieldState {
                 }
                 *counts.entry(tab_id.to_owned()).or_default() += 1;
             }
-            crate::stats::record_blocked_request(tab_id);
         }
         blocked
     }

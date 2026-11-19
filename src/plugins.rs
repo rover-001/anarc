@@ -17,7 +17,6 @@ struct BuiltinPlugin {
 
 #[derive(Clone, Copy)]
 enum BuiltinFeature {
-    Stats,
     Reader,
     Import,
     History,
@@ -43,7 +42,6 @@ impl BuiltinPlugin {
 
     fn set_enabled(feature: BuiltinFeature, enabled: bool) {
         match feature {
-            BuiltinFeature::Stats => crate::stats::set_plugin_enabled(enabled),
             BuiltinFeature::Reader => crate::reader::set_plugin_enabled(enabled),
             BuiltinFeature::Import => IMPORT_ENABLED.store(enabled, Ordering::Relaxed),
             BuiltinFeature::History => crate::history::set_plugin_enabled(enabled),
@@ -118,14 +116,6 @@ fn descriptor(id: &str, name: &str, description: &str) -> PluginDescriptor {
 /// Register implemented built-ins with the host.
 pub(crate) fn register(host: &mut PluginHost) {
     host.register(
-        descriptor(
-            "lumen.stats",
-            "Performance stats",
-            "Runtime performance counters",
-        ),
-        || Box::new(BuiltinPlugin::new("lumen.stats", BuiltinFeature::Stats)),
-    );
-    host.register(
         descriptor("lumen.reader", "Reader mode", "Simplified article view"),
         || Box::new(BuiltinPlugin::new("lumen.reader", BuiltinFeature::Reader)),
     );
@@ -183,7 +173,6 @@ pub(crate) fn register(host: &mut PluginHost) {
     let safe_mode = host.is_safe_mode();
     let config = host.config();
     for (id, feature) in [
-        ("lumen.stats", BuiltinFeature::Stats),
         ("lumen.reader", BuiltinFeature::Reader),
         ("lumen.import", BuiltinFeature::Import),
         ("lumen.history", BuiltinFeature::History),
@@ -238,7 +227,6 @@ mod tests {
     fn feature_effects_disable_and_reenable_with_plugin_lifecycle() {
         let mut kernel = Kernel::new();
         let builtins = [
-            ("lumen.stats", BuiltinFeature::Stats),
             ("lumen.reader", BuiltinFeature::Reader),
             ("lumen.import", BuiltinFeature::Import),
             ("lumen.history", BuiltinFeature::History),
@@ -254,7 +242,6 @@ mod tests {
                 .unwrap();
         }
 
-        assert!(crate::stats::plugin_enabled());
         assert!(crate::reader::is_plugin_enabled());
         assert!(IMPORT_ENABLED.load(Ordering::Relaxed));
         assert!(crate::history::plugin_enabled());
@@ -269,7 +256,6 @@ mod tests {
         for (id, _) in builtins {
             kernel.unmount(id);
         }
-        assert!(!crate::stats::plugin_enabled());
         assert!(!crate::reader::is_plugin_enabled());
         assert!(!IMPORT_ENABLED.load(Ordering::Relaxed));
         assert!(!crate::history::plugin_enabled());
@@ -295,7 +281,6 @@ mod tests {
                 .mount(Box::new(BuiltinPlugin::new(id, feature)))
                 .unwrap();
         }
-        assert!(crate::stats::plugin_enabled());
         assert!(crate::reader::is_plugin_enabled());
         assert!(IMPORT_ENABLED.load(Ordering::Relaxed));
         assert!(crate::history::plugin_enabled());
@@ -328,7 +313,6 @@ mod tests {
         register(&mut host);
         host.mount_enabled().unwrap();
 
-        assert!(!crate::stats::plugin_enabled());
         assert!(!crate::reader::is_plugin_enabled());
         assert!(!crate::history::plugin_enabled());
         assert!(!downloads_enabled());
@@ -340,7 +324,6 @@ mod tests {
         // The feature switches are process-wide because browser callbacks read
         // them on worker threads; restore the test process to its default set.
         for feature in [
-            BuiltinFeature::Stats,
             BuiltinFeature::Reader,
             BuiltinFeature::Import,
             BuiltinFeature::History,

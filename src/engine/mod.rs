@@ -604,8 +604,6 @@ pub struct BrowserSharedState {
     /// Latest CEF frame awaiting handoff to GPUI. Only the UI may publish it
     /// as `image`, so replacing this slot never leaves an atlas entry behind.
     pub pending_image: Option<Arc<RenderImage>>,
-    /// Time the latest pending OSR frame completed, for handoff-latency telemetry.
-    pub pending_image_at: Option<std::time::Instant>,
     pub title: Option<String>,
     pub url: Option<String>,
     pub is_loading: bool,
@@ -653,7 +651,6 @@ pub(super) fn new_shared_state(
         dirty: false,
         root_dirty: false,
         pending_image: None,
-        pending_image_at: None,
         title: None,
         url: None,
         is_loading: true,
