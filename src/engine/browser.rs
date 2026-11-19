@@ -76,6 +76,7 @@ impl Engine {
             );
 
             let mut window_info = WindowInfo::default().set_as_windowless(0);
+            window_info.external_begin_frame_enabled = 1;
             window_info.runtime_style = cef::RuntimeStyle::ALLOY;
             let start_url = CefString::from(url);
 
@@ -525,6 +526,19 @@ impl Engine {
             };
             host.send_mouse_wheel_event(Some(&event), delta_x, delta_y);
         }
+    }
+
+    pub fn send_external_begin_frame(&mut self, tab_id: &str) {
+        if self.begin_frames_sent.insert(tab_id.to_string())
+            && let Some(entry) = self.browsers.get(tab_id)
+            && let Some(host) = entry.browser.host()
+        {
+            host.send_external_begin_frame();
+        }
+    }
+
+    pub fn reset_external_begin_frames(&mut self) {
+        self.begin_frames_sent.clear();
     }
 
     pub fn send_drag_drop_files(

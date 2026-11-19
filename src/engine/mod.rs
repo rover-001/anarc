@@ -674,6 +674,7 @@ pub struct Engine {
     /// Names the browsers CEF creates for page popups so their ids stay unique
     /// without the app having to know about them ahead of time.
     popup_serial: Arc<std::sync::atomic::AtomicU64>,
+    begin_frames_sent: HashSet<String>,
 }
 
 fn resize_should_send(
