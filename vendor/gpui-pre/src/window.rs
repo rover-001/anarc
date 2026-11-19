@@ -76,6 +76,14 @@ static GPUI_PRESENT_NANOS: AtomicU64 = AtomicU64::new(0);
 static GPUI_PHASE_FRAMES: AtomicU64 = AtomicU64::new(0);
 static GPUI_NATIVE_FRAMES: AtomicU64 = AtomicU64::new(0);
 static GPUI_LOCAL_FRAMES: AtomicU64 = AtomicU64::new(0);
+static GPUI_NATIVE_CALLBACKS: AtomicU64 = AtomicU64::new(0);
+static GPUI_SCHEDULED_TICKS: AtomicU64 = AtomicU64::new(0);
+static GPUI_RETRY_TICKS: AtomicU64 = AtomicU64::new(0);
+static GPUI_WAYLAND_TICKS: AtomicU64 = AtomicU64::new(0);
+static GPUI_X11_TICKS: AtomicU64 = AtomicU64::new(0);
+static GPUI_X11_MAX_LATENESS_NANOS: AtomicU64 = AtomicU64::new(0);
+static GPUI_SIGNAL_DELAY_NANOS: AtomicU64 = AtomicU64::new(0);
+static GPUI_FRAME_SIGNALS: AtomicU64 = AtomicU64::new(0);
 static GPUI_CALLBACK_DELAY_NANOS: AtomicU64 = AtomicU64::new(0);
 static GPUI_CALLBACKS: AtomicU64 = AtomicU64::new(0);
 static GPUI_LOCAL_RECOVERIES: AtomicU64 = AtomicU64::new(0);
@@ -131,6 +139,16 @@ fn record_gpui_phase(layout: Duration, prepaint: Duration, paint: Duration) {
     let present = GPUI_PRESENT_NANOS.swap(0, Ordering::Relaxed) as f64 / frames as f64 / 1e6;
     let native = GPUI_NATIVE_FRAMES.swap(0, Ordering::Relaxed);
     let local = GPUI_LOCAL_FRAMES.swap(0, Ordering::Relaxed);
+    let native_callbacks = GPUI_NATIVE_CALLBACKS.swap(0, Ordering::Relaxed);
+    let scheduled_ticks = GPUI_SCHEDULED_TICKS.swap(0, Ordering::Relaxed);
+    let retry_ticks = GPUI_RETRY_TICKS.swap(0, Ordering::Relaxed);
+    let wayland_ticks = GPUI_WAYLAND_TICKS.swap(0, Ordering::Relaxed);
+    let x11_ticks = GPUI_X11_TICKS.swap(0, Ordering::Relaxed);
+    let x11_max_lateness = GPUI_X11_MAX_LATENESS_NANOS.swap(0, Ordering::Relaxed) as f64 / 1e6;
+    let signals = GPUI_FRAME_SIGNALS.swap(0, Ordering::Relaxed);
+    let signal_delay = GPUI_SIGNAL_DELAY_NANOS.swap(0, Ordering::Relaxed) as f64
+        / signals.max(1) as f64
+        / 1e6;
     let callbacks = GPUI_CALLBACKS.swap(0, Ordering::Relaxed);
     let callback_delay = GPUI_CALLBACK_DELAY_NANOS.swap(0, Ordering::Relaxed) as f64
         / callbacks.max(1) as f64
@@ -141,7 +159,7 @@ fn record_gpui_phase(layout: Duration, prepaint: Duration, paint: Duration) {
         / 1e6;
     GPUI_PHASE_FRAMES.store(0, Ordering::Relaxed);
     let line = format!(
-        "[GPUI FRAME] frames={frames} layout={layout:.2}ms prepaint={prepaint:.2}ms paint={paint:.2}ms present={present:.2}ms native={native} local={local} callback-delay={callback_delay:.2}ms recoveries={recoveries} recovery-late={recovery_delay:.2}ms\n"
+        "[GPUI FRAME] frames={frames} layout={layout:.2}ms prepaint={prepaint:.2}ms paint={paint:.2}ms present={present:.2}ms native={native} local={local} callbacks={native_callbacks} scheduled={scheduled_ticks} retries={retry_ticks} wayland={wayland_ticks} x11={x11_ticks} x11-max-late={x11_max_lateness:.2}ms signal-delay={signal_delay:.2}ms callback-delay={callback_delay:.2}ms recoveries={recoveries} recovery-late={recovery_delay:.2}ms\n"
     );
     emit_gpui_phase_log(line);
 }
@@ -156,6 +174,38 @@ pub fn record_platform_frame_source(source: crate::FrameRequestSource) {
             GPUI_LOCAL_FRAMES.fetch_add(1, Ordering::Relaxed);
         }
     }
+}
+
+#[doc(hidden)]
+pub fn record_platform_native_callback() {
+    GPUI_NATIVE_CALLBACKS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[doc(hidden)]
+pub fn record_platform_scheduled_tick() {
+    GPUI_SCHEDULED_TICKS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[doc(hidden)]
+pub fn record_platform_retry_tick() {
+    GPUI_RETRY_TICKS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[doc(hidden)]
+pub fn record_platform_wayland_tick() {
+    GPUI_WAYLAND_TICKS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[doc(hidden)]
+pub fn record_platform_x11_tick(lateness: Duration) {
+    GPUI_X11_TICKS.fetch_add(1, Ordering::Relaxed);
+    GPUI_X11_MAX_LATENESS_NANOS.fetch_max(lateness.as_nanos() as u64, Ordering::Relaxed);
+}
+
+#[doc(hidden)]
+pub fn record_platform_frame_signal_delay(delay: Duration) {
+    GPUI_SIGNAL_DELAY_NANOS.fetch_add(delay.as_nanos() as u64, Ordering::Relaxed);
+    GPUI_FRAME_SIGNALS.fetch_add(1, Ordering::Relaxed);
 }
 
 #[doc(hidden)]
@@ -1989,6 +2039,13 @@ impl Window {
             let mut deferred_force_render = false;
             let mut frame_pacer = FramePacer::default();
             move |request_frame_options| {
+                let signal_handled_at = Instant::now();
+                record_platform_frame_source(request_frame_options.signal_source);
+                if let Some(signal_at) = request_frame_options.signal_at {
+                    record_platform_frame_signal_delay(
+                        signal_handled_at.saturating_duration_since(signal_at),
+                    );
+                }
                 #[cfg(feature = "profiler")]
                 let (_foreground_turn, window_id) = {
                     let foreground_turn = profiler::journal::foreground_turn();

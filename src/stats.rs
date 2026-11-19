@@ -30,6 +30,9 @@ static SCROLL_CEF_PAINTS: AtomicU64 = AtomicU64::new(0);
 static SCROLL_CEF_COALESCED: AtomicU64 = AtomicU64::new(0);
 static IMAGE_COPY_NANOS: AtomicU64 = AtomicU64::new(0);
 static IMAGE_COPIES: AtomicU64 = AtomicU64::new(0);
+static IMAGE_HANDOFF_NANOS: AtomicU64 = AtomicU64::new(0);
+static IMAGE_HANDOFFS: AtomicU64 = AtomicU64::new(0);
+static IMAGE_HANDOFF_MAX_NANOS: AtomicU64 = AtomicU64::new(0);
 static VIEWPORT_RENDER_NANOS: AtomicU64 = AtomicU64::new(0);
 static VIEWPORT_RENDERS: AtomicU64 = AtomicU64::new(0);
 static BLOCKED_BY_TAB: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
@@ -154,6 +157,14 @@ pub fn record_coalesced_cef_paint() {
 pub fn record_image_copy(elapsed: Duration) {
     IMAGE_COPY_NANOS.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
     IMAGE_COPIES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Time from a completed CEF OSR paint until GPUI promotes that image for display.
+pub fn record_image_handoff(elapsed: Duration) {
+    let nanos = elapsed.as_nanos() as u64;
+    IMAGE_HANDOFF_NANOS.fetch_add(nanos, Ordering::Relaxed);
+    IMAGE_HANDOFFS.fetch_add(1, Ordering::Relaxed);
+    IMAGE_HANDOFF_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
 }
 
 pub fn record_viewport_render(elapsed: Duration) {
@@ -300,8 +311,11 @@ pub fn record_scroll_frame(nominal_hz: u32) {
         let loop_samples = LOOP_ITERS.swap(0, Ordering::Relaxed);
         let cef_paints = SCROLL_CEF_PAINTS.swap(0, Ordering::Relaxed);
         let coalesced = SCROLL_CEF_COALESCED.swap(0, Ordering::Relaxed);
+        let handoffs = IMAGE_HANDOFFS.swap(0, Ordering::Relaxed);
+        let handoff_ms = average_ms_with_count(&IMAGE_HANDOFF_NANOS, handoffs);
+        let handoff_max_ms = IMAGE_HANDOFF_MAX_NANOS.swap(0, Ordering::Relaxed) as f64 / 1e6;
         let stat_line = format!(
-            "[SCROLL LOG] FPS: {:.1} | Nominal: {:.1}ms ({}Hz) | spikes: {} max: {:.1}ms | CEF paints/s: {:.1} | CEF coalesced/s: {:.1} | CEF paint: {:.2}ms | image copy: {:.2}ms | viewport build: {:.2}ms | loop update/wait: {:.2}/{:.2}ms\n",
+            "[SCROLL LOG] FPS: {:.1} | Nominal: {:.1}ms ({}Hz) | spikes: {} max: {:.1}ms | CEF paints/s: {:.1} | CEF coalesced/s: {:.1} | CEF paint: {:.2}ms | image copy: {:.2}ms | CEF-to-UI avg/max: {:.2}/{:.2}ms | viewport build: {:.2}ms | loop update/wait: {:.2}/{:.2}ms\n",
             fps,
             nominal_interval_ms,
             hz,
@@ -311,6 +325,8 @@ pub fn record_scroll_frame(nominal_hz: u32) {
             coalesced as f64 / window_elapsed.as_secs_f64(),
             average_ms(&CEF_PAINT_NANOS, &CEF_PAINTS),
             average_ms(&IMAGE_COPY_NANOS, &IMAGE_COPIES),
+            handoff_ms,
+            handoff_max_ms,
             average_ms(&VIEWPORT_RENDER_NANOS, &VIEWPORT_RENDERS),
             average_ms_with_count(&LOOP_UPDATE_NANOS, loop_samples),
             average_ms_with_count(&LOOP_WAIT_NANOS, loop_samples),
