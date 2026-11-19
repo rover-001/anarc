@@ -1,5 +1,35 @@
 use super::*;
 
+const MAX_RECYCLED_FRAME_BYTES: usize = 32 * 1024 * 1024;
+static RECYCLED_FRAME_PIXELS: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+
+fn recycle_frame_pixels(pixels: Vec<u8>) {
+    let Ok(mut pool) = RECYCLED_FRAME_PIXELS.lock() else {
+        return;
+    };
+    let retained_bytes: usize = pool.iter().map(Vec::capacity).sum();
+    if pool.len() < 3 && pixels.capacity() <= MAX_RECYCLED_FRAME_BYTES - retained_bytes {
+        pool.push(pixels);
+    }
+}
+
+fn copy_frame_pixels(source: &[u8]) -> Vec<u8> {
+    let recycled = RECYCLED_FRAME_PIXELS.lock().ok().and_then(|mut pool| {
+        if let Some(index) = pool.iter().position(|pixels| pixels.len() == source.len()) {
+            Some(pool.swap_remove(index))
+        } else {
+            pool.pop()
+        }
+    });
+    if let Some(mut pixels) = recycled {
+        pixels.clear();
+        pixels.extend_from_slice(source);
+        pixels
+    } else {
+        source.to_vec()
+    }
+}
+
 fn should_block_popup(user_gesture: i32, ad_blocker_enabled: bool) -> bool {
     ad_blocker_enabled && user_gesture == 0
 }
@@ -601,6 +631,8 @@ cef::wrap_render_handler! {
             width: ::std::os::raw::c_int,
             height: ::std::os::raw::c_int,
         ) {
+            let paint_started = std::time::Instant::now();
+            let copy_started = paint_started;
             // Popup widgets (e.g. <select> dropdowns) arrive as separate PET_POPUP
             // buffers; they must not replace the main view frame.
             if type_ != PaintElementType::VIEW {
@@ -610,26 +642,21 @@ cef::wrap_render_handler! {
                 return;
             }
             let len = (width as usize) * (height as usize) * 4;
-            resize_debug(format_args!(
-                "paint tab={} frame={}x{}",
-                self.tab_id, width, height
-            ));
             let slice = unsafe { std::slice::from_raw_parts(buffer, len) };
-            let copy_started = crate::stats::frame_copy_started();
-            let pixels = slice.to_vec();
-            crate::stats::record_osr_paint(copy_started);
+            let pixels = copy_frame_pixels(slice);
+            crate::stats::record_image_copy(copy_started.elapsed());
             if let Some(img_buffer) = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
                 width as u32,
                 height as u32,
                 pixels,
             ) {
                 let frame = image::Frame::new(img_buffer);
-                let render_image = Arc::new(RenderImage::new(smallvec::smallvec![frame]));
+                let render_image =
+                    Arc::new(RenderImage::with_recycled_pixels(frame, recycle_frame_pixels));
                 let mut state = self.shared.lock().unwrap();
-                let now = std::time::Instant::now();
                 // OSR buffers are physical pixels; pane dimensions are DIPs.
                 // Compare consecutive buffers so HiDPI does not resample every paint.
-                let frame_size_changed = state.image.as_ref().is_none_or(|image| {
+                let frame_size_changed = state.pending_image.as_ref().or(state.image.as_ref()).is_none_or(|image| {
                     let size = image.size(0);
                     u32::from(size.width) != width as u32
                         || u32::from(size.height) != height as u32
@@ -637,17 +664,20 @@ cef::wrap_render_handler! {
                 let should_calc_edge = state.edge_color.is_none()
                     || frame_size_changed
                     || state.last_edge_color_instant.is_none_or(|t| {
-                        now.duration_since(t) >= std::time::Duration::from_millis(1000)
+                        std::time::Instant::now().duration_since(t) >= std::time::Duration::from_millis(1000)
                     });
                 if should_calc_edge {
                     state.edge_color = median_edge_color_bgra(slice, width as usize, height as usize);
-                    state.last_edge_color_instant = Some(now);
+                    state.last_edge_color_instant = Some(std::time::Instant::now());
                 }
-                if let Some(previous) = state.image.replace(render_image) {
-                    state.retired.push(previous);
-                }
+                let superseded = state.pending_image.replace(render_image);
                 state.dirty = true;
+                drop(state);
+                if superseded.is_some() {
+                    crate::stats::record_coalesced_cef_paint();
+                }
             }
+            crate::stats::record_cef_paint(paint_started.elapsed());
             let _ = self.paint_wake.try_send(());
         }
     }
@@ -792,12 +822,13 @@ cef::wrap_display_handler! {
                 let title = title.to_string();
                 let mut state = self.shared.lock().unwrap();
                 state.title = Some(title.clone());
-                if let Some(url) = state.url.as_deref() {
-                    crate::history::update_title(url, &title);
-                }
+                let url = state.url.clone();
                 state.dirty = true;
                 state.root_dirty = true;
                 drop(state);
+                if let Some(url) = url {
+                    crate::history::update_title(&url, &title);
+                }
                 if let Ok(mut events) = self.events.lock() {
                     events
                         .plugin_events
@@ -1128,7 +1159,7 @@ fn start_popup_browser(
         dialog_handler,
     ));
     *window_info = WindowInfo::default().set_as_windowless(0);
-    window_info.external_begin_frame_enabled = 1;
+    // Keep popup browsers on CEF's own frame source too; see ensure_browser.
     settings.windowless_frame_rate = handler.frame_rate;
     settings.javascript_access_clipboard = State::ENABLED;
     settings.javascript_dom_paste = State::ENABLED;

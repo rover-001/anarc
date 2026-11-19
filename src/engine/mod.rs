@@ -131,6 +131,36 @@ pub fn favicons_dir() -> std::path::PathBuf {
     crate::paths::data_dir().join("favicons")
 }
 
+type FaviconLookup = (Instant, Option<Arc<RenderImage>>);
+static FAVICON_LOOKUPS: std::sync::LazyLock<Mutex<HashMap<PathBuf, FaviconLookup>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn render_favicon(host: &str) -> Option<Arc<RenderImage>> {
+    let host = host.trim().to_ascii_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+    let dir = favicons_dir();
+    let key = dir.join(format!("{host}.png"));
+    let mut lookups = FAVICON_LOOKUPS.lock().unwrap();
+    if let Some((stored_at, image)) = lookups.get(&key) {
+        if image.is_some() || stored_at.elapsed() < Duration::from_secs(5) {
+            return image.clone();
+        }
+    }
+
+    let image = read_favicon(&dir, &host);
+    if lookups.len() >= 256
+        && !lookups.contains_key(&key)
+        && let Some(oldest) = lookups.iter().min_by_key(|(_, (time, _))| *time)
+    {
+        let oldest = oldest.0.clone();
+        lookups.remove(&oldest);
+    }
+    lookups.insert(key, (Instant::now(), image.clone()));
+    image
+}
+
 pub fn save_favicon_to_disk(host: &str, image: &image::RgbaImage) {
     let dir = favicons_dir();
     let _ = std::fs::create_dir_all(&dir);
@@ -139,18 +169,24 @@ pub fn save_favicon_to_disk(host: &str, image: &image::RgbaImage) {
         return;
     }
     let path = dir.join(format!("{clean_host}.png"));
-    let _ = image.save_with_format(path, image::ImageFormat::Png);
+    let _ = image.save_with_format(&path, image::ImageFormat::Png);
 
     // Also save alternate host (with/without www.) so lookups on either always hit
-    if let Some(without_www) = clean_host.strip_prefix("www.") {
-        if !without_www.is_empty() {
-            let alt_path = dir.join(format!("{without_www}.png"));
-            let _ = image.save_with_format(alt_path, image::ImageFormat::Png);
-        }
+    let alias = if let Some(without_www) = clean_host.strip_prefix("www.") {
+        without_www.to_owned()
     } else {
-        let with_www = format!("www.{clean_host}");
-        let alt_path = dir.join(format!("{with_www}.png"));
-        let _ = image.save_with_format(alt_path, image::ImageFormat::Png);
+        format!("www.{clean_host}")
+    };
+    let mut alias_path = None;
+    if !alias.is_empty() {
+        let alternate = dir.join(format!("{alias}.png"));
+        let _ = image.save_with_format(&alternate, image::ImageFormat::Png);
+        alias_path = Some(alternate);
+    }
+    let mut lookups = FAVICON_LOOKUPS.lock().unwrap();
+    lookups.remove(&path);
+    if let Some(alias_path) = alias_path {
+        lookups.remove(&alias_path);
     }
 }
 
@@ -165,6 +201,10 @@ fn rgba_to_bgra_in_place(buffer: &mut image::RgbaImage) {
 pub fn load_favicon_from_disk(host: &str) -> Option<Arc<RenderImage>> {
     let dir = favicons_dir();
     let clean_host = host.trim().to_ascii_lowercase();
+    read_favicon(&dir, &clean_host)
+}
+
+fn read_favicon(dir: &Path, clean_host: &str) -> Option<Arc<RenderImage>> {
     if clean_host.is_empty() {
         return None;
     }
@@ -246,7 +286,14 @@ pub fn log_favicon_row_rendered(tab_id: &str, has_image: bool) {
     favicon_debug(format_args!("row rendered tab={tab_id} image={has_image}"));
 }
 
+/// Cached system refresh rate — computed once, never re-spawns subprocesses.
+static CACHED_REFRESH_RATE: std::sync::OnceLock<Option<i32>> = std::sync::OnceLock::new();
+
 pub fn detect_system_refresh_rate() -> Option<i32> {
+    *CACHED_REFRESH_RATE.get_or_init(detect_system_refresh_rate_uncached)
+}
+
+fn detect_system_refresh_rate_uncached() -> Option<i32> {
     if let Ok(val) = std::env::var("ANARC_FPS")
         && let Ok(fps) = val.parse::<i32>()
         && (30..=360).contains(&fps)
@@ -309,10 +356,7 @@ pub fn detect_system_refresh_rate() -> Option<i32> {
 /// or when software rendering is requested, Anarc falls back to software rendering
 /// and lowers the OSR quality settings.
 pub fn has_hardware_gpu() -> bool {
-    if std::env::var("ANARC_NO_GPU").is_ok()
-        || std::env::var("ANARC_DISABLE_GPU").is_ok()
-        || std::env::var("LIBGL_ALWAYS_SOFTWARE").as_deref() == Ok("1")
-    {
+    if gpu_explicitly_disabled() {
         return false;
     }
 
@@ -339,8 +383,13 @@ pub fn has_hardware_gpu() -> bool {
     true
 }
 
-/// OSR frame rate ceiling. The engine paints at the display's refresh rate and
-/// never below it: there is no low-rate fallback that could make pages stutter.
+fn gpu_explicitly_disabled() -> bool {
+    std::env::var("ANARC_NO_GPU").is_ok()
+        || std::env::var("ANARC_DISABLE_GPU").is_ok()
+        || std::env::var("LIBGL_ALWAYS_SOFTWARE").as_deref() == Ok("1")
+}
+
+/// Maximum requested OSR paint rate.
 pub const OSR_MAX_FRAME_RATE: i32 = 240;
 
 fn osr_frame_rate_cap() -> i32 {
@@ -351,8 +400,8 @@ fn osr_frame_rate_cap() -> i32 {
         .clamp(1, 240)
 }
 
-pub fn frame_rate_for_refresh(refresh_interval: Option<std::time::Duration>) -> i32 {
-    let rate = refresh_interval
+pub fn display_refresh_rate(refresh_interval: Option<std::time::Duration>) -> i32 {
+    refresh_interval
         .filter(|interval| !interval.is_zero())
         .map(|interval| (1.0 / interval.as_secs_f64()).round() as i32)
         .or({
@@ -365,8 +414,19 @@ pub fn frame_rate_for_refresh(refresh_interval: Option<std::time::Duration>) -> 
                 detect_system_refresh_rate()
             }
         })
-        .unwrap_or(60);
-    rate.clamp(1, osr_frame_rate_cap())
+        .unwrap_or(60)
+}
+
+pub fn frame_rate_for_refresh(refresh_interval: Option<std::time::Duration>) -> i32 {
+    let refresh_rate = display_refresh_rate(refresh_interval).clamp(1, OSR_MAX_FRAME_RATE);
+    // CEF and the compositor run on separate clocks. A little headroom on
+    // fast displays gives CEF time to publish before the next display tick.
+    let requested = if refresh_rate >= 120 {
+        refresh_rate + (refresh_rate + 19) / 20
+    } else {
+        refresh_rate
+    };
+    requested.min(osr_frame_rate_cap())
 }
 
 /// Identity providers and OAuth endpoints a sign-in popup points at.
@@ -484,7 +544,7 @@ cef::wrap_app! {
                         let name = CefString::from(name);
                         command_line.append_switch(Some(&name));
                     }
-                } else {
+                } else if gpu_explicitly_disabled() {
                     for name in [
                         "disable-gpu",
                         "disable-gpu-compositing",
@@ -536,6 +596,9 @@ pub struct BrowserSharedState {
     pub last_edge_color_instant: Option<std::time::Instant>,
     pub dirty: bool,
     pub root_dirty: bool,
+    /// Latest CEF frame awaiting handoff to GPUI. Only the UI may publish it
+    /// as `image`, so replacing this slot never leaves an atlas entry behind.
+    pub pending_image: Option<Arc<RenderImage>>,
     pub title: Option<String>,
     pub url: Option<String>,
     pub is_loading: bool,
@@ -548,8 +611,6 @@ pub struct BrowserSharedState {
     pub favicon_preferred: bool,
     pub current_url: Option<String>,
     pub current_host: Option<String>,
-    /// Superseded frames that must be evicted from GPUI's sprite atlas on the UI thread.
-    pub retired: Vec<Arc<RenderImage>>,
     pub screen_width: i32,
     pub screen_height: i32,
     pub screen_scale: f32,
@@ -584,6 +645,7 @@ pub(super) fn new_shared_state(
         last_edge_color_instant: None,
         dirty: false,
         root_dirty: false,
+        pending_image: None,
         title: None,
         url: None,
         is_loading: true,
@@ -594,7 +656,6 @@ pub(super) fn new_shared_state(
         favicon_preferred: false,
         current_url: Some(url.to_string()),
         current_host: initial_host,
-        retired: Vec::new(),
         screen_width: width.max(1),
         screen_height: height.max(1),
         screen_scale: 1.0,
@@ -674,7 +735,6 @@ pub struct Engine {
     /// Names the browsers CEF creates for page popups so their ids stay unique
     /// without the app having to know about them ahead of time.
     popup_serial: Arc<std::sync::atomic::AtomicU64>,
-    begin_frames_sent: HashSet<String>,
 }
 
 fn resize_should_send(

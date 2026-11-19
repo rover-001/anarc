@@ -32,7 +32,6 @@ impl Engine {
             https_state: Arc::new(Mutex::new(HttpsFirstState::default())),
             panel_packages: crate::plugin::new_panel_registry(),
             popup_serial: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            begin_frames_sent: HashSet::new(),
         }
     }
 
@@ -116,7 +115,11 @@ impl Engine {
         Ok(())
     }
     pub fn set_windowless_frame_rate(&mut self, frame_rate: i32) {
-        self.windowless_frame_rate = frame_rate.clamp(1, 240);
+        let frame_rate = frame_rate.clamp(1, OSR_MAX_FRAME_RATE);
+        if self.windowless_frame_rate == frame_rate {
+            return;
+        }
+        self.windowless_frame_rate = frame_rate;
         for entry in self.browsers.values() {
             if let Some(host) = entry.browser.host() {
                 host.set_windowless_frame_rate(self.windowless_frame_rate);
@@ -151,6 +154,9 @@ impl Engine {
                 continue;
             }
             if let Some(state) = self.pending_browsers.remove(&id) {
+                if let Some(host) = browser.host() {
+                    host.set_windowless_frame_rate(self.windowless_frame_rate);
+                }
                 let dimensions = state.lock().ok().map(|state| (state.width, state.height));
                 if let Some((width, height)) = dimensions {
                     self.resize_state
@@ -187,27 +193,25 @@ impl Engine {
     pub fn ui_update_receiver(&self) -> async_channel::Receiver<()> {
         self.ui_update_receiver.clone()
     }
-    pub fn take_dirty(&self, active_tab_id: &str) -> (bool, bool) {
-        self.take_dirty_for(&[active_tab_id])
+    pub fn collect_browser_updates<'a>(
+        &self,
+        visible_tabs: &'a [String],
+    ) -> (smallvec::SmallVec<[&'a str; 3]>, bool) {
+        let mut dirty_tabs = smallvec::SmallVec::new();
+        let mut root_dirty = false;
+        for (id, entry) in &self.browsers {
+            if let Ok(mut state) = entry.state.lock() {
+                root_dirty |= std::mem::take(&mut state.root_dirty);
+                if state.dirty
+                    && let Some(tab_id) = visible_tabs.iter().find(|tab_id| *tab_id == id)
+                {
+                    dirty_tabs.push(tab_id.as_str());
+                }
+            }
+        }
+        (dirty_tabs, root_dirty)
     }
-    pub fn take_dirty_for(&self, active_tab_ids: &[&str]) -> (bool, bool) {
-        self.browsers
-            .iter()
-            .fold((false, false), |(dirty, root_dirty), (id, entry)| {
-                let (entry_dirty, entry_root_dirty) =
-                    entry.state.lock().ok().map_or((false, false), |mut state| {
-                        let is_visible = active_tab_ids.contains(&id.as_str());
-                        let entry_dirty = is_visible && state.dirty;
-                        if is_visible {
-                            state.dirty = false;
-                        }
-                        let entry_root_dirty = state.root_dirty;
-                        state.root_dirty = false;
-                        (entry_dirty, entry_root_dirty)
-                    });
-                (dirty || entry_dirty, root_dirty || entry_root_dirty)
-            })
-    }
+
     pub fn is_initialized(&self) -> bool {
         self.initialized
     }
