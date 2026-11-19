@@ -32,6 +32,7 @@ impl Engine {
             https_state: Arc::new(Mutex::new(HttpsFirstState::default())),
             panel_packages: crate::plugin::new_panel_registry(),
             popup_serial: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            begin_frames_sent: HashSet::new(),
         }
     }
 

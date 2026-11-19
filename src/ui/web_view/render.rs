@@ -577,7 +577,8 @@ impl Render for WebViewport {
                             this.engine.send_mouse_wheel(
                                 &tab_id_scroll, x, y, step_x, step_y,
                                 &event.modifiers, is_precision,
-                            )
+                            );
+                            this.engine.send_external_begin_frame(&tab_id_scroll);
                         }).ok();
                     }
                 }),
