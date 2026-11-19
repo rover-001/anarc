@@ -8,7 +8,6 @@ use super::*;
 
 impl Render for WebViewport {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let viewport_render_started = std::time::Instant::now();
         // TEMPORARY probe: ANARC_LIGHT_UI=3 misses the listener plumbing,
         // ANARC_LIGHT_UI=4 renders an empty surface.
         if let Ok(mode) = std::env::var("ANARC_LIGHT_UI") {
@@ -171,9 +170,6 @@ impl Render for WebViewport {
                 };
             }
         }
-        let hz = crate::engine::display_refresh_rate(window.refresh_interval(cx)) as u32;
-        crate::stats::record_scroll_frame(hz);
-
         if self.retired_images.len() > 2 {
             let to_drop = self.retired_images.len() - 2;
             for image in self.retired_images.drain(..to_drop) {
@@ -688,7 +684,6 @@ impl Render for WebViewport {
             ))
             .on_scroll(
                 cx.listener(move |this, event: &gpui_kit::ScrollEvent, window, cx| {
-                    crate::stats::record_scroll_input();
                     let (x, y) = browser_point_at(
                         event.position,
                         scroll_sidebar,
@@ -962,7 +957,6 @@ impl Render for WebViewport {
                 .size_full(),
             );
         }
-        crate::stats::record_viewport_render(viewport_render_started.elapsed());
         viewport.into_any_element()
     }
 }
