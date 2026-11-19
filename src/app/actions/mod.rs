@@ -265,8 +265,6 @@ impl Lumen {
             space_switch_transition_id: 0,
             #[cfg(all(target_os = "linux", not(test)))]
             resize_drag: split_view::ResizeDrag::default(),
-            started_at: Instant::now(),
-            first_frame_logged: false,
             address,
             address_active_tab: None,
             address_editing: false,

@@ -326,9 +326,6 @@ impl Engine {
                 {
                     retired_images.push(previous);
                 }
-                if let Some(painted_at) = state.pending_image_at.take() {
-                    crate::stats::record_image_handoff(painted_at.elapsed());
-                }
                 (state.image.clone(), state.cursor)
             })
             .unwrap_or_default()
