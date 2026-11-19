@@ -1128,6 +1128,7 @@ fn start_popup_browser(
         dialog_handler,
     ));
     *window_info = WindowInfo::default().set_as_windowless(0);
+    window_info.external_begin_frame_enabled = 1;
     settings.windowless_frame_rate = handler.frame_rate;
     settings.javascript_access_clipboard = State::ENABLED;
     settings.javascript_dom_paste = State::ENABLED;

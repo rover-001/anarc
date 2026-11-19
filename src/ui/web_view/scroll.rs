@@ -134,6 +134,7 @@ impl WebViewport {
                 lumen.engine.send_mouse_wheel(
                     &tab_id, position.0, position.1, steps.0, steps.1, &modifiers, true,
                 );
+                lumen.engine.send_external_begin_frame(&tab_id);
             });
         }
         if keep_running {
