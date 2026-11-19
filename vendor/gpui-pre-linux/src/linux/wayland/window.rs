@@ -950,7 +950,7 @@ impl WaylandWindowStatePtr {
     }
 
     pub fn frame(&self, signal_at: Option<Instant>, signal_source: FrameRequestSource) {
-        gpui::record_platform_frame_source(signal_source);
+        gpui::record_platform_wayland_tick();
         self.frame_loop.set(FrameLoop::Ticking);
         let mut state = self.state.borrow_mut();
         state.resize_throttle = false;
@@ -1022,6 +1022,7 @@ impl WaylandWindowStatePtr {
     }
 
     pub fn frame_callback_fired(&self, signal_at: Option<Instant>) {
+        gpui::record_platform_native_callback();
         if let Some(submitted_at) = self.last_submission.get() {
             gpui::record_platform_frame_callback_delay(
                 Instant::now().saturating_duration_since(submitted_at),
@@ -1038,6 +1039,7 @@ impl WaylandWindowStatePtr {
 
     pub fn scheduled_frame_fired(&self) {
         if self.frame_loop.get() == FrameLoop::Scheduled {
+            gpui::record_platform_scheduled_tick();
             self.frame(
                 self.scheduled_frame_at.take(),
                 FrameRequestSource::LocalSchedule,
@@ -1100,6 +1102,7 @@ impl WaylandWindowStatePtr {
 
     pub fn retry_timer_fired(&self, signal_at: Instant) {
         if self.frame_loop.get() == FrameLoop::RetryScheduled {
+            gpui::record_platform_retry_tick();
             self.frame(
                 PlatformFrameSignal::capture(|| signal_at),
                 FrameRequestSource::LocalSchedule,

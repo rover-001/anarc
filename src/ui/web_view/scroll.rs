@@ -5,8 +5,9 @@ use gpui_kit::{Context, Modifiers, Window};
 use super::WebViewport;
 
 const INPUT_GAP: Duration = Duration::from_millis(24);
+const MAX_FLING_STEP: Duration = Duration::from_millis(32);
 const DECAY_SECONDS: f32 = 0.24;
-const STOP_SPEED: f32 = 2.0;
+const MIN_FLING_PIXELS_PER_FRAME: f32 = 0.5;
 
 #[derive(Default)]
 pub(super) struct ScrollMotion {
@@ -111,26 +112,31 @@ impl WebViewport {
         let mut delta = std::mem::take(&mut motion.pending);
         let input_pending = delta != (0.0, 0.0);
         // Integrate only the portion of this frame after direct input ceased.
-        // A long scheduling stall ends inertia instead of issuing a large jump.
+        // Bound recovery after a delayed frame so inertia continues smoothly
+        // without either a large catch-up jump or abruptly killing the fling.
         if !input_pending && now.duration_since(last_event) > INPUT_GAP {
             let start = previous_frame.max(last_event + INPUT_GAP);
-            let elapsed = now.saturating_duration_since(start);
-            if elapsed > Duration::from_millis(80) {
-                motion.velocity = (0.0, 0.0);
-            } else {
-                let seconds = elapsed.as_secs_f32();
-                let (dx, vx) = decay_step(motion.velocity.0, seconds);
-                let (dy, vy) = decay_step(motion.velocity.1, seconds);
-                delta = (dx, dy);
-                motion.velocity = (vx, vy);
-            }
+            let elapsed = now
+                .saturating_duration_since(start)
+                .min(MAX_FLING_STEP);
+            let seconds = elapsed.as_secs_f32();
+            let (dx, vx) = decay_step(motion.velocity.0, seconds);
+            let (dy, vy) = decay_step(motion.velocity.1, seconds);
+            delta = (dx, dy);
+            motion.velocity = (vx, vy);
         }
         let position = motion.last_position;
         let modifiers = motion.modifiers;
         let steps = motion.accumulate(delta);
+        // CEF accepts integer wheel deltas. Stop below half a display pixel per
+        // frame so the end of the fling doesn't alternate between 0px and 1px.
+        let display_interval = window
+            .refresh_interval(cx)
+            .unwrap_or(Duration::from_millis(16));
+        let stop_speed = (MIN_FLING_PIXELS_PER_FRAME / display_interval.as_secs_f32()).max(2.0);
         let keep_running = input_pending
             || now.duration_since(last_event) <= INPUT_GAP
-            || motion.velocity.0.abs().max(motion.velocity.1.abs()) >= STOP_SPEED;
+            || motion.velocity.0.abs().max(motion.velocity.1.abs()) >= stop_speed;
         motion.running = keep_running;
 
         if steps != (0, 0) {
