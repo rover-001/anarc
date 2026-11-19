@@ -10,11 +10,6 @@ impl Lumen {
         cx: &mut Context<Self>,
         theme: visual::SpaceTheme,
         target_theme: visual::SpaceTheme,
-        tabs: &[(
-            String,
-            String,
-            Option<std::sync::Arc<gpui_kit::RenderImage>>,
-        )],
         sidebar_content: gpui_kit::AnyElement,
         outgoing_space_overlay: Option<gpui_kit::AnyElement>,
     ) -> gpui_kit::AnyElement {
@@ -37,7 +32,9 @@ impl Lumen {
                 from + (to - from) * progress
             },
         );
-        let active_space = self.active_space().clone();
+        // Keep a borrowed view of the active space. Cloning it here also
+        // clones every tab and its strings on every browser frame render.
+        let active_space = self.active_space();
         let active_tab_id = active_space.active.clone();
         let active_tab_id_string = active_tab_id.clone().unwrap_or_default();
         let active_tab = active_space
@@ -413,29 +410,34 @@ impl Lumen {
                     .edge_color_until_frame(&left_tab_id, left_frame_matches_target);
                 #[cfg(any(not(target_os = "linux"), test))]
                 let left_edge_color = None;
-                self.web_viewport.update(cx, |viewport, cx| {
-                    viewport.set_theme(theme);
-                    if left_image.is_none()
-                        && (active_tab_url.is_empty()
-                            || active_tab_url == "about:blank"
-                            || active_tab_url == "lumen://welcome"
-                            || active_tab_url == "anarc://welcome")
-                    {
-                        viewport.clear_transition_image();
-                    }
-                    viewport.set_frame(
-                        left_tab_id.clone(),
-                        viewport_sidebar,
-                        left_image,
-                        left_cursor,
-                        Vec::new(),
-                        0.0,
-                        0,
-                        split_pair.is_some(),
-                        left_edge_color,
-                    );
-                    cx.notify();
-                });
+                if self.fullscreen_tab.is_none() {
+                    self.web_viewport.update(cx, |viewport, cx| {
+                        let mut changed = viewport.set_theme(theme);
+                        changed |= viewport.set_fullscreen(false);
+                        if left_image.is_none()
+                            && (active_tab_url.is_empty()
+                                || active_tab_url == "about:blank"
+                                || active_tab_url == "lumen://welcome"
+                                || active_tab_url == "anarc://welcome")
+                        {
+                            changed |= viewport.clear_transition_image();
+                        }
+                        changed |= viewport.set_frame(
+                            left_tab_id.clone(),
+                            viewport_sidebar,
+                            left_image,
+                            left_cursor,
+                            Vec::new(),
+                            0.0,
+                            0,
+                            split_pair.is_some(),
+                            left_edge_color,
+                        );
+                        if changed {
+                            cx.notify();
+                        }
+                    });
+                }
                 let right_tab_id = split_pair.as_ref().map(|pair| pair.second.clone());
                 if let Some(right_tab_id) = right_tab_id {
                     let right_image = self.engine.get_image(&right_tab_id);
@@ -452,8 +454,8 @@ impl Lumen {
                     #[cfg(any(not(target_os = "linux"), test))]
                     let right_edge_color = None;
                     self.second_web_viewport.update(cx, |viewport, cx| {
-                        viewport.set_theme(theme);
-                        viewport.set_frame(
+                        let mut changed = viewport.set_theme(theme);
+                        changed |= viewport.set_frame(
                             right_tab_id.clone(),
                             viewport_sidebar,
                             right_image,
@@ -464,7 +466,9 @@ impl Lumen {
                             true,
                             right_edge_color,
                         );
-                        cx.notify();
+                        if changed {
+                            cx.notify();
+                        }
                     });
                 }
                 div()
@@ -960,10 +964,10 @@ impl Lumen {
             let image = self.engine.get_image(&peek.id);
             let cursor = self.engine.get_cursor(&peek.id);
             self.peek_web_viewport.update(cx, |viewport, cx| {
-                viewport.set_theme(theme);
-                viewport.set_peek_mode(true);
-                viewport.set_origin_override(Some((layout.viewport_x, layout.viewport_y)));
-                viewport.set_frame(
+                let mut changed = viewport.set_theme(theme);
+                changed |= viewport.set_peek_mode(true);
+                changed |= viewport.set_origin_override(Some((layout.viewport_x, layout.viewport_y)));
+                changed |= viewport.set_frame(
                     peek.id.clone(),
                     0.0,
                     image,
@@ -974,7 +978,9 @@ impl Lumen {
                     false,
                     None,
                 );
-                cx.notify();
+                if changed {
+                    cx.notify();
+                }
             });
 
             let title = if peek.title.trim().is_empty() {
@@ -1346,17 +1352,38 @@ impl Lumen {
             }
         }));
 
+        let split_menu_tabs = if self
+            .tab_context_menu
+            .as_ref()
+            .is_some_and(|menu| menu.showing_split_targets)
+            && crate::plugins::split_view_enabled()
+        {
+            self.active_space()
+                .tabs
+                .iter()
+                .map(|tab| {
+                    (
+                        tab.id.clone(),
+                        tab.title.clone(),
+                        self.engine.get_favicon_image(&tab.id, Some(&tab.url)),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         root = root
             .children(self.render_dialogs(theme, cx))
-            .children(self.render_context_menus(theme, tabs, cx));
+            .children(self.render_context_menus(theme, &split_menu_tabs, cx));
 
         if let Some(tab_id) = self.fullscreen_tab.clone() {
             let image = self.engine.get_image(&tab_id);
             let cursor = self.engine.get_cursor(&tab_id);
             self.web_viewport.update(cx, |viewport, cx| {
-                viewport.set_theme(theme);
-                viewport.set_fullscreen(true);
-                viewport.set_frame(
+                let mut changed = viewport.set_theme(theme);
+                changed |= viewport.set_fullscreen(true);
+                changed |= viewport.set_frame(
                     tab_id,
                     -CONTENT_BEZEL_X,
                     image,
@@ -1367,7 +1394,9 @@ impl Lumen {
                     false,
                     None,
                 );
-                cx.notify();
+                if changed {
+                    cx.notify();
+                }
             });
             root = root.child(
                 div()
@@ -1379,11 +1408,6 @@ impl Lumen {
                             .cached(StyleRefinement::default().size_full()),
                     ),
             );
-        } else {
-            self.web_viewport.update(cx, |viewport, cx| {
-                viewport.set_fullscreen(false);
-                cx.notify();
-            });
         }
 
         if let Some((from_theme, _, transition_id)) = self.theme_transition {

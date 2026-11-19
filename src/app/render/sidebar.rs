@@ -7,7 +7,9 @@ impl Lumen {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let active_space_id = self.active_space.clone();
-        let active_space = self.active_space().clone();
+        // Sidebar rendering runs alongside browser frame updates; borrow the
+        // active space instead of deep-cloning all of its tabs each time.
+        let active_space = self.active_space();
         let active_tab_id = active_space.active.clone();
         let tabs: Vec<(
             String,
