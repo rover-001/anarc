@@ -2,7 +2,7 @@
 
 **Anarc is a keyboard-first browser for Linux.** Organize tabs into spaces, keep your go-to sites in the sidebar, and work across two pages in a split view. Anarc uses a native Rust interface built with GPUI Kit and renders web pages with Chromium Embedded Framework (CEF).
 
-![Anarc's Personal space with favorites, pinned tabs, folders, and the address bar](assets/anarc-screenshot.png)
+[![Anarc browser demo showing the Personal space and sidebar](assets/anarc-screenshot.png)](https://anarc.pages.dev/#workspace)
 
 ## Features
 
