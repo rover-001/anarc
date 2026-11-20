@@ -70,7 +70,7 @@ impl Lumen {
             .child(visual::space_backdrop(
                 self.space_modal
                     .as_ref()
-                    .map_or(&active_space, |modal| &modal.theme_draft),
+                    .map_or(active_space, |modal| &modal.theme_draft),
             ))
             .on_mouse_down(
                 gpui_kit::MouseButton::Left,
@@ -1028,7 +1028,7 @@ impl Lumen {
                     && started.elapsed() < ui::motion::row_exit().duration()
                 {
                     let row_index = closing_tab_row_index(
-                        &active_space,
+                        active_space,
                         stored_split_pair.as_ref(),
                         self.split_group_expanded,
                         closing_tab,
