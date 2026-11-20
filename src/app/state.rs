@@ -185,6 +185,8 @@ pub(crate) struct Lumen {
     pub(super) plugins_menu_open: bool,
     pub(super) dismissed_download_toast_id: Option<u32>,
     pub(crate) settings_section: SettingsSection,
+    #[allow(dead_code)]
+    pub(crate) last_spaces_mtime: std::sync::atomic::AtomicU64,
     pub(super) preferences: crate::settings::BrowserPreferences,
     pub(super) plugins: crate::plugin::PluginHost,
     pub(super) panel_registry: crate::plugin::PanelRegistryHandle,

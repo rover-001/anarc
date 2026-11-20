@@ -110,6 +110,7 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         plugins_menu_open: false,
         dismissed_download_toast_id: None,
         settings_section: SettingsSection::default(),
+        last_spaces_mtime: std::sync::atomic::AtomicU64::new(0),
         preferences: Default::default(),
         plugins: {
             let mut plugins = crate::plugin::PluginHost::new(Default::default());

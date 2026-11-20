@@ -163,3 +163,115 @@ input::placeholder { color: var(--muted); }
 .tab-url { font-size: 0.85rem; }
 .tab-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .tab-actions button { min-height: 2.25rem; }
+
+.tailscale-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 0.85rem;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  margin-bottom: 1.25rem;
+}
+
+.ts-label {
+  color: var(--muted);
+  margin-right: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.ts-ip {
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  margin-left: 0.4rem;
+}
+
+.sm-btn {
+  min-height: 1.85rem;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.8rem;
+  border-radius: 0.45rem;
+}
+
+.hint {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.peers-container {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.peers-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.empty-peers {
+  padding: 0.75rem;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.peer-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+}
+
+.peer-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.peer-badge {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 1rem;
+  background: var(--control);
+  color: var(--muted);
+}
+
+.peer-badge[data-online="true"] {
+  background: rgba(154, 228, 186, 0.15);
+  color: var(--success);
+}
+
+.shared-banner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  background: rgba(186, 197, 255, 0.08);
+  border: 1px solid rgba(186, 197, 255, 0.25);
+  border-radius: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.shared-banner-icon {
+  font-size: 1.75rem;
+  line-height: 1;
+}
+
+.shared-banner-text {
+  flex: 1 1 14rem;
+}
+
+.shared-banner-text p {
+  margin-top: 0.2rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}

@@ -324,6 +324,12 @@ impl Lumen {
             plugins_menu_open: false,
             dismissed_download_toast_id: None,
             settings_section: SettingsSection::default(),
+            last_spaces_mtime: std::sync::atomic::AtomicU64::new(
+                crate::persist::spaces_mtime()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+            ),
             preferences,
             plugins,
             panel_registry,
@@ -339,6 +345,7 @@ impl Lumen {
         );
         let initial_theme = crate::ui::visual::theme_for_space(app.active_space());
         crate::ui::visual::update_theme_caret(initial_theme, cx);
+        ensure_live_share_daemon_running();
         app
     }
     pub(crate) fn close_app_page(&mut self) {
@@ -505,13 +512,21 @@ impl Lumen {
     }
     pub(in crate::app) fn save_state(&self) {
         #[cfg(not(test))]
-        persist::save_state(
-            &self.spaces,
-            &self.active_space,
-            self.sidebar_width
-                .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
-            self.sidebar_collapsed,
-        );
+        {
+            persist::save_state(
+                &self.spaces,
+                &self.active_space,
+                self.sidebar_width
+                    .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
+                self.sidebar_collapsed,
+            );
+            if let Some(mtime) = persist::spaces_mtime()
+                && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
+            {
+                self.last_spaces_mtime
+                    .store(d.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
         #[cfg(test)]
         let _ = self;
     }
@@ -617,5 +632,61 @@ impl Lumen {
             .iter_mut()
             .find(|space| space.id == self.active_space)
             .expect("active space must exist")
+    }
+}
+
+pub(crate) fn ensure_live_share_daemon_running() {
+    #[cfg(not(test))]
+    {
+        if let Ok(addr) = "127.0.0.1:7433".parse::<std::net::SocketAddr>()
+            && std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok()
+        {
+            return;
+        }
+        let exe = std::env::current_exe().ok();
+        let exe_dir = exe.as_ref().and_then(|p| p.parent());
+        let candidates = [
+            Some(crate::paths::data_dir().join("plugins/com.anarc.live-share/daemon.py")),
+            Some(crate::paths::data_dir().join("plugins/live-share/daemon.py")),
+            Some(std::path::PathBuf::from("plugins/live-share/daemon.py")),
+            exe_dir.map(|p| p.join("plugins/live-share/daemon.py")),
+            exe_dir.and_then(|p| p.parent()).map(|p| p.join("plugins/live-share/daemon.py")),
+            exe_dir.and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.join("plugins/live-share/daemon.py")),
+            exe_dir.and_then(|p| p.parent()).and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.join("plugins/live-share/daemon.py")),
+            Some(std::path::PathBuf::from("/home/rover/Projects/kreon/anarc/plugins/live-share/daemon.py")),
+        ];
+        for path in candidates.into_iter().flatten() {
+            if path.is_file() {
+                let python_execs = if cfg!(windows) {
+                    &["pythonw", "python", "python3"][..]
+                } else {
+                    &["python3", "python"][..]
+                };
+                for &py in python_execs {
+                    let mut cmd = std::process::Command::new(py);
+                    cmd.arg(&path)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null());
+                    if let Some(parent) = path.parent() {
+                        cmd.current_dir(parent);
+                    }
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                    }
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::process::CommandExt;
+                        cmd.process_group(0);
+                    }
+                    if cmd.spawn().is_ok() {
+                        return;
+                    }
+                }
+                break;
+            }
+        }
     }
 }

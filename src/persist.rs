@@ -23,6 +23,11 @@ pub fn spaces_path() -> PathBuf {
     crate::paths::config_dir().join("spaces.json")
 }
 
+pub fn spaces_mtime() -> Option<std::time::SystemTime> {
+    let path = spaces_path();
+    fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
 pub fn load_state() -> Option<AppState> {
     let path = spaces_path();
     let data = fs::read_to_string(path).ok()?;

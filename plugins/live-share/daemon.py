@@ -28,11 +28,12 @@ DEFAULT_PORT = 7433
 CONFIG_DIR = Path(os.environ.get("ANARC_CONFIG_DIR", Path.home() / ".config" / "anarc"))
 SPACES_FILE = CONFIG_DIR / "spaces.json"
 PLUGIN_DIR = Path(__file__).resolve().parent
+WIN_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 def get_tailscale_ip() -> str:
     """Discovers IPv4 address from tailscale daemon."""
     try:
-        res = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=2)
+        res = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=2, creationflags=WIN_NO_WINDOW)
         if res.returncode == 0:
             ip = res.stdout.strip()
             if ip:
@@ -48,6 +49,46 @@ def get_tailscale_ip() -> str:
         return local_ip
     except Exception:
         return "127.0.0.1"
+
+def get_tailscale_peers() -> Dict[str, Any]:
+    """Discovers self machine and peers via tailscale status --json."""
+    try:
+        res = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=3, creationflags=WIN_NO_WINDOW)
+        if res.returncode != 0:
+            return {"self": None, "peers": []}
+        data = json.loads(res.stdout)
+        self_node = data.get("Self", {})
+        self_ips = self_node.get("TailscaleIPs", [])
+        self_ip = next((ip for ip in self_ips if "." in ip), "")
+        self_info = {
+            "hostname": self_node.get("HostName", "This Machine"),
+            "ip": self_ip,
+            "dns_name": self_node.get("DNSName", "").rstrip("."),
+        }
+
+        peers = []
+        for p in (data.get("Peer") or {}).values():
+            hostname = p.get("HostName", "")
+            dns = p.get("DNSName", "").rstrip(".")
+            if not dns and not p.get("OS"):
+                # Skip internal ingress/relay nodes
+                continue
+            ips = p.get("TailscaleIPs", [])
+            ipv4 = next((ip for ip in ips if "." in ip), "")
+            if not ipv4:
+                continue
+            display_name = dns.split(".")[0] if dns else hostname
+            peers.append({
+                "hostname": display_name,
+                "dns_name": dns,
+                "ip": ipv4,
+                "online": bool(p.get("Online", False)),
+                "os": p.get("OS", ""),
+            })
+        peers.sort(key=lambda x: (not x["online"], x["hostname"]))
+        return {"self": self_info, "peers": peers}
+    except Exception as e:
+        return {"error": str(e), "self": None, "peers": []}
 
 class LiveShareState:
     def __init__(self, spaces_file: Path = SPACES_FILE, port: int = DEFAULT_PORT, host_override: Optional[str] = None):
@@ -101,14 +142,10 @@ class LiveShareState:
             }
 
     def share_local_space(self, space_id: Optional[str]) -> bool:
-        with self.lock:
-            if not space_id:
-                self.shared_space_id = None
-                self.shared_space_name = None
-                self.tabs.clear()
-                self.log_activity("Local", "Stopped sharing space")
-                return True
+        if not space_id:
+            return self.disconnect_session()
 
+        with self.lock:
             self.shared_space_id = space_id
             self.is_host = True
             # Load tabs from spaces.json
@@ -125,6 +162,49 @@ class LiveShareState:
         })
         self.notify_sse()
         return True
+
+    def disconnect_session(self) -> bool:
+        peers_to_notify = []
+        with self.lock:
+            self.shared_space_id = None
+            self.shared_space_name = None
+            self.tabs.clear()
+            self.is_host = False
+            peers_to_notify = list(self.connected_peers.keys())
+            self.connected_peers.clear()
+            self.log_activity("Local", "Ended Live Share session")
+
+        for peer in peers_to_notify:
+            self.send_to_peer(peer, "session_ended", {"peer_address": f"{self.tailscale_ip}:{self.port}"})
+
+        self._remove_shared_space_from_file()
+        self.notify_sse()
+        return True
+
+    def _remove_shared_space_from_file(self):
+        with self.lock:
+            self.suppress_local_watch = True
+        try:
+            if not self.spaces_file.is_file():
+                return
+            text = self.spaces_file.read_text(encoding="utf-8")
+            data = json.loads(text)
+            spaces = data.get("spaces", [])
+            filtered = [
+                sp for sp in spaces
+                if sp.get("id") != "shared-space" and not sp.get("name", "").startswith("[Shared]")
+            ]
+            if len(filtered) != len(spaces):
+                data["spaces"] = filtered
+                tmp = self.spaces_file.with_suffix(".tmp")
+                tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                tmp.replace(self.spaces_file)
+                self.last_spaces_mtime = self.spaces_file.stat().st_mtime
+        except Exception as e:
+            print(f"[Error removing shared space] {e}", file=sys.stderr)
+        finally:
+            with self.lock:
+                self.suppress_local_watch = False
 
     def _read_space_tabs(self, space_id: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         if not self.spaces_file.is_file():
@@ -151,9 +231,37 @@ class LiveShareState:
         peer_address = peer_address.strip()
         if not peer_address:
             return False, "Empty peer address"
-        if ":" not in peer_address:
-            peer_address = f"{peer_address}:{DEFAULT_PORT}"
 
+        port = DEFAULT_PORT
+        host = peer_address
+        if ":" in peer_address:
+            parts = peer_address.split(":", 1)
+            host = parts[0].strip()
+            try:
+                port = int(parts[1].strip())
+            except ValueError:
+                port = DEFAULT_PORT
+
+        # Resolve peer hostname if not already an IP
+        if not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", host):
+            ts_data = get_tailscale_peers()
+            resolved = None
+            target = host.lower()
+            for p in ts_data.get("peers", []):
+                h = p.get("hostname", "").lower()
+                d = p.get("dns_name", "").lower()
+                if target == h or target == d or target == d.split(".")[0]:
+                    resolved = p.get("ip")
+                    break
+            if resolved:
+                host = resolved
+            else:
+                try:
+                    host = socket.gethostbyname(host)
+                except Exception:
+                    pass
+
+        peer_address = f"{host}:{port}"
         url = f"http://{peer_address}/api/peer/sync"
         try:
             req = urllib.request.Request(
@@ -167,7 +275,7 @@ class LiveShareState:
 
             with self.lock:
                 self.connected_peers[peer_address] = {"last_seen": time.time(), "status": "connected"}
-                self.shared_space_id = data.get("space_id") or "shared-space"
+                self.shared_space_id = "shared-space"
                 self.shared_space_name = data.get("space_name") or "Shared Space"
                 self.is_host = False
                 self.tabs = data.get("tabs", [])
@@ -228,11 +336,35 @@ class LiveShareState:
 
         elif event_type == "sync_state":
             with self.lock:
-                self.shared_space_id = payload.get("space_id") or self.shared_space_id
+                if not self.is_host:
+                    self.shared_space_id = "shared-space"
                 self.shared_space_name = payload.get("space_name") or self.shared_space_name
                 self.tabs = payload.get("tabs", [])
                 self.log_activity(origin, f"Synchronized {len(self.tabs)} tabs from peer")
             self._merge_into_spaces_file()
+
+        elif event_type == "session_ended":
+            with self.lock:
+                self.shared_space_id = None
+                self.shared_space_name = None
+                self.tabs.clear()
+                self.connected_peers.clear()
+                self.log_activity(origin, "Session ended")
+            self._remove_shared_space_from_file()
+            self.notify_sse()
+
+        elif event_type == "peer_left":
+            peer_addr = payload.get("peer_address") or origin
+            with self.lock:
+                self.connected_peers.pop(peer_addr, None)
+                self.log_activity(peer_addr, f"Peer {peer_addr} left the session")
+                if not self.is_host and not self.connected_peers:
+                    self.shared_space_id = None
+                    self.shared_space_name = None
+                    self.tabs.clear()
+            if not self.is_host and not self.connected_peers:
+                self._remove_shared_space_from_file()
+            self.notify_sse()
 
         elif event_type == "tab_opened":
             tab = payload.get("tab")
@@ -312,21 +444,25 @@ class LiveShareState:
             data = json.loads(text)
             spaces = data.get("spaces", [])
 
-            # Find matching space or create one
+            # Target space ID: if we are a client, MUST be "shared-space", never a local space like "personal"
+            target_id = "shared-space" if not self.is_host else self.shared_space_id
+
             target_space = None
             for sp in spaces:
-                if sp.get("id") == self.shared_space_id:
+                if sp.get("id") == target_id:
                     target_space = sp
                     break
 
             if target_space is None:
+                if self.is_host:
+                    return
                 # Create a new shared space
-                space_id = self.shared_space_id or "shared-space"
+                space_id = "shared-space"
                 space_name = self.shared_space_name or "Shared Space"
                 target_space = {
                     "id": space_id,
                     "name": f"[Shared] {space_name}",
-                    "icon": "share-2",
+                    "icon": "globe",
                     "color": 10135039,  # #9AA6FF
                     "theme_colors": [10135039, 4907263],
                     "theme_appearance": 0,
@@ -418,7 +554,8 @@ class LiveShareHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Peer-Tailscale")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Peer-Tailscale, Access-Control-Request-Private-Network")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
 
     def do_GET(self):
@@ -434,6 +571,9 @@ class LiveShareHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/status":
             self.send_json(self.state.get_status_dict())
+
+        elif path == "/api/tailscale/peers":
+            self.send_json(get_tailscale_peers())
 
         elif path == "/api/spaces":
             spaces = []
@@ -459,6 +599,7 @@ class LiveShareHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Private-Network", "true")
             self.end_headers()
 
             with self.state.lock:
@@ -496,6 +637,10 @@ class LiveShareHandler(BaseHTTPRequestHandler):
             ok, err = self.state.connect_to_peer(peer_addr)
             self.send_json({"success": ok, "error": err})
 
+        elif path == "/api/disconnect":
+            ok = self.state.disconnect_session()
+            self.send_json({"success": ok})
+
         elif path == "/api/action":
             action = body.get("action")
             if action == "open_tab":
@@ -531,18 +676,31 @@ class LiveShareHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
         self.wfile.write(content)
 
     def read_body_json(self) -> Dict[str, Any]:
         length = int(self.headers.get("Content-Length", 0))
-        if length <= 0:
-            return {}
-        raw = self.rfile.read(length)
+        if length > 0:
+            try:
+                raw = self.rfile.read(length)
+                data = json.loads(raw.decode("utf-8"))
+                if isinstance(data, dict) and data:
+                    return data
+            except Exception:
+                pass
+        # Fallback: check query parameter __body
         try:
-            return json.loads(raw.decode("utf-8"))
+            parsed = urllib.parse.urlparse(self.path)
+            qs = urllib.parse.parse_qs(parsed.query)
+            if "__body" in qs:
+                data = json.loads(qs["__body"][0])
+                if isinstance(data, dict):
+                    return data
         except Exception:
-            return {}
+            pass
+        return {}
 
     def send_json(self, data: Any, status: HTTPStatus = HTTPStatus.OK):
         body = json.dumps(data).encode("utf-8")
@@ -550,6 +708,7 @@ class LiveShareHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
         self.wfile.write(body)
 

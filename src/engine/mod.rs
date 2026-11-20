@@ -53,6 +53,7 @@ struct EngineEvents {
     plugin_events: Vec<(String, String)>,
     close_requests: Vec<String>,
     live_share_space_request: Option<LiveShareSpaceRequest>,
+    live_share_switch_space: Option<String>,
 }
 
 fn origin_favicon_url(page_url: &str) -> Option<String> {
@@ -597,7 +598,7 @@ cef::wrap_app! {
                 command_line.append_switch_with_value(Some(&name), Some(&value));
                 let name = CefString::from("disable-features");
                 let value = CefString::from(
-                    "Translate,MediaRouter,OptimizationHints,AutofillServerCommunication,InterestFeedContentSuggestions",
+                    "Translate,MediaRouter,OptimizationHints,AutofillServerCommunication,InterestFeedContentSuggestions,BlockInsecurePrivateNetworkRequests",
                 );
                 command_line.append_switch_with_value(
                     Some(&name),
