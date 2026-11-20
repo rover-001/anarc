@@ -576,14 +576,14 @@ impl WindowsWindow {
                 SendMessageW(
                     hwnd,
                     WM_SETICON,
-                    WPARAM(ICON_BIG as _),
-                    LPARAM(icon.0 as _),
+                    Some(WPARAM(ICON_BIG as _)),
+                    Some(LPARAM(icon.0 as _)),
                 );
                 SendMessageW(
                     hwnd,
                     WM_SETICON,
-                    WPARAM(ICON_SMALL as _),
-                    LPARAM(icon.0 as _),
+                    Some(WPARAM(ICON_SMALL as _)),
+                    Some(LPARAM(icon.0 as _)),
                 );
             }
         }
