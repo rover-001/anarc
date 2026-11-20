@@ -426,3 +426,11 @@ Fixed Windows CEF character typing caps bug by properly passing char code on KEY
 ## Session 2026-11-20T05:00:55.849181694+00:00
 
 Scoped topbar window controls (minimize, maximize, close) strictly to Windows via cfg!(target_os = 'windows'), hiding them on Linux; verified all 189 tests pass and clippy clean; pushed to origin main
+
+## Session 2026-11-20T05:27:51.041143108+00:00
+
+Embedded Windows application icon into executable via embed-resource, assets/anarc.rc, multi-res anarc.ico, and WM_SETICON; fixed Live Share code decoding by making decodeCode robust against messy paste inputs, prefixes, punctuation, and url-safe base64, added UTF-8 safe encodeCode, clipboard fallbacks, click auto-selection, and quick paste buttons.
+
+## Session 2026-11-20T05:33:40.451610203+00:00
+
+Fixed windows crate SendMessageW signature to pass Some(WPARAM) and Some(LPARAM) in vendor/gpui-pre-windows/src/window.rs; relaxed build.rs to log warning instead of panicking on resource compilation; verified clippy and test suite, pushed to main.

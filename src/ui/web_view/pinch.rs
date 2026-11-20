@@ -11,6 +11,7 @@ pub(super) struct PinchPreview {
     pub(super) scale: f64,
     pub(super) offset: (f32, f32),
     anchor: (f32, f32),
+    #[cfg(target_os = "linux")]
     gesture_scale: f32,
 }
 
@@ -24,6 +25,7 @@ impl WebViewport {
             scale,
             offset,
             anchor,
+            #[cfg(target_os = "linux")]
             gesture_scale: 1.0,
         });
         self.scroll_motion.cancel();
