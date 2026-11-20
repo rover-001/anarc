@@ -8,9 +8,9 @@ fn main() {
     if target_os == "windows" {
         #[cfg(target_os = "windows")]
         {
-            embed_resource::compile("assets/anarc.rc", embed_resource::NONE)
-                .manifest_optional()
-                .unwrap();
+            if let Err(e) = embed_resource::compile("assets/anarc.rc", embed_resource::NONE).manifest_optional() {
+                eprintln!("cargo:warning=Failed to compile Windows resource: {e}");
+            }
         }
     }
 }
