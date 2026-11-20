@@ -255,45 +255,113 @@ function waitForIce(connection) {
   });
 }
 
+function encodeCode(object) {
+  const json = JSON.stringify(object);
+  const bytes = new TextEncoder().encode(json);
+  let binary = "";
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
 function decodeCode(value, expectedType) {
-  const source = value.trim();
+  if (typeof value !== "string") {
+    throw new Error("No code provided.");
+  }
+  let source = value.trim();
+  if (!source) {
+    throw new Error("Please paste a share code.");
+  }
+
   let code;
   try {
-    code = JSON.parse(source);
-  } catch {
-    const variants = [source];
-    try {
-      const decoded = decodeURIComponent(source);
-      if (decoded !== source) variants.push(decoded);
-    } catch {
-      // Continue with the pasted text as-is when it is not percent-encoded.
+    const parsed = JSON.parse(source);
+    if (parsed && typeof parsed === "object" && typeof parsed.sdp === "string") {
+      code = parsed;
+    } else if (typeof parsed === "string") {
+      source = parsed.trim();
     }
-    for (const variant of variants) {
-      const cleaned = variant.replace(/[\r\n\t\u200B\uFEFF]/g, "");
-      const candidates = [
-        cleaned.replace(/ /g, "+"),
-        cleaned.replace(/\s/g, ""),
-      ];
-      for (const candidate of new Set(candidates)) {
-        const compact = candidate.replace(/-/g, "+").replace(/_/g, "/");
-        if (!compact || compact.length % 4 === 1) continue;
-        try {
-          const padded = compact + "=".repeat((4 - compact.length % 4) % 4);
-          const binary = atob(padded);
-          const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-          code = JSON.parse(new TextDecoder().decode(bytes));
-          break;
-        } catch {
-          // Try the other common copy representation before reporting an error.
+  } catch {}
+
+  if (!code) {
+    const jsonMatch = source.match(/\{[\s\S]*"sdp"[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed && typeof parsed === "object" && typeof parsed.sdp === "string") {
+          code = parsed;
         }
-      }
-      if (code !== undefined) break;
-    }
-    if (code === undefined) {
-      throw new Error("The pasted code is incomplete or its characters changed while copying.");
+      } catch {}
     }
   }
-  if (!code || typeof code !== "object" || typeof code.sdp !== "string") {
+
+  if (!code) {
+    let cleaned = source
+      .replace(/^```[a-z]*\s*/i, "")
+      .replace(/\s*```$/, "")
+      .replace(/^[`"'\.]+|[`"'\.]+$/g, "")
+      .trim();
+
+    cleaned = cleaned.replace(/^(?:share\s*code|response\s*code|offer|answer|code)\s*[:=-]\s*/i, "");
+
+    const variants = [cleaned];
+    try {
+      const decoded = decodeURIComponent(cleaned);
+      if (decoded !== cleaned) variants.push(decoded);
+    } catch {}
+
+    for (const variant of variants) {
+      const compactAll = variant.replace(/[\r\n\t\u200B\uFEFF\s]/g, "");
+      const base64Candidates = [compactAll];
+
+      const matches = compactAll.match(/[A-Za-z0-9+/=_-]{32,}/g);
+      if (matches) {
+        matches.sort((a, b) => b.length - a.length);
+        for (const m of matches) base64Candidates.push(m);
+      }
+
+      for (const candidate of new Set(base64Candidates)) {
+        let normalized = candidate.replace(/-/g, "+").replace(/_/g, "/");
+        normalized = normalized.replace(/=+$/, "");
+        if (!normalized || normalized.length < 16) continue;
+
+        const mod = normalized.length % 4;
+        if (mod === 1) continue;
+        const padLen = mod === 0 ? 0 : 4 - mod;
+        const padded = normalized + "=".repeat(padLen);
+
+        try {
+          const binary = atob(padded);
+          try {
+            const direct = JSON.parse(binary);
+            if (direct && typeof direct === "object" && typeof direct.sdp === "string") {
+              code = direct;
+              break;
+            }
+          } catch {}
+
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          const utf8Str = new TextDecoder().decode(bytes);
+          const parsedUtf8 = JSON.parse(utf8Str);
+          if (parsedUtf8 && typeof parsedUtf8 === "object" && typeof parsedUtf8.sdp === "string") {
+            code = parsedUtf8;
+            break;
+          }
+        } catch {}
+      }
+      if (code) break;
+    }
+  }
+
+  if (!code) {
+    throw new Error("The pasted code is incomplete or its characters changed while copying.");
+  }
+  if (typeof code !== "object" || typeof code.sdp !== "string") {
     throw new Error("The pasted text doesn't contain a WebRTC share offer.");
   }
   if (code.type !== expectedType) {
@@ -319,7 +387,7 @@ async function createShareCode() {
     await connection.setLocalDescription(await connection.createOffer());
     await waitForIce(connection);
     if (peer !== connection) return;
-    $("share-code").value = btoa(JSON.stringify(connection.localDescription));
+    $("share-code").value = encodeCode(connection.localDescription);
     phase = "exchange";
     render();
     $("copy-share").focus();
@@ -358,7 +426,7 @@ async function joinSession(event) {
     await connection.setLocalDescription(await connection.createAnswer());
     await waitForIce(connection);
     if (peer !== connection) return;
-    $("response-code").value = btoa(JSON.stringify(connection.localDescription));
+    $("response-code").value = encodeCode(connection.localDescription);
     phase = "exchange";
     render();
     $("copy-response").focus();
@@ -394,13 +462,40 @@ async function confirmSession(event) {
 
 async function copyCode(id) {
   const input = $(id);
+  input.focus();
+  input.select();
+  let copied = false;
   try {
-    await navigator.clipboard.writeText(input.value);
-    setFeedback("Code copied.");
-  } catch {
-    input.focus();
+    copied = document.execCommand("copy");
+  } catch {}
+  if (!copied && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(input.value);
+      copied = true;
+    } catch {}
+  }
+  if (copied) {
+    setFeedback("Code copied to clipboard.");
+  } else {
+    setFeedback("Code selected. Press Ctrl+C to copy.", true);
+  }
+}
+
+async function pasteCode(id) {
+  const input = $(id);
+  input.focus();
+  let text = "";
+  if (navigator.clipboard?.readText) {
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {}
+  }
+  if (text) {
+    input.value = text.trim();
+    setFeedback("Code pasted.");
+  } else {
     input.select();
-    setFeedback("Code selected. Use your copy shortcut to copy it.");
+    setFeedback("Press Ctrl+V to paste the code.");
   }
 }
 
@@ -435,6 +530,15 @@ $("join-form").addEventListener("submit", joinSession);
 $("confirm-form").addEventListener("submit", confirmSession);
 $("copy-share").addEventListener("click", () => copyCode("share-code"));
 $("copy-response").addEventListener("click", () => copyCode("response-code"));
+$("paste-share")?.addEventListener("click", () => pasteCode("share-input"));
+$("paste-response")?.addEventListener("click", () => pasteCode("response-input"));
+for (const id of ["share-code", "response-code"]) {
+  const el = $(id);
+  if (el) {
+    el.addEventListener("focus", () => el.select());
+    el.addEventListener("click", () => el.select());
+  }
+}
 $("launch-form").addEventListener("submit", launchTab);
 $("disconnect").addEventListener("click", () => {
   resetPeer();
