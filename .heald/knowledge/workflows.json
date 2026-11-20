@@ -2815,5 +2815,42 @@
     "symbols": [],
     "guidance": "Followed up on Live Share join screenshot: decoder now tries raw JSON, percent-decoded JSON/base64, URL-safe base64, whitespace-wrapped, and plus-to-space variants; join field displays a specific error for incomplete code, non-offer content, or a response code. Plugin source is symlinked into the installed plugin path. No tests run.",
     "updated_at": "2026-11-20T04:36:18.805354905+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/app/render/shell.rs",
+      "src/app/render/sidebar.rs",
+      "src/app/tests.rs",
+      "src/engine/browser.rs",
+      "src/engine/mod.rs",
+      "src/engine/navigation.rs",
+      "src/shield.rs",
+      "vendor/gpui-pre-windows/build.rs",
+      "vendor/gpui-pre-windows/src/clipboard.rs",
+      "vendor/gpui-pre-windows/src/destination_list.rs",
+      "vendor/gpui-pre-windows/src/dialog.rs",
+      "vendor/gpui-pre-windows/src/direct_manipulation.rs",
+      "vendor/gpui-pre-windows/src/direct_write.rs",
+      "vendor/gpui-pre-windows/src/directx_atlas.rs",
+      "vendor/gpui-pre-windows/src/directx_devices.rs",
+      "vendor/gpui-pre-windows/src/directx_renderer.rs",
+      "vendor/gpui-pre-windows/src/dispatcher.rs",
+      "vendor/gpui-pre-windows/src/display.rs",
+      "vendor/gpui-pre-windows/src/events.rs",
+      "vendor/gpui-pre-windows/src/gpui_windows.rs",
+      "vendor/gpui-pre-windows/src/keyboard.rs",
+      "vendor/gpui-pre-windows/src/platform.rs",
+      "vendor/gpui-pre-windows/src/system_notifications.rs",
+      "vendor/gpui-pre-windows/src/system_settings.rs",
+      "vendor/gpui-pre-windows/src/util.rs",
+      "vendor/gpui-pre-windows/src/vsync.rs",
+      "vendor/gpui-pre-windows/src/window.rs",
+      "vendor/gpui-pre-windows/src/wrapper.rs",
+      "vendor/gpui-pre/src/window.rs"
+    ],
+    "symbols": [],
+    "guidance": "Fixed Windows CEF character typing caps bug by properly passing char code on KEYEVENT_CHAR; fixed Windows topbar window controls (minimize/maximize/close) and unblocked downloads and extensions buttons by removing preempting WindowControlArea drag on topbar container; patched gpui-pre-windows zoom to properly toggle maximize and restore; resolved all compiler/clippy warnings; preserved plugin live-share changes; verified all 189 tests pass and pushed to origin main",
+    "updated_at": "2026-11-20T04:58:56.709916773+00:00"
   }
 ]
