@@ -213,6 +213,7 @@ dependencies = [
  "adblock",
  "async-channel",
  "cef",
+ "embed-resource",
  "futures-lite",
  "gpui-kit",
  "gpui-pre",

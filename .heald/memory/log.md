@@ -422,3 +422,7 @@ Followed up on Live Share join screenshot: decoder now tries raw JSON, percent-d
 ## Session 2026-11-20T04:58:56.702385809+00:00
 
 Fixed Windows CEF character typing caps bug by properly passing char code on KEYEVENT_CHAR; fixed Windows topbar window controls (minimize/maximize/close) and unblocked downloads and extensions buttons by removing preempting WindowControlArea drag on topbar container; patched gpui-pre-windows zoom to properly toggle maximize and restore; resolved all compiler/clippy warnings; preserved plugin live-share changes; verified all 189 tests pass and pushed to origin main
+
+## Session 2026-11-20T05:00:55.849181694+00:00
+
+Scoped topbar window controls (minimize, maximize, close) strictly to Windows via cfg!(target_os = 'windows'), hiding them on Linux; verified all 189 tests pass and clippy clean; pushed to origin main
