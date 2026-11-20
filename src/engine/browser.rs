@@ -76,7 +76,7 @@ impl Engine {
                 dialog_handler,
             );
 
-            let mut window_info = WindowInfo::default().set_as_windowless(0);
+            let mut window_info = WindowInfo::default().set_as_windowless(empty_window_handle());
             // Let CEF pace OSR from windowless_frame_rate. External BeginFrames
             // can be dropped while a previous compositor frame is in flight.
             window_info.runtime_style = cef::RuntimeStyle::ALLOY;
@@ -527,7 +527,7 @@ impl Engine {
         {
             let mut flags = cef_mouse_modifiers(modifiers);
             if precision {
-                flags |= cef::sys::cef_event_flags_t::EVENTFLAG_PRECISION_SCROLLING_DELTA.0;
+                flags |= cef::sys::cef_event_flags_t::EVENTFLAG_PRECISION_SCROLLING_DELTA.0 as u32;
             }
             let event = MouseEvent {
                 x,

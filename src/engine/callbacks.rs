@@ -853,7 +853,7 @@ cef::wrap_display_handler! {
         fn on_cursor_change(
             &self,
             _browser: Option<&mut Browser>,
-            _cursor: c_ulong,
+            _cursor: cef::CursorHandle,
             cursor_type: CursorType,
             _custom_cursor_info: Option<&CursorInfo>,
         ) -> i32 {
@@ -1169,7 +1169,7 @@ fn start_popup_browser(
         request_handler,
         dialog_handler,
     ));
-    *window_info = WindowInfo::default().set_as_windowless(0);
+    *window_info = WindowInfo::default().set_as_windowless(empty_window_handle());
     // Keep popup browsers on CEF's own frame source too; see ensure_browser.
     settings.windowless_frame_rate = handler.frame_rate;
     settings.javascript_access_clipboard = State::ENABLED;
