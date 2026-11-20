@@ -160,7 +160,8 @@ pub(crate) struct PanelRequest {
 impl PanelRequest {
     pub(crate) fn parse(url: &str) -> Result<Self, PanelError> {
         let rest = url
-            .strip_prefix("lumen-plugin://")
+            .strip_prefix("anarc-plugin://")
+            .or_else(|| url.strip_prefix("lumen-plugin://"))
             .ok_or(PanelError::InvalidUrl)?;
         let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
         if authority.is_empty() || authority.contains(['@', ':', '%']) {

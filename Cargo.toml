@@ -14,7 +14,6 @@ raw-window-handle = "=0.6.2"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.154"
 toml = "=0.8.23"
-x11 = { version = "=2.21.0", features = ["xlib"] }
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "ico"] }
 smallvec = "=1.16.5"
 async-channel = "=2.5.0"
@@ -26,6 +25,9 @@ zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 wasmtime = { version = "=50.0.1", default-features = false, features = ["runtime", "cranelift", "component-model", "std", "wat"], optional = true }
 wasmtime-wasi = { version = "=50.0.1", default-features = false, features = ["p2"], optional = true }
 url = { version = "=2.5.8", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11 = { version = "=2.21.0", features = ["xlib"] }
 
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }

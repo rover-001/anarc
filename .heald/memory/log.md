@@ -302,3 +302,103 @@ Fixed trackpad pinch-in release causing the webpage to shrink into a 50% floatin
 ## Session 2026-11-14T09:11:29.200164072+00:00
 
 Trimmed browser wheel scroll speed by 8% in WebViewport while preserving CEF native smooth scrolling and compositor momentum; no per-frame animation was added. Diff check passed; tests not run.
+
+## Session 2026-11-19T03:56:00.959616416+00:00
+
+Fixed scrolling lag and judder in Anarc across Wikipedia and heavy sites like https://hianime.fm/home: 1. Implemented persistent BGRA cached_buffer with OnPaint dirty rect copying, ending 8.3MB per-frame allocations. 2. Eliminated cx.on_next_frame deferral from UI update loop to present frames immediately on display vsync. 3. Mitigated WGPU sprite atlas allocator thrashing by retaining a 2-frame window in retired_images before calling drop_image. 4. Restored 1:1 scroll scale (WHEEL_SCROLL_SCALE = 1.0), scaled mouse lines by 100px * scale factor, forwarded precision touch deltas with zero latency, and tuned momentum fling. 5. Enabled threaded compositing and smooth scrolling flags. 6. Measured frame telemetry across Linux Wikipedia, heavy DOM misconceptions (dropped frames fell from 2.36% to 1.28%, beating native Chromium 2.13%), and hianime.fm/home (7.0ms median interval at 144Hz vs Chromium 16.7ms). Updated NOTES.md.
+
+## Session 2026-11-19T04:08:52.266894497+00:00
+
+1. Adjusted scrolling speed: tuned WHEEL_SCROLL_SCALE to 0.45 (with ANARC_SCROLL_SCALE env override), set mouse wheel tick to 53.0px matching Chromium, clamped fling velocity to 1500px/s, and reduced decay to 0.18s to prevent runaway scrolling. 2. Implemented real-time live scroll telemetry logging in src/stats.rs: automatically tracks active scroll sessions, counts stutters (>1.5x nominal interval), counts frame skips (>2.2x nominal interval), tracks max spikes, and reports live FPS. 3. Output streams in real-time to stderr and appends to /home/rover/Projects/kreon/lumen/scroll.log. 4. Verified clean build and deployed release binary to /home/rover/.local/share/anarc/bin/anarc for user manual scrolling verification.
+
+## Session 2026-11-19T04:15:19.366035349+00:00
+
+Analyzed real user scroll telemetry from scroll.log across 775 frames (p50: 18.3ms, avg: 19.6ms, FPS: 50.9). Diagnosed the 18-20ms 3-vsync floor caused by software OSR GPU-CPU-GPU roundtrip and double momentum compounding.
+
+## Session 2026-11-19T04:30:29.270230635+00:00
+
+Implemented comprehensive scroll fix: decoupled discrete mouse wheel notches (no synthetic fling, native Chromium smooth scrolling) from touchpad precision deltas, eliminated 8.3MB double-copy and mutex lock in on_paint, tuned glibc large allocation threshold to 64MB, and locked external begin frames strictly to GPUI vsync render callback. Verified with full test suite passing 185/185 tests and deployed release binary.
+
+## Session 2026-11-19T04:36:46.837471350+00:00
+
+Identified and fixed regression: removed begin_frame calls from background render loop in app/render.rs caused CEF starvation (FPS 51->27). Restored reset_external_begin_frames + send_external_begin_frame to background loop. 185/185 tests pass. Deployed.
+
+## Session 2026-11-19T04:46:25.621228401+00:00
+
+Diagnosed and resolved the root cause of the regression: 1. Discovered that GPUI on Linux emits discrete=3.0 lines per mouse notch, meaning multiplying by 53 resulted in 159px (3x overshoot) per click. Fixed notch scaling to exactly 53.0px total (17.67px/line). 2. Reverted experimental SmoothScrolling and ScrollUnification flags in engine/mod.rs that flooded the OSR readback queue with intermediate frames and caused the 501ms pipeline freeze. 3. Restored the display-paced trackpad input coalescing driver to prevent 250Hz sub-pixel event saturation. 4. Verified with all 185 tests passing and deployed release binary.
+
+## Session 2026-11-19T04:51:47.898036881+00:00
+
+Eliminated artificial 1-frame queue delay in src/app/render.rs by removing nested cx.on_next_frame inside update_in. Updates now apply to web_viewport on the immediate presentation cycle instead of lagging by 1 vsync frame (7ms), restoring the 50+ FPS rendering cadence. Compiled and deployed release build v4.
+
+## Session 2026-11-19T16:00:07.527754417+00:00
+
+Assessed plugin architecture and MCP capabilities for Lumen
+
+## Session 2026-11-19T16:13:05.145558494+00:00
+
+Implemented Lumen MCP Server and CLI (lumen-mcp) enabling all AI agents and developers to scaffold, validate, package, install, and manage plugins for Lumen browser
+
+## Session 2026-11-19T16:22:00.292371375+00:00
+
+Made Anarc landing page fully responsive on mobile: repositioned celestial orb to upper sky with responsive touch-drag and pointer capture; added mobile collapsible sidebar drawer and topbar tabs toggle in browser showcase; made viewport full-width on mobile; adjusted typography, padding, chapter ledger tables, and specs across all sections; committed to landing-page branch and deployed live to Cloudflare Pages at https://anarc.pages.dev.
+
+## Session 2026-11-19T16:34:12.644538067+00:00
+
+Built, tested, and installed Lumen Live Share (com.lumen.live-share) plugin enabling two users to share spaces and co-browse in real-time over Tailscale
+
+## Session 2026-11-19T16:35:26.517907610+00:00
+
+Started live daemon for Lumen Live Share on http://0.0.0.0:7433 (Tailscale 100.120.139.17) ready for user testing
+
+## Session 2026-11-19T16:37:05.825891195+00:00
+
+Provided instructions for opening and managing plugins via Lumen browser UI (Ctrl+K, Settings > Plugins, Extensions popover)
+
+## Session 2026-11-19T16:46:42.165006490+00:00
+
+Fixed sharp corner artifacts on web view panels by eliminating inverse corner ring canvas overlays and passing actual per-pane corner radii directly to window.paint_image in browser_frame
+
+## Session 2026-11-19T16:52:59.772739247+00:00
+
+Stopped background server, signed .lumenplugin archive with Ed25519 signature in META-INF/lumen.signature, and upgraded Live Share plugin to run direct in-browser WebRTC P2P
+
+## Session 2026-11-19T17:06:25.682983584+00:00
+
+Fixed panel directory scanning to follow symlinks/directories and fixed network host pattern in lumen-plugin.toml; re-built and installed updated release binary to ~/.local/share/anarc/bin/anarc
+
+## Session 2026-11-19T17:08:54.327921045+00:00
+
+Provided clear step-by-step walkthrough for opening lumen-plugin://com.lumen.live-share/ and connecting two peers over WebRTC
+
+## Session 2026-11-19T17:27:06.199335040+00:00
+
+Fixed sharp corner rendering on web view and auto-close/focus of app page and overlays when clicking tabs or web content
+
+## Session 2026-11-19T17:48:38.740711614+00:00
+
+Renamed workspace folder to anarc with compat symlink, migrated live-share plugin to com.anarc.live-share with anarc-plugin.toml, built anarc-signer and anarc-mcp with backwards-compatible aliases, added Open action in plugin settings for active panel plugins, packaged signed .anarcplugin bundle, and built/installed release binary.
+
+## Session 2026-11-19T17:49:46.198720736+00:00
+
+Centered space creation icons on x-axis, increased icon picker height, and prevented dock and popover buttons from going off screen
+
+## Session 2026-11-20T03:08:45.496820676+00:00
+
+Fixed Settings closing unexpectedly when opening plugins page: removed close_app_page in on_open_panel so panel tabs open cleanly, guarded all context-menu dismissal backdrops with app_page.is_none() to prevent unprompted focus_browser closing, ensured TabState::Live on panel tabs, verified 184/184 tests pass, and recompiled release binary at ~/.local/share/anarc/bin/anarc
+
+## Session 2026-11-20T03:13:29.609049305+00:00
+
+Fixed Settings click-through to the browser and added a GPUI pointer regression for opening Plugins over a blank tab. Cargo check passed and all 185 tests passed serially.
+
+## Session 2026-11-20T03:26:55.994385011+00:00
+
+Fixed panel MIME and charset handling in CEF and focused the opened panel tab on success from Plugins settings. All 187 tests passed serially. Release built and Live Share HTML, CSS, and JavaScript verified in an isolated Anarc window.
+
+## Session 2026-11-20T03:31:50.250674967+00:00
+
+Fixed Plugins card overflow by allowing description and metadata to wrap. Reproduced and verified at a 960 pixel window width, passed 187 tests serially, and rebuilt release.
+
+## Session 2026-11-20T03:52:29.461383901+00:00
+
+Added native Anarc space selection and simplified Live Share. Sharing starts from selected web tab titles and URLs. Tested native selection and code generation on the final release, two-peer synchronization in Chromium, and all 188 Rust tests serially. Installed the verified binary with a backup.
