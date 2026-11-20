@@ -418,3 +418,7 @@ Fixed Live Share join-code decoding to accept raw JSON, URL-safe base64, padded/
 ## Session 2026-11-20T04:36:18.796858958+00:00
 
 Followed up on Live Share join screenshot: decoder now tries raw JSON, percent-decoded JSON/base64, URL-safe base64, whitespace-wrapped, and plus-to-space variants; join field displays a specific error for incomplete code, non-offer content, or a response code. Plugin source is symlinked into the installed plugin path. No tests run.
+
+## Session 2026-11-20T04:58:56.702385809+00:00
+
+Fixed Windows CEF character typing caps bug by properly passing char code on KEYEVENT_CHAR; fixed Windows topbar window controls (minimize/maximize/close) and unblocked downloads and extensions buttons by removing preempting WindowControlArea drag on topbar container; patched gpui-pre-windows zoom to properly toggle maximize and restore; resolved all compiler/clippy warnings; preserved plugin live-share changes; verified all 189 tests pass and pushed to origin main

@@ -385,7 +385,7 @@ impl Lumen {
                                     })),
                             )
                         })
-                        .when(!cfg!(target_os = "macos"), |row| {
+                        .when(cfg!(target_os = "windows"), |row| {
                             let is_max = window.is_maximized();
                             row.child(
                                 div()
