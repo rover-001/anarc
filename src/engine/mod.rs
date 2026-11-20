@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
+#[cfg(target_os = "linux")]
 use std::ffi::c_ulong;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};

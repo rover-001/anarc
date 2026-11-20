@@ -1,5 +1,3 @@
-#define RT_MANIFEST 24
-1 RT_MANIFEST "anarc.manifest.xml"
 1 ICON "anarc.ico"
 
 1 VERSIONINFO
