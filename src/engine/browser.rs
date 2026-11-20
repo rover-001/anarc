@@ -527,7 +527,11 @@ impl Engine {
         {
             let mut flags = cef_mouse_modifiers(modifiers);
             if precision {
-                flags |= cef::sys::cef_event_flags_t::EVENTFLAG_PRECISION_SCROLLING_DELTA.0 as u32;
+                #[allow(clippy::unnecessary_cast)]
+                {
+                    flags |=
+                        cef::sys::cef_event_flags_t::EVENTFLAG_PRECISION_SCROLLING_DELTA.0 as u32;
+                }
             }
             let event = MouseEvent {
                 x,

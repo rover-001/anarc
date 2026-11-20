@@ -406,3 +406,15 @@ Added native Anarc space selection and simplified Live Share. Sharing starts fro
 ## Session 2026-11-20T04:08:16.718579408+00:00
 
 Ensured complete Windows runnable compatibility across build dependencies, paths, file dialogs, rendering, and GPU engines; fixed invisible blinking cursor in light/white theme by binding dynamic theme caret to text color; implemented browser-styled custom window control topbar for Windows; enabled live-share plugin by default and pinned it as top recommended; verified all 188 unit tests pass; and pushed commits to origin main.
+
+## Session 2026-11-20T04:20:40.354515766+00:00
+
+Fixed MSVC-specific CEF compilation errors for Windows: used cef::CursorHandle for on_cursor_change, provided empty_window_handle() for set_as_windowless(parent: HWND), cast EVENTFLAG_PRECISION_SCROLLING_DELTA as u32, and made resize_debug accessible across target_os. Verified all 188 tests pass and pushed to origin main.
+
+## Session 2026-11-20T04:30:41.555523127+00:00
+
+Fixed Live Share join-code decoding to accept raw JSON, URL-safe base64, padded/unpadded base64, and codes copied with whitespace or plus-to-space conversion; improved invalid host-code feedback. Installed plugin source resolves to the edited workspace via symlink. No tests run.
+
+## Session 2026-11-20T04:36:18.796858958+00:00
+
+Followed up on Live Share join screenshot: decoder now tries raw JSON, percent-decoded JSON/base64, URL-safe base64, whitespace-wrapped, and plus-to-space variants; join field displays a specific error for incomplete code, non-offer content, or a response code. Plugin source is symlinked into the installed plugin path. No tests run.

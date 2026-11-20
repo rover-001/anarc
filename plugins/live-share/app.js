@@ -256,9 +256,51 @@ function waitForIce(connection) {
 }
 
 function decodeCode(value, expectedType) {
-  const code = JSON.parse(atob(value.trim()));
-  if (code?.type !== expectedType || typeof code.sdp !== "string") {
-    throw new Error("Unexpected code type");
+  const source = value.trim();
+  let code;
+  try {
+    code = JSON.parse(source);
+  } catch {
+    const variants = [source];
+    try {
+      const decoded = decodeURIComponent(source);
+      if (decoded !== source) variants.push(decoded);
+    } catch {
+      // Continue with the pasted text as-is when it is not percent-encoded.
+    }
+    for (const variant of variants) {
+      const cleaned = variant.replace(/[\r\n\t\u200B\uFEFF]/g, "");
+      const candidates = [
+        cleaned.replace(/ /g, "+"),
+        cleaned.replace(/\s/g, ""),
+      ];
+      for (const candidate of new Set(candidates)) {
+        const compact = candidate.replace(/-/g, "+").replace(/_/g, "/");
+        if (!compact || compact.length % 4 === 1) continue;
+        try {
+          const padded = compact + "=".repeat((4 - compact.length % 4) % 4);
+          const binary = atob(padded);
+          const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+          code = JSON.parse(new TextDecoder().decode(bytes));
+          break;
+        } catch {
+          // Try the other common copy representation before reporting an error.
+        }
+      }
+      if (code !== undefined) break;
+    }
+    if (code === undefined) {
+      throw new Error("The pasted code is incomplete or its characters changed while copying.");
+    }
+  }
+  if (!code || typeof code !== "object" || typeof code.sdp !== "string") {
+    throw new Error("The pasted text doesn't contain a WebRTC share offer.");
+  }
+  if (code.type !== expectedType) {
+    if (code.type === "answer") {
+      throw new Error("This is a response code. Paste the host's Share code here.");
+    }
+    throw new Error("This code is not a host offer. Ask the host to generate a new Share code in Live Share.");
   }
   return code;
 }
@@ -295,8 +337,8 @@ async function joinSession(event) {
   let offer;
   try {
     offer = decodeCode(input.value, "offer");
-  } catch {
-    setFeedback("Paste a valid share code from your host.", true);
+  } catch (error) {
+    setFeedback(error.message || "Could not read that share code. Ask the host to generate a new one.", true);
     input.focus();
     return;
   }

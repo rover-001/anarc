@@ -5,7 +5,7 @@ impl Engine {
     /// popups, close requests, fullscreen changes, or created browsers).
     /// Used by the render loop to skip heavy event processing when idle.
     pub fn has_pending_events(&self) -> bool {
-        self.events.lock().map_or(false, |events| {
+        self.events.lock().is_ok_and(|events| {
             !events.plugin_events.is_empty()
                 || !events.popups.is_empty()
                 || !events.close_requests.is_empty()
