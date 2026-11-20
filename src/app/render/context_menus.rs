@@ -663,6 +663,9 @@ impl Lumen {
                 );
 
             if can_delete {
+                let is_shared = target_space.name.starts_with("[Shared]")
+                    || target_space.id.starts_with("shared-");
+                let label = if is_shared { "Leave Shared Space" } else { "Delete Space" };
                 ctx_menu = ctx_menu.child(
                     div()
                         .id("ctx-delete-space")
@@ -676,8 +679,8 @@ impl Lumen {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(Icon::new(IconName::Trash))
-                        .child("Delete Space")
+                        .child(Icon::new(if is_shared { IconName::LogOut } else { IconName::Trash }))
+                        .child(label)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.delete_space(&target_id_del);
                             cx.notify();

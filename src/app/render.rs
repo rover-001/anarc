@@ -178,6 +178,10 @@ impl Render for Lumen {
                             if let Some(request) = this.engine.take_live_share_space_request() {
                                 this.choose_live_share_space(request, window, cx);
                             }
+                            if let Some(space_id) = this.engine.take_live_share_switch_space() {
+                                this.activate_space_immediate(&space_id, cx);
+                                cx.notify();
+                            }
                             for (tab_id, fullscreen) in this.engine.take_fullscreen_changes() {
                                 if fullscreen {
                                     this.fullscreen_tab = Some(tab_id);
@@ -187,6 +191,19 @@ impl Render for Lumen {
                                     this.fullscreen_tab = None;
                                 }
                                 cx.notify();
+                            }
+                        }
+                        if let Some(mtime) = crate::persist::spaces_mtime()
+                            && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
+                        {
+                            let mtime_ms = d.as_millis() as u64;
+                            let last = this
+                                .last_spaces_mtime
+                                .load(std::sync::atomic::Ordering::Relaxed);
+                            if mtime_ms > last + 50 {
+                                this.last_spaces_mtime
+                                    .store(mtime_ms, std::sync::atomic::Ordering::Relaxed);
+                                this.sync_external_spaces(cx);
                             }
                         }
                         let (visible_ids, split_active, peek_id) = this.visible_browser_panes();

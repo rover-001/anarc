@@ -353,6 +353,8 @@ impl Lumen {
             return;
         }
         if let Some(idx) = self.spaces.iter().position(|s| s.id == space_id) {
+            let is_shared = self.spaces[idx].name.starts_with("[Shared]")
+                || self.spaces[idx].id.starts_with("shared-");
             for tab in &self.spaces[idx].tabs {
                 self.engine.close_browser(&tab.id);
             }
@@ -361,6 +363,71 @@ impl Lumen {
                 self.active_space = self.spaces[0].id.clone();
             }
             self.save_state();
+            if is_shared {
+                std::thread::spawn(|| {
+                    let _ = std::net::TcpStream::connect("127.0.0.1:7433").and_then(|mut stream| {
+                        use std::io::Write;
+                        let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(500)));
+                        stream.write_all(b"POST /api/disconnect HTTP/1.0\r\nHost: 127.0.0.1:7433\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    });
+                });
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn sync_external_spaces(&mut self, cx: &mut Context<Self>) {
+        let Some(loaded) = crate::persist::load_state() else {
+            return;
+        };
+        let mut changed = false;
+        let mut activate_id = None;
+
+        // Prune any shared spaces that are no longer in loaded.spaces (e.g. session ended or space deleted)
+        let before_len = self.spaces.len();
+        self.spaces.retain(|s| {
+            if s.name.starts_with("[Shared]") || s.id.starts_with("shared-") {
+                loaded.spaces.iter().any(|ext| ext.id == s.id)
+            } else {
+                true
+            }
+        });
+        if self.spaces.len() != before_len {
+            changed = true;
+            if !self.spaces.iter().any(|s| s.id == self.active_space) {
+                self.active_space = self.spaces.first().map(|s| s.id.clone()).unwrap_or_else(|| "personal".into());
+            }
+        }
+
+        for mut external_space in loaded.spaces {
+            if let Some(local_space) = self.spaces.iter_mut().find(|s| s.id == external_space.id) {
+                if local_space.tabs.len() != external_space.tabs.len()
+                    || local_space.tabs.iter().zip(&external_space.tabs).any(|(a, b)| {
+                        a.id != b.id || a.url != b.url || a.title != b.title
+                    })
+                {
+                    local_space.tabs = external_space.tabs;
+                    changed = true;
+                }
+            } else {
+                if !crate::app::SPACE_ICONS.contains(&external_space.icon.as_str()) {
+                    external_space.icon = "globe".to_string();
+                }
+                let is_shared = external_space.name.starts_with("[Shared]")
+                    || external_space.id.starts_with("shared-");
+                if is_shared {
+                    activate_id = Some(external_space.id.clone());
+                }
+                self.spaces.push(external_space);
+                changed = true;
+            }
+        }
+
+        if changed {
+            if let Some(id) = activate_id {
+                self.activate_space_immediate(&id, cx);
+            }
+            cx.notify();
         }
     }
 }
