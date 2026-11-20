@@ -41,7 +41,7 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         theme_transition_id: 0,
         space_switch_transition: None,
         space_switch_transition_id: 0,
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         resize_drag: split_view::ResizeDrag::default(),
         address,
         address_active_tab: None,
@@ -85,7 +85,7 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         selected_suggestion: None,
         recent_searches: Vec::new(),
         zoom_levels: std::collections::HashMap::new(),
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         active_zoom_target: None,
         show_suggestions: false,
         engine,
@@ -176,6 +176,91 @@ fn plugin_settings_and_extensions_menu_render_without_nested_entity_reads(
         window.draw(cx).clear(cx);
     })
     .unwrap();
+}
+
+#[cfg(debug_assertions)]
+#[gpui::test]
+fn clicking_plugins_keeps_settings_open_over_a_blank_tab(cx: &mut gpui::TestAppContext) {
+    let (handle, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, cx| {
+        app.app_page = Some(AppPage::Settings);
+        cx.notify();
+    });
+
+    let mut window = gpui::VisualTestContext::from_window(handle.into(), cx);
+    window.update(|window, cx| window.draw(cx).clear(cx));
+    let plugins_tab = window.debug_bounds("settings-tab-Plugins").unwrap();
+    window.simulate_click(plugins_tab.center(), gpui::Modifiers::none());
+
+    view.read_with(cx, |app, _| {
+        assert!(app.app_page == Some(AppPage::Settings));
+        assert!(app.settings_section == SettingsSection::Plugins);
+    });
+}
+
+#[cfg(debug_assertions)]
+#[gpui::test]
+fn opening_a_panel_from_plugins_settings_focuses_its_tab(cx: &mut gpui::TestAppContext) {
+    let root = std::env::temp_dir().join(format!("anarc-open-panel-test-{}", std::process::id()));
+    let package = root.join("notes");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("anarc-plugin.toml"),
+        "[plugin]\nid = 'test.example.notes'\nname = 'Notes'\nversion = '1.0.0'\napi = '1'\nkind = 'panel'\ndescription = 'A collaborative space for sharing and organizing notes, links, and references across connected browsers.'\n",
+    )
+    .unwrap();
+    std::fs::write(package.join("index.html"), "<h1>Notes</h1>").unwrap();
+
+    let (handle, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, cx| {
+        app.plugins = crate::plugin::PluginHost::new(Default::default());
+        app.plugins.mount_core().unwrap();
+        crate::plugin::register_panel_plugins(&mut app.plugins, &root, app.panel_registry.clone())
+            .unwrap();
+        app.plugins.set_enabled("test.example.notes", true).unwrap();
+        app.app_page = Some(AppPage::Settings);
+        app.settings_section = SettingsSection::Plugins;
+        cx.notify();
+    });
+
+    let mut window = gpui::VisualTestContext::from_window(handle.into(), cx);
+    window.simulate_resize(gpui_kit::size(px(960.0), px(800.0)));
+    window.update(|window, cx| window.draw(cx).clear(cx));
+    let card = window
+        .debug_bounds("plugin-card-test.example.notes")
+        .unwrap();
+    let actions = window
+        .debug_bounds("plugin-actions-test.example.notes")
+        .unwrap();
+    assert!(actions.right() < card.right());
+    let open = window
+        .debug_bounds("plugin-open-test.example.notes")
+        .unwrap();
+    window.simulate_click(open.center(), gpui::Modifiers::none());
+
+    let _ = std::fs::remove_dir_all(root);
+    view.read_with(cx, |app, _| {
+        assert_eq!(app.app_page, None);
+        assert!(app.browser_focused);
+        let space = app.active_space();
+        let active = space.tabs.iter().find(|tab| tab.id == app.active_tab_id());
+        assert_eq!(
+            active.map(|tab| tab.url.as_str()),
+            Some("anarc-plugin://test.example.notes/")
+        );
+    });
 }
 
 #[gpui::test]

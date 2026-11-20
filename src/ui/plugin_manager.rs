@@ -205,9 +205,20 @@ pub(crate) fn render(
     on_remove: PluginActionCallback,
     on_install: InstallCallback,
     on_open_plugin_folder: ActionCallback,
+    on_open: PluginActionCallback,
 ) -> gpui_kit::AnyElement {
+    let mut sorted_rows = rows.to_vec();
+    sorted_rows.sort_by_key(|row| {
+        if row.descriptor.id == "com.anarc.live-share" {
+            0
+        } else if row.descriptor.kind == crate::plugin::PluginKind::Core {
+            1
+        } else {
+            2
+        }
+    });
     let mut list = div().w_full().flex().flex_col().gap_2();
-    for row in rows {
+    for row in &sorted_rows {
         let detail = details
             .iter()
             .find(|(id, _)| *id == row.descriptor.id)
@@ -219,6 +230,7 @@ pub(crate) fn render(
             theme,
             on_toggle.clone(),
             on_remove.clone(),
+            on_open.clone(),
         ));
     }
 
@@ -292,6 +304,7 @@ fn plugin_row(
     theme: SpaceTheme,
     on_toggle: ToggleCallback,
     on_remove: PluginActionCallback,
+    on_open: PluginActionCallback,
 ) -> impl IntoElement {
     let id = row.descriptor.id.clone();
     let plugin_id = id.clone();
@@ -353,6 +366,7 @@ fn plugin_row(
 
     div()
         .w_full()
+        .debug_selector(|| format!("plugin-card-{plugin_id}"))
         .p_4()
         .rounded_xl()
         .bg(rgb(theme.surface))
@@ -371,12 +385,14 @@ fn plugin_row(
                 .child(
                     div()
                         .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .gap_1()
                         .child(
                             div()
                                 .flex()
+                                .flex_wrap()
                                 .items_center()
                                 .gap_2()
                                 .child(
@@ -390,6 +406,19 @@ fn plugin_row(
                                             row.descriptor.name.clone()
                                         }),
                                 )
+                                .when(row.descriptor.id == "com.anarc.live-share", |d| {
+                                    d.child(
+                                        div()
+                                            .px_1p5()
+                                            .py_0p5()
+                                            .rounded_sm()
+                                            .bg(rgb(theme.accent))
+                                            .text_color(rgb(theme.base))
+                                            .text_xs()
+                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                            .child("Top Recommended"),
+                                    )
+                                })
                                 .child(
                                     div()
                                         .text_xs()
@@ -406,6 +435,7 @@ fn plugin_row(
                         .child(
                             div()
                                 .text_xs()
+                                .whitespace_normal()
                                 .text_color(rgb(theme.muted))
                                 .child(row.descriptor.description.clone()),
                         ),
@@ -416,6 +446,32 @@ fn plugin_row(
                         .items_center()
                         .gap_2()
                         .flex_shrink_0()
+                        .debug_selector(|| format!("plugin-actions-{plugin_id}"))
+                        .child(if row.descriptor.kind == crate::plugin::PluginKind::Panel && row.enabled {
+                            let callback = on_open.clone();
+                            let plugin_id = plugin_id.clone();
+                            div()
+                                .id(format!("plugin-open-{plugin_id}"))
+                                .debug_selector(|| format!("plugin-open-{plugin_id}"))
+                                .px_3()
+                                .py_1p5()
+                                .rounded_md()
+                                .bg(rgb(theme.surface_hover))
+                                .text_xs()
+                                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                .text_color(rgb(theme.text))
+                                .cursor_pointer()
+                                .flex_shrink_0()
+                                .active(|style| style.opacity(0.88))
+                                .hover(move |style| style.bg(rgb(theme.accent)).text_color(rgb(theme.base)))
+                                .child("Open")
+                                .on_click(move |event, window, app| {
+                                    callback(plugin_id.clone(), event, window, app);
+                                })
+                                .into_any_element()
+                        } else {
+                            div().into_any_element()
+                        })
                         .child(control)
                         .child(if can_remove(row) {
                             let callback = on_remove.clone();

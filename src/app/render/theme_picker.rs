@@ -158,6 +158,8 @@ impl Lumen {
                     .child(label)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.theme_picker_space_mut().theme_appearance = mode as u8;
+                        let target_theme = crate::ui::visual::theme_for_space(this.theme_picker_space());
+                        crate::ui::visual::update_theme_caret(target_theme, cx);
                         this.save_state();
                         cx.notify();
                     })),

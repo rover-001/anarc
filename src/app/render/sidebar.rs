@@ -230,8 +230,9 @@ impl Lumen {
                         .when(selected, |tile| tile.bg(rgb(theme.surface)))
                         .hover(move |tile| tile.bg(rgb(theme.surface_hover)))
                         .child(tab_list::favorite_favicon(favicon.clone()))
-                        .on_click(cx.listener(move |this, _, _, cx| {
+                        .on_click(cx.listener(move |this, _, window, cx| {
                             this.activate_tab_in_active_space(&tile_id);
+                            this.focus_browser(window, cx);
                             cx.notify();
                         }))
                         .on_mouse_down(
@@ -692,8 +693,9 @@ impl Lumen {
                                         })),
                                 ),
                         )
-                        .on_click(cx.listener(move |this, _, _, cx| {
+                        .on_click(cx.listener(move |this, _, window, cx| {
                             this.activate_split_group();
+                            this.focus_browser(window, cx);
                             cx.notify();
                         }))
                         .on_mouse_down(
@@ -795,8 +797,9 @@ impl Lumen {
                                                 })),
                                         ),
                                 )
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                                .on_click(cx.listener(move |this, _, window, cx| {
                                     this.set_focused_pane(pane);
+                                    this.focus_browser(window, cx);
                                     cx.stop_propagation();
                                     cx.notify();
                                 }))
@@ -877,7 +880,6 @@ impl Lumen {
                     tab_id: id.clone(),
                     favicon: favicon.clone(),
                 };
-                let current_space_id = active_space_id.clone();
                 let selected = active_tab_id.as_ref() == Some(id);
                 let animate_entry = space_switch_transition.is_none()
                     && !ui::motion::reduced_motion()
@@ -959,15 +961,9 @@ impl Lumen {
                                     cx.notify();
                                 })),
                         )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(space) = this
-                                .spaces
-                                .iter_mut()
-                                .find(|space| space.id == current_space_id)
-                            {
-                                space.active = Some(tab_id.clone());
-                            }
-                            this.emit_plugin_text("tab.activated", tab_id.clone());
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.activate_tab_in_active_space(&tab_id);
+                            this.focus_browser(window, cx);
                             cx.notify();
                         }))
                         .on_mouse_down(
@@ -1222,9 +1218,14 @@ impl Lumen {
                         .cursor_pointer()
                         .active(|style| style.opacity(0.92))
                         .child(icon_btn)
-                        .on_click(cx.listener(move |this, _, _, cx| {
+                        .on_click(cx.listener(move |this, _, window, cx| {
                             this.space_context_menu = None;
                             this.activate_space(&id);
+                            crate::ui::visual::update_theme_caret(
+                                visual::theme_for_space(this.active_space()),
+                                cx,
+                            );
+                            this.focus_browser(window, cx);
                             cx.notify();
                         }))
                         .on_mouse_down(
@@ -1252,16 +1253,28 @@ impl Lumen {
                 .child(
                     div()
                         .id("settings-btn")
+                        .flex_shrink_0()
                         .child(space_switcher::settings_button(theme))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.app_page = Some(AppPage::Settings);
                             cx.notify();
                         })),
                 )
-                .child(spaces_dock)
+                .child(
+                    div()
+                        .id("spaces-dock-container")
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(spaces_dock),
+                )
                 .child(
                     div()
                         .id("add-space-btn")
+                        .flex_shrink_0()
                         .cursor_pointer()
                         .active(|style| style.opacity(0.92))
                         .child(space_switcher::add_space_button(theme))
@@ -1291,8 +1304,9 @@ impl Lumen {
                             .when(selected, |row| row.bg(rgb(theme.surface)))
                             .hover(|row| row.bg(rgb(theme.surface_hover)))
                             .child(tab_list::favorite_favicon(favicon.clone()))
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 this.activate_tab_in_active_space(&id);
+                                this.focus_browser(window, cx);
                                 cx.notify();
                             })),
                     );

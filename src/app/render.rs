@@ -3,7 +3,7 @@ use super::*;
 // TEMPORARY benchmark hook.
 static BENCH_OPENED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(all(target_os = "linux", not(test)))]
+#[cfg(not(test))]
 use super::actions::peek::peek_layout;
 
 mod context_menus;
@@ -100,7 +100,7 @@ impl Render for Lumen {
                     // A queued wake can be coalesced into this update. A wake that
                     // arrives during the update stays queued for the next pass.
                     let _ = ui_update_receiver.try_recv();
-                    let scheduled = this.update_in(cx, |this, _window, cx| {
+                    let scheduled = this.update_in(cx, |this, window, cx| {
                         let was_initialized = this.engine.is_initialized();
                         if let Err(error) = this.engine.initialize() {
                             eprintln!("Lumen CEF startup failed: {error}");
@@ -174,6 +174,9 @@ impl Render for Lumen {
                             }
                             if !close_requests.is_empty() {
                                 cx.notify();
+                            }
+                            if let Some(request) = this.engine.take_live_share_space_request() {
+                                this.choose_live_share_space(request, window, cx);
                             }
                             for (tab_id, fullscreen) in this.engine.take_fullscreen_changes() {
                                 if fullscreen {
@@ -261,7 +264,7 @@ impl Render for Lumen {
             .detach();
         }
 
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         {
             let current_active_id = self.active_space().active.clone().unwrap_or_default();
             if !current_active_id.is_empty()
@@ -350,7 +353,7 @@ impl Render for Lumen {
 
         let active_space_id = self.active_space.clone();
         let active_space = self.active_space();
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         let active_tab_id = active_space.active.clone();
         let target_theme = self.space_modal.as_ref().map_or_else(
             || visual::theme_for_space(active_space),
@@ -378,19 +381,19 @@ impl Render for Lumen {
             .space_switch_transition
             .clone()
             .filter(|(_, _, started, _)| started.elapsed() < ui::motion::space_switch().duration());
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         let active_tab = active_space
             .tabs
             .iter()
             .find(|tab| Some(&tab.id) == active_tab_id.as_ref());
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         let active_tab_id_string = active_tab_id.clone().unwrap_or_default();
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         let active_tab_url = active_tab.map(|tab| tab.url.clone()).unwrap_or_default();
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         let split_pair = self.current_split_pair();
 
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         let scale = _window.scale_factor();
         let sidebar_width_f32 = self.sidebar_width_transition.map_or_else(
             || self.effective_sidebar_width(),
@@ -399,29 +402,29 @@ impl Render for Lumen {
                 from + (to - from) * progress
             },
         );
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         let bounds = _window.bounds();
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         let width = f32::from(bounds.size.width);
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         let height = f32::from(bounds.size.height);
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         let browser_fullscreen =
             self.fullscreen_tab.as_deref() == Some(active_tab_id_string.as_str());
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         let content_w = if browser_fullscreen {
             width.max(100.0) as i32
         } else {
             (width - sidebar_width_f32 - (CONTENT_BEZEL_X * 2.0)).max(100.0) as i32
         };
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         let content_h = if browser_fullscreen {
             height.max(100.0) as i32
         } else {
             (height - visual::active_topbar_height() - CONTENT_BEZEL_BOTTOM).max(100.0) as i32
         };
 
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         if self.engine.is_initialized()
             && !active_tab_id_string.is_empty()
             && (split_pair.is_some()
@@ -598,7 +601,7 @@ impl Render for Lumen {
             self.engine.hide_all();
         }
 
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         if let Some(peek) = self.peek.clone()
             && self.engine.is_initialized()
         {
@@ -659,7 +662,7 @@ impl Render for Lumen {
             );
         }
 
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         for retired in self.engine.take_retired_images() {
             let _ = _window.drop_image(retired);
         }

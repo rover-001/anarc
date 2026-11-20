@@ -162,7 +162,11 @@ impl LoadedPack {
         if !root.is_dir() {
             return Err(PackError::new("pack root is not a directory"));
         }
-        let manifest_path = root.join(MANIFEST_FILE);
+        let manifest_path = if root.join("anarc-plugin.toml").is_file() {
+            root.join("anarc-plugin.toml")
+        } else {
+            root.join(MANIFEST_FILE)
+        };
         let source = fs::read_to_string(&manifest_path)
             .map_err(|error| PackError::io(&manifest_path, error))?;
         let manifest: PackManifest = toml::from_str(&source)
@@ -197,7 +201,7 @@ pub(crate) fn scan_pack_root(root: &Path) -> Result<Vec<Result<LoadedPack, PackE
     directories.sort_by_key(|entry| entry.file_name());
     Ok(directories
         .into_iter()
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter(|entry| entry.path().is_dir())
         .map(|entry| LoadedPack::load(&entry.path()))
         .collect())
 }

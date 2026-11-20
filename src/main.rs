@@ -59,18 +59,17 @@ fn main() {
         .run(|cx| {
             gpui_kit::init(cx);
             cx.set_reduce_motion(ui::motion::reduced_motion());
-            gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
-            gpui_kit::component::Theme::update(cx, |theme| {
-                theme.caret = gpui_kit::rgb(0xffffff).into();
-            });
             let bounds = Bounds::centered(None, size(px(1200.0), px(760.0)), cx);
             gpui_kit::open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     titlebar: Some(gpui_kit::TitlebarOptions {
                         title: Some("Anarc".into()),
-                        ..Default::default()
+                        appears_transparent: true,
+                        traffic_light_position: Some(gpui_kit::point(px(9.0), px(9.0))),
                     }),
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_owns_titlebar_drag: true,
                     app_id: Some("anarc".into()),
                     // Pages keep animating while the window is in the
                     // background, and the default inactive cap (~30 fps) made

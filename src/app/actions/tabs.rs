@@ -22,6 +22,15 @@ impl Lumen {
 
     pub(crate) fn activate_tab_in_active_space(&mut self, tab_id: &str) {
         self.close_peek();
+        self.close_app_page();
+        self.plugins_menu_open = false;
+        self.tab_context_menu = None;
+        self.space_context_menu = None;
+        self.folder_context_menu = None;
+        self.web_context_menu = None;
+        self.theme_editor = None;
+        self.show_suggestions = false;
+        self.selected_suggestion = None;
         if let Some(space) = self
             .spaces
             .iter_mut()
@@ -243,6 +252,13 @@ impl Lumen {
     }
     pub(crate) fn add_tab(&mut self) {
         self.close_peek();
+        self.close_app_page();
+        self.plugins_menu_open = false;
+        self.tab_context_menu = None;
+        self.space_context_menu = None;
+        self.folder_context_menu = None;
+        self.web_context_menu = None;
+        self.theme_editor = None;
         self.show_suggestions = false;
         self.address_editing = false;
         self.reset_address_for_tab_change = true;

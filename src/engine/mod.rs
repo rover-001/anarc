@@ -51,6 +51,7 @@ struct EngineEvents {
     created: Vec<(String, Browser)>,
     plugin_events: Vec<(String, String)>,
     close_requests: Vec<String>,
+    live_share_space_request: Option<LiveShareSpaceRequest>,
 }
 
 fn origin_favicon_url(page_url: &str) -> Option<String> {
@@ -380,7 +381,27 @@ pub fn has_hardware_gpu() -> bool {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, DirectX/D3D hardware acceleration is standard
+    }
+
     true
+}
+
+pub fn default_user_agent() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+    }
 }
 
 fn gpu_explicitly_disabled() -> bool {
@@ -521,9 +542,7 @@ cef::wrap_app! {
                 let value = CefString::from("4");
                 command_line.append_switch_with_value(Some(&name), Some(&value));
                 let name = CefString::from("user-agent");
-                let value = CefString::from(
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-                );
+                let value = CefString::from(default_user_agent());
                 command_line.append_switch_with_value(Some(&name), Some(&value));
                 let has_gpu = has_hardware_gpu();
                 for name in [
@@ -769,6 +788,7 @@ mod cef_runtime;
 pub mod clipboard;
 mod navigation;
 mod panel_scheme;
+pub(crate) use panel_scheme::LiveShareSpaceRequest;
 
 pub fn windows_key_code_for_key(key: &str) -> i32 {
     match key.to_ascii_lowercase().as_str() {

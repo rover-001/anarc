@@ -16,8 +16,9 @@ impl Lumen {
                     .inset_0()
                     .on_mouse_down(
                         gpui_kit::MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
+                        cx.listener(|this, _, window, cx| {
                             this.space_modal = None;
+                            this.focus_browser(window, cx);
                             cx.notify();
                         }),
                     )
@@ -29,13 +30,19 @@ impl Lumen {
             let current_selected_icon = modal.selected_icon.clone();
             let modal_theme = visual::theme_for_space(&modal.theme_draft);
 
+            let sidebar_on_right = visual::active_layout_preset()
+                .as_ref()
+                .and_then(|p| p.sidebar_side.as_deref())
+                == Some("right");
+
             let popover = div()
                 .id("space-popover-card")
                 .occlude()
                 .absolute()
                 .bottom(px(52.0 * UI_SCALE))
-                .left(px(8.0 * UI_SCALE))
-                .w(px(224.0 * UI_SCALE))
+                .when(sidebar_on_right, |this| this.right(px(8.0 * UI_SCALE)))
+                .when(!sidebar_on_right, |this| this.left(px(8.0 * UI_SCALE)))
+                .w(px(240.0 * UI_SCALE))
                 .bg(rgb(modal_theme.surface))
                 .border_1()
                 .border_color(rgb(modal_theme.border))
@@ -109,7 +116,7 @@ impl Lumen {
                         .child({
                             let mut icons_grid = div()
                                 .id("svg-picker-grid")
-                                .h(px(100.0 * UI_SCALE))
+                                .h(px(144.0 * UI_SCALE))
                                 .overflow_y_scroll()
                                 .p_1()
                                 .rounded_md()
@@ -118,6 +125,7 @@ impl Lumen {
                                 .border_color(rgb(modal_theme.border))
                                 .flex()
                                 .flex_wrap()
+                                .justify_center()
                                 .gap_1();
                             for (i, &icon) in SPACE_ICONS.iter().enumerate() {
                                 let is_selected = icon == current_selected_icon;
@@ -200,9 +208,11 @@ impl Lumen {
                         .justify_end()
                         .gap_2()
                         .pt_1()
+                        .flex_shrink_0()
                         .child(
                             div()
                                 .id("popover-cancel-btn")
+                                .flex_shrink_0()
                                 .px_3()
                                 .py_1()
                                 .rounded_md()
@@ -214,14 +224,16 @@ impl Lumen {
                                 })
                                 .cursor_pointer()
                                 .child("Cancel")
-                                .on_click(cx.listener(|this, _, _, cx| {
+                                .on_click(cx.listener(|this, _, window, cx| {
                                     this.space_modal = None;
+                                    this.focus_browser(window, cx);
                                     cx.notify();
                                 })),
                         )
                         .child(
                             div()
                                 .id("popover-commit-btn")
+                                .flex_shrink_0()
                                 .px_3()
                                 .py_1()
                                 .rounded_md()
@@ -246,7 +258,7 @@ impl Lumen {
                         ui::motion::popover().enter(),
                         |popover, progress| {
                             popover
-                                .w(px(224.0 * UI_SCALE * (0.96 + 0.04 * progress)))
+                                .w(px(240.0 * UI_SCALE * (0.96 + 0.04 * progress)))
                                 .opacity(ui::motion::clamp_percentage(progress))
                         },
                     )
@@ -263,8 +275,9 @@ impl Lumen {
                     .inset_0()
                     .on_mouse_down(
                         gpui_kit::MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
+                        cx.listener(|this, _, window, cx| {
                             this.folder_modal = None;
+                            this.focus_browser(window, cx);
                             cx.notify();
                         }),
                     )
@@ -364,8 +377,9 @@ impl Lumen {
                                 })
                                 .cursor_pointer()
                                 .child("Cancel")
-                                .on_click(cx.listener(|this, _, _, cx| {
+                                .on_click(cx.listener(|this, _, window, cx| {
                                     this.folder_modal = None;
+                                    this.focus_browser(window, cx);
                                     cx.notify();
                                 })),
                         )

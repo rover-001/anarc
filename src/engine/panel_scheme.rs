@@ -4,21 +4,70 @@ use std::ptr;
 
 pub(super) type PanelRegistry = PanelRegistryHandle;
 
+pub(super) const LIVE_SHARE_PICKER_URL: &str =
+    "anarc-plugin://com.anarc.live-share/__anarc_choose_space";
+const LIVE_SHARE_PAGE_CHECK: &str = "location.href === 'anarc-plugin://com.anarc.live-share/' || \
+    location.href === 'anarc-plugin://com.anarc.live-share/index.html'";
+
+pub(super) fn is_live_share_page(url: &str) -> bool {
+    matches!(
+        url,
+        "anarc-plugin://com.anarc.live-share/" | "anarc-plugin://com.anarc.live-share/index.html"
+    )
+}
+
+pub(crate) struct LiveShareSpaceRequest {
+    pub(super) tab_id: String,
+    pub(super) frame: Frame,
+}
+
+impl LiveShareSpaceRequest {
+    pub(crate) fn tab_id(&self) -> &str {
+        &self.tab_id
+    }
+
+    pub(crate) fn is_current(&self) -> bool {
+        self.frame.is_valid() != 0
+            && is_live_share_page(&CefStringUtf16::from(&self.frame.url()).to_string())
+    }
+
+    pub(crate) fn send_selection(&self, selection: &serde_json::Value) {
+        run_live_share_script(
+            &self.frame,
+            &format!(
+                "window.dispatchEvent(new CustomEvent('anarc:space-selected', {{ detail: {selection} }}));"
+            ),
+        );
+    }
+}
+
+pub(super) fn run_live_share_script(frame: &Frame, body: &str) {
+    if frame.is_valid() != 0 && is_live_share_page(&CefStringUtf16::from(&frame.url()).to_string()) {
+        // Recheck in the renderer in case the frame navigates after this check.
+        let script = format!("if ({LIVE_SHARE_PAGE_CHECK}) {{ {body} }}");
+        frame.execute_java_script(Some(&CefString::from(script.as_str())), None, 1);
+    }
+}
+
 pub(super) fn register_panel_scheme(registrar: &mut SchemeRegistrar) {
-    let name = CefString::from("lumen-plugin");
-    // STANDARD enables normal origin parsing; SECURE gives the scheme HTTPS-like
-    // mixed-content semantics. CSP_BYPASSING and CORS are intentionally omitted.
     let options = (SchemeOptions::STANDARD.get_raw() | SchemeOptions::SECURE.get_raw()) as i32;
-    let _ = registrar.add_custom_scheme(Some(&name), options);
+    let anarc_name = CefString::from("anarc-plugin");
+    let _ = registrar.add_custom_scheme(Some(&anarc_name), options);
+    let lumen_name = CefString::from("lumen-plugin");
+    let _ = registrar.add_custom_scheme(Some(&lumen_name), options);
 }
 
 pub(super) fn register_panel_factory(context: &RequestContext, registry: PanelRegistry) {
-    let scheme = CefString::from("lumen-plugin");
-    let mut factory = LumenPanelSchemeHandlerFactory::new(registry);
+    let anarc_scheme = CefString::from("anarc-plugin");
+    let mut anarc_factory = LumenPanelSchemeHandlerFactory::new(registry.clone());
+    let _ = context.register_scheme_handler_factory(Some(&anarc_scheme), None, Some(&mut anarc_factory));
+
+    let lumen_scheme = CefString::from("lumen-plugin");
+    let mut lumen_factory = LumenPanelSchemeHandlerFactory::new(registry);
     let registered =
-        context.register_scheme_handler_factory(Some(&scheme), None, Some(&mut factory));
+        context.register_scheme_handler_factory(Some(&lumen_scheme), None, Some(&mut lumen_factory));
     if registered == 0 {
-        eprintln!("Lumen failed to register lumen-plugin CEF scheme handler");
+        eprintln!("Anarc failed to register plugin CEF scheme handlers");
     }
 }
 
@@ -82,9 +131,15 @@ cef::wrap_resource_handler! {
             let Some(response) = response else { return; };
             response.set_status(i32::from(self.response.status));
             let status_text = CefString::from(if self.response.status == 200 { "OK" } else { "Not Found" });
-            let mime_type = CefString::from(self.response.mime_type.as_str());
+            let content_type = self.response.mime_type.as_str();
+            let (mime_type, charset) = content_type
+                .split_once("; charset=")
+                .map_or((content_type, None), |(mime_type, charset)| (mime_type, Some(charset)));
             response.set_status_text(Some(&status_text));
-            response.set_mime_type(Some(&mime_type));
+            response.set_mime_type(Some(&CefString::from(mime_type)));
+            if let Some(charset) = charset {
+                response.set_charset(Some(&CefString::from(charset)));
+            }
             for (name, value) in &self.response.headers {
                 let name = CefString::from(name.as_str());
                 let value = CefString::from(value.as_str());
@@ -189,6 +244,37 @@ fn https_host(url: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::plugin::PanelPackage;
+
+    #[test]
+    fn panel_handler_sets_cef_mime_type_and_charset_separately() {
+        let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
+        for (content_type, mime_type, charset) in [
+            ("text/html; charset=utf-8", "text/html", "utf-8"),
+            ("text/css; charset=utf-8", "text/css", "utf-8"),
+            ("text/javascript; charset=utf-8", "text/javascript", "utf-8"),
+            ("image/png", "image/png", ""),
+        ] {
+            let handler = PanelResourceHandler::new(
+                Arc::new(PanelResponse {
+                    status: 200,
+                    mime_type: content_type.to_owned(),
+                    body: Vec::new(),
+                    headers: Vec::new(),
+                }),
+                Arc::new(Mutex::new(0)),
+            );
+            let mut response = cef::response_create().unwrap();
+            handler.response_headers(Some(&mut response), None, None);
+            assert_eq!(
+                CefStringUtf16::from(&response.mime_type()).to_string(),
+                mime_type
+            );
+            assert_eq!(
+                CefStringUtf16::from(&response.charset()).to_string(),
+                charset
+            );
+        }
+    }
 
     #[test]
     fn panel_network_gate_limits_external_requests_to_declared_https_hosts() {

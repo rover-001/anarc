@@ -64,12 +64,20 @@ impl Engine {
         // Priority:
         // 1. Next to the current executable (target/debug, target/release, or unified installation)
         // 2. Directory in LD_LIBRARY_PATH (e.g. $PREFIX/anarc-cef)
-        // 3. Fallback to executable directory
+        // 3. Directory in PATH (Windows DLLs/resources)
+        // 4. Fallback to executable directory
         let cef_resources_dir = if exe_dir.join("resources.pak").exists() {
             exe_dir.to_path_buf()
         } else if let Ok(ld_path) = std::env::var("LD_LIBRARY_PATH") {
             ld_path
                 .split(':')
+                .map(std::path::PathBuf::from)
+                .find(|p| p.join("resources.pak").exists())
+                .unwrap_or_else(|| exe_dir.to_path_buf())
+        } else if let Ok(path) = std::env::var("PATH") {
+            let sep = if cfg!(windows) { ';' } else { ':' };
+            path
+                .split(sep)
                 .map(std::path::PathBuf::from)
                 .find(|p| p.join("resources.pak").exists())
                 .unwrap_or_else(|| exe_dir.to_path_buf())
@@ -93,9 +101,7 @@ impl Engine {
             resources_dir_path: CefString::from(cef_resources_dir.to_string_lossy().as_ref()),
             locales_dir_path: CefString::from(locales_dir.to_string_lossy().as_ref()),
             locale: CefString::from("en-US"),
-            user_agent: CefString::from(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-            ),
+            user_agent: CefString::from(crate::engine::default_user_agent()),
             root_cache_path: CefString::from(cache_root.to_string_lossy().as_ref()),
             ..Default::default()
         };

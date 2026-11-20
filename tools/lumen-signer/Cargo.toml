@@ -1,0 +1,8 @@
+[package]
+name = "lumen-signer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ring = "=0.17.14"
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }

@@ -1,4 +1,4 @@
-use gpui_kit::{AnimationExt as _, Context, Render, Window, div, prelude::*, px, rgb};
+use gpui_kit::{AnimationExt as _, Context, Corners, Render, Window, div, prelude::*, px, rgb};
 
 use crate::app::CARD_RADIUS;
 use crate::ui::split_view::frame_logical_size;
@@ -220,13 +220,51 @@ impl Render for WebViewport {
         let drop_tab_id = self.tab_id.clone();
         let drop_sidebar = self.sidebar_width;
 
+        let radius = CARD_RADIUS;
+        let corner_radii = if fullscreen {
+            Corners::default()
+        } else if peek_mode {
+            Corners {
+                top_left: px(0.0),
+                top_right: px(0.0),
+                bottom_right: px(radius),
+                bottom_left: px(radius),
+            }
+        } else if self.split_layout {
+            if self.pane_index == 0 {
+                Corners {
+                    top_left: px(radius),
+                    top_right: px(0.0),
+                    bottom_right: px(0.0),
+                    bottom_left: px(radius),
+                }
+            } else {
+                Corners {
+                    top_left: px(0.0),
+                    top_right: px(radius),
+                    bottom_right: px(radius),
+                    bottom_left: px(0.0),
+                }
+            }
+        } else {
+            Corners {
+                top_left: px(radius),
+                top_right: px(radius),
+                bottom_right: px(radius),
+                bottom_left: px(radius),
+            }
+        };
+
         let mut viewport = div()
             .id("web-view-viewport")
             .relative()
             .track_focus(&self.focus_handle)
             .size_full()
             .bg(rgb(self.drag_edge_color.unwrap_or(self.theme.surface)))
-            .rounded(px(if fullscreen { 0.0 } else { CARD_RADIUS }))
+            .rounded_tl(corner_radii.top_left)
+            .rounded_tr(corner_radii.top_right)
+            .rounded_br(corner_radii.bottom_right)
+            .rounded_bl(corner_radii.bottom_left)
             .overflow_hidden()
             .cursor(match self.cursor {
                 1 => gpui_kit::CursorStyle::IBeam,
@@ -803,7 +841,7 @@ impl Render for WebViewport {
                                 element.opacity(crate::ui::motion::clamp_percentage(1.0 - progress))
                             },
                         )
-                        .child(gpui_kit::img(image).size_full()),
+                        .child(browser_frame(image, corner_radii).size_full()),
                 );
             }
         } else if self.transition_waiting_for_image
@@ -817,7 +855,7 @@ impl Render for WebViewport {
                         .left_0()
                         .size_full()
                         .overflow_hidden()
-                        .child(gpui_kit::img(image).size_full()),
+                        .child(browser_frame(image, corner_radii).size_full()),
                 );
             }
         } else if self.transition_tab.as_deref() == Some(self.tab_id.as_str()) {
@@ -843,14 +881,14 @@ impl Render for WebViewport {
                 let factor = preview.scale as f32;
                 let (offset_x, offset_y) =
                     clamp_pinch_offset(preview.offset, factor, (width, height));
-                browser_frame(image)
+                browser_frame(image, corner_radii)
                     .absolute()
                     .top(px(offset_y.min(0.0)))
                     .left(px(offset_x.min(0.0)))
                     .w(px(width * factor))
                     .h(px(height * factor))
             } else {
-                browser_frame(image).size_full()
+                browser_frame(image, corner_radii).size_full()
             };
             let current = if transitioning {
                 current
@@ -868,100 +906,14 @@ impl Render for WebViewport {
             viewport = viewport.child(current);
         }
 
-        // A captured frame may be wider than its pane while split/sidebar
-        // dividers are moving. Use a rounded border ring whose inner edge
-        // matches the pane's corner arc; the pane's rectangular clip trims
-        // the rest of each ring. The peek overlay draws its own card border.
-        if !peek_mode {
-            let radius = CARD_RADIUS;
-            let outer_corner_radius = radius * 2.0;
-            let border_width = radius;
-            let outer_color = rgb(self.theme.base);
-            let inner_color = rgb(self.theme.surface);
-            let (top_left_color, top_right_color, bottom_left_color, bottom_right_color) =
-                if !self.split_layout {
-                    (outer_color, outer_color, outer_color, outer_color)
-                } else if self.pane_index == 0 {
-                    (outer_color, inner_color, outer_color, inner_color)
-                } else {
-                    (inner_color, outer_color, inner_color, outer_color)
-                };
-            // Painted from a single canvas instead of four corner divs: those
-            // extra children cost ~10 ms of prepaint per frame, which capped
-            // the OSR paint rate far below the display refresh.
-            viewport = viewport.child(
-                gpui_kit::canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, _| {
-                        let ring = gpui_kit::size(px(radius * 3.0), px(radius * 3.0));
-                        let left = bounds.origin.x - px(radius);
-                        let top = bounds.origin.y - px(radius);
-                        let right = bounds.origin.x + bounds.size.width - px(outer_corner_radius);
-                        let bottom =
-                            bounds.origin.y + bounds.size.height - px(outer_corner_radius);
-                        let invisible = gpui_kit::hsla(0.0, 0.0, 0.0, 0.0);
-                        let ring_quad = |origin, corner_radii, border_widths, color| {
-                            gpui_kit::quad(
-                                gpui_kit::Bounds { origin, size: ring },
-                                corner_radii,
-                                invisible,
-                                border_widths,
-                                color,
-                                gpui_kit::BorderStyle::Solid,
-                            )
-                        };
-                        use gpui_kit::{Corners, Edges};
-                        let corner = |top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32| {
-                            Corners {
-                                top_left: px(top_left),
-                                top_right: px(top_right),
-                                bottom_right: px(bottom_right),
-                                bottom_left: px(bottom_left),
-                            }
-                        };
-                        let edges = |top: f32, right: f32, bottom: f32, left: f32| Edges {
-                            top: px(top),
-                            right: px(right),
-                            bottom: px(bottom),
-                            left: px(left),
-                        };
-                        window.paint_quad(ring_quad(
-                            gpui_kit::point(left, top),
-                            corner(outer_corner_radius, 0.0, 0.0, 0.0),
-                            edges(border_width, 0.0, 0.0, border_width),
-                            top_left_color,
-                        ));
-                        window.paint_quad(ring_quad(
-                            gpui_kit::point(right, top),
-                            corner(0.0, outer_corner_radius, 0.0, 0.0),
-                            edges(border_width, border_width, 0.0, 0.0),
-                            top_right_color,
-                        ));
-                        window.paint_quad(ring_quad(
-                            gpui_kit::point(left, bottom),
-                            corner(0.0, 0.0, 0.0, outer_corner_radius),
-                            edges(0.0, 0.0, border_width, border_width),
-                            bottom_left_color,
-                        ));
-                        window.paint_quad(ring_quad(
-                            gpui_kit::point(right, bottom),
-                            corner(0.0, 0.0, outer_corner_radius, 0.0),
-                            edges(0.0, border_width, border_width, 0.0),
-                            bottom_right_color,
-                        ));
-                    },
-                )
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full(),
-            );
-        }
         viewport.into_any_element()
     }
 }
 
-fn browser_frame(image: Arc<gpui_kit::RenderImage>) -> impl gpui_kit::Styled + IntoElement {
+fn browser_frame(
+    image: Arc<gpui_kit::RenderImage>,
+    corner_radii: Corners<gpui_kit::Pixels>,
+) -> impl gpui_kit::Styled + IntoElement {
     gpui_kit::canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
@@ -970,7 +922,7 @@ fn browser_frame(image: Arc<gpui_kit::RenderImage>) -> impl gpui_kit::Styled + I
                 return;
             }
             let image_bounds = gpui_kit::ObjectFit::Contain.get_bounds(bounds, size);
-            if let Err(error) = window.paint_image(bounds, image_bounds, px(0.0).into(), image, 0, false) {
+            if let Err(error) = window.paint_image(bounds, image_bounds, corner_radii, image, 0, false) {
                 eprintln!("Lumen browser frame paint failed: {error}");
             }
         },
