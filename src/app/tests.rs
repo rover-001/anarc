@@ -193,7 +193,7 @@ fn clicking_plugins_keeps_settings_open_over_a_blank_tab(cx: &mut gpui::TestAppC
         cx.notify();
     });
 
-    let mut window = gpui::VisualTestContext::from_window(handle.into(), cx);
+    let mut window = gpui::VisualTestContext::from_window(handle, cx);
     window.update(|window, cx| window.draw(cx).clear(cx));
     let plugins_tab = window.debug_bounds("settings-tab-Plugins").unwrap();
     window.simulate_click(plugins_tab.center(), gpui::Modifiers::none());
@@ -235,7 +235,7 @@ fn opening_a_panel_from_plugins_settings_focuses_its_tab(cx: &mut gpui::TestAppC
         cx.notify();
     });
 
-    let mut window = gpui::VisualTestContext::from_window(handle.into(), cx);
+    let mut window = gpui::VisualTestContext::from_window(handle, cx);
     window.simulate_resize(gpui_kit::size(px(960.0), px(800.0)));
     window.update(|window, cx| window.draw(cx).clear(cx));
     let card = window

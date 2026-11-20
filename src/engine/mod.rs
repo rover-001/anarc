@@ -144,10 +144,10 @@ fn render_favicon(host: &str) -> Option<Arc<RenderImage>> {
     let dir = favicons_dir();
     let key = dir.join(format!("{host}.png"));
     let mut lookups = FAVICON_LOOKUPS.lock().unwrap();
-    if let Some((stored_at, image)) = lookups.get(&key) {
-        if image.is_some() || stored_at.elapsed() < Duration::from_secs(5) {
-            return image.clone();
-        }
+    if let Some((stored_at, image)) = lookups.get(&key)
+        && (image.is_some() || stored_at.elapsed() < Duration::from_secs(5))
+    {
+        return image.clone();
     }
 
     let image = read_favicon(&dir, &host);
@@ -905,13 +905,22 @@ fn cef_key_event(
     if modifiers.platform {
         flags |= 1 << 7;
     }
-    let code = windows_key_code_for_key(key);
+    let code = if event_type == KeyEventType::CHAR && character != 0 {
+        character as i32
+    } else {
+        windows_key_code_for_key(key)
+    };
+    let native_code = if event_type == KeyEventType::CHAR && character != 0 {
+        character as i32
+    } else {
+        native_key_code(key, code)
+    };
     KeyEvent {
         size: std::mem::size_of::<KeyEvent>(),
         type_: event_type,
         modifiers: flags,
         windows_key_code: code,
-        native_key_code: native_key_code(key, code),
+        native_key_code: native_code,
         is_system_key: 0,
         character,
         unmodified_character: character,
@@ -1250,6 +1259,21 @@ mod tests {
         assert_eq!(windows_key_code_for_key("Z"), 0x5a);
         assert_eq!(windows_key_code_for_key("0"), 0x30);
         assert_eq!(windows_key_code_for_key("9"), 0x39);
+    }
+
+    #[test]
+    fn cef_key_event_preserves_char_case_for_char_events() {
+        let modifiers = gpui_kit::Modifiers::default();
+        let raw = cef_key_event("a", &modifiers, KeyEventType::RAWKEYDOWN, 'a' as u16, true);
+        assert_eq!(raw.windows_key_code, 0x41);
+
+        let char_event = cef_key_event("a", &modifiers, KeyEventType::CHAR, 'a' as u16, true);
+        assert_eq!(char_event.windows_key_code, 'a' as i32);
+        assert_eq!(char_event.character, 'a' as u16);
+
+        let char_event_upper = cef_key_event("a", &modifiers, KeyEventType::CHAR, 'A' as u16, true);
+        assert_eq!(char_event_upper.windows_key_code, 'A' as i32);
+        assert_eq!(char_event_upper.character, 'A' as u16);
     }
 
     #[test]

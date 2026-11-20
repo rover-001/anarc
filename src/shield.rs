@@ -278,13 +278,13 @@ impl ShieldState {
         if let Ok(cache) = self.cache.lock()
             && let Some(&blocked) = cache.get(&hash)
         {
-            if blocked {
-                if let Ok(mut counts) = self.blocked_by_tab.lock() {
-                    if counts.len() >= 4096 {
-                        counts.clear();
-                    }
-                    *counts.entry(tab_id.to_owned()).or_default() += 1;
+            if blocked
+                && let Ok(mut counts) = self.blocked_by_tab.lock()
+            {
+                if counts.len() >= 4096 {
+                    counts.clear();
                 }
+                *counts.entry(tab_id.to_owned()).or_default() += 1;
             }
             return blocked;
         }
@@ -304,13 +304,13 @@ impl ShieldState {
             }
             cache.insert(hash, blocked);
         }
-        if blocked {
-            if let Ok(mut counts) = self.blocked_by_tab.lock() {
-                if counts.len() >= 4096 {
-                    counts.clear();
-                }
-                *counts.entry(tab_id.to_owned()).or_default() += 1;
+        if blocked
+            && let Ok(mut counts) = self.blocked_by_tab.lock()
+        {
+            if counts.len() >= 4096 {
+                counts.clear();
             }
+            *counts.entry(tab_id.to_owned()).or_default() += 1;
         }
         blocked
     }
