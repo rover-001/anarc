@@ -402,3 +402,7 @@ Fixed Plugins card overflow by allowing description and metadata to wrap. Reprod
 ## Session 2026-11-20T03:52:29.461383901+00:00
 
 Added native Anarc space selection and simplified Live Share. Sharing starts from selected web tab titles and URLs. Tested native selection and code generation on the final release, two-peer synchronization in Chromium, and all 188 Rust tests serially. Installed the verified binary with a backup.
+
+## Session 2026-11-20T04:08:16.718579408+00:00
+
+Ensured complete Windows runnable compatibility across build dependencies, paths, file dialogs, rendering, and GPU engines; fixed invisible blinking cursor in light/white theme by binding dynamic theme caret to text color; implemented browser-styled custom window control topbar for Windows; enabled live-share plugin by default and pinned it as top recommended; verified all 188 unit tests pass; and pushed commits to origin main.

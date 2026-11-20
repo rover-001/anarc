@@ -776,7 +776,12 @@ fn resize_should_send(
     })
 }
 
-fn resize_debug(message: std::fmt::Arguments<'_>) {
+#[inline]
+pub(crate) fn empty_window_handle() -> cef::sys::cef_window_handle_t {
+    unsafe { std::mem::zeroed() }
+}
+
+pub(crate) fn resize_debug(message: std::fmt::Arguments<'_>) {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *ENABLED.get_or_init(|| std::env::var("ANARC_DEBUG_RESIZE").as_deref() == Ok("1")) {
         eprintln!("[resize-debug] {message}");
