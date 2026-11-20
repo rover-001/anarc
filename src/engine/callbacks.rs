@@ -87,6 +87,12 @@ cef::wrap_load_handler! {
                         }
             inject_clipboard_script(frame);
             let url = CefStringUtf16::from(&frame.url()).to_string();
+            if super::panel_scheme::is_live_share_page(&url) {
+                super::panel_scheme::run_live_share_script(frame, "\
+                    document.documentElement.dataset.anarcSpacePicker = 'available'; \
+                    window.dispatchEvent(new Event('anarc:space-picker-ready'));\
+                ");
+            }
             if let Ok(mut events) = self.events.lock() {
                 events.plugin_events.push((
                     "page.load_end".to_string(),
@@ -292,7 +298,7 @@ cef::wrap_resource_request_handler! {
             let (Some(frame), Some(request)) = (frame, request) else { return ReturnValue::CONTINUE; };
             let source = CefStringUtf16::from(&frame.url()).to_string();
             let url = CefStringUtf16::from(&request.url()).to_string();
-            if source.starts_with("lumen-plugin://")
+            if (source.starts_with("anarc-plugin://") || source.starts_with("lumen-plugin://"))
                 && !super::panel_scheme::allowed_panel_network_request(
                     &source,
                     &url,
@@ -331,6 +337,7 @@ cef::wrap_request_handler! {
         https_state: Arc<Mutex<HttpsFirstState>>,
         events: Arc<Mutex<EngineEvents>>,
         panel_packages: super::panel_scheme::PanelRegistry,
+        ui_update_wake: async_channel::Sender<()>,
     }
 
     impl RequestHandler {
@@ -339,12 +346,26 @@ cef::wrap_request_handler! {
             _browser: Option<&mut Browser>,
             frame: Option<&mut Frame>,
             request: Option<&mut Request>,
-            _user_gesture: i32,
-            _is_redirect: i32,
+            user_gesture: i32,
+            is_redirect: i32,
         ) -> i32 {
             let (Some(frame), Some(request)) = (frame, request) else { return 0; };
             if frame.is_main() == 0 { return 0; }
             let url = CefStringUtf16::from(&request.url()).to_string();
+            if url == super::panel_scheme::LIVE_SHARE_PICKER_URL {
+                let source = CefStringUtf16::from(&frame.url()).to_string();
+                if user_gesture != 0 && is_redirect == 0
+                    && super::panel_scheme::is_live_share_page(&source)
+                    && let Ok(mut events) = self.events.lock()
+                {
+                    events.live_share_space_request = Some(LiveShareSpaceRequest {
+                        tab_id: self.tab_id.clone(),
+                        frame: frame.clone(),
+                    });
+                    let _ = self.ui_update_wake.try_send(());
+                }
+                return 1;
+            }
             if let Ok(mut events) = self.events.lock() {
                 events.plugin_events.push((
                     "navigation.before".to_string(),
@@ -1134,6 +1155,7 @@ fn start_popup_browser(
         handler.https_state.clone(),
         handler.events.clone(),
         handler.panel_packages.clone(),
+        handler.paint_wake.clone(),
     );
     let dialog_handler = LumenDialogHandler::new(handler.paint_wake.clone());
     *client = Some(LumenClient::new(
@@ -1552,6 +1574,13 @@ pub(crate) fn run_file_picker(
     filters: &[String],
     extensions: &[String],
 ) -> Option<Vec<String>> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(paths) = run_windows_file_picker(mode, title, default_path, filters, extensions) {
+            return Some(paths);
+        }
+    }
+
     let zenity_args = build_zenity_args(mode, title, default_path, filters, extensions);
     match std::process::Command::new("zenity")
         .args(&zenity_args)
@@ -1592,6 +1621,90 @@ pub(crate) fn run_file_picker(
     }
 
     None
+}
+
+#[cfg(target_os = "windows")]
+fn run_windows_file_picker(
+    mode: FileDialogMode,
+    title: Option<&str>,
+    default_path: Option<&str>,
+    _filters: &[String],
+    extensions: &[String],
+) -> Option<Vec<String>> {
+    let is_save = mode == FileDialogMode::SAVE;
+    let is_folder = mode == FileDialogMode::OPEN_FOLDER;
+    let is_multiple = mode == FileDialogMode::OPEN_MULTIPLE;
+
+    let filter_arg = if extensions.is_empty() {
+        "All files (*.*)|*.*".to_string()
+    } else {
+        let exts = extensions
+            .iter()
+            .map(|e| format!("*.{e}"))
+            .collect::<Vec<_>>()
+            .join(";");
+        format!("Files ({exts})|{exts}|All files (*.*)|*.*")
+    };
+
+    let title_str = title.unwrap_or(if is_folder {
+        "Select Folder"
+    } else if is_save {
+        "Save File"
+    } else {
+        "Open File"
+    });
+
+    let script = if is_folder {
+        format!(
+            "Add-Type -AssemblyName System.Windows.Forms; \
+             $f = New-Object System.Windows.Forms.FolderBrowserDialog; \
+             $f.Description = '{title_str}'; \
+             {} \
+             if ($f.ShowDialog() -eq 'OK') {{ [Console]::WriteLine($f.SelectedPath) }}",
+            default_path.map_or(String::new(), |p| format!("$f.SelectedPath = '{p}'; "))
+        )
+    } else if is_save {
+        format!(
+            "Add-Type -AssemblyName System.Windows.Forms; \
+             $f = New-Object System.Windows.Forms.SaveFileDialog; \
+             $f.Title = '{title_str}'; \
+             $f.Filter = '{filter_arg}'; \
+             {} \
+             if ($f.ShowDialog() -eq 'OK') {{ [Console]::WriteLine($f.FileName) }}",
+            default_path.map_or(String::new(), |p| format!("$f.FileName = '{p}'; "))
+        )
+    } else {
+        format!(
+            "Add-Type -AssemblyName System.Windows.Forms; \
+             $f = New-Object System.Windows.Forms.OpenFileDialog; \
+             $f.Title = '{title_str}'; \
+             $f.Filter = '{filter_arg}'; \
+             $f.Multiselect = {}; \
+             {} \
+             if ($f.ShowDialog() -eq 'OK') {{ if ($f.Multiselect) {{ $f.FileNames | ForEach-Object {{ [Console]::WriteLine($_) }} }} else {{ [Console]::WriteLine($f.FileName) }} }}",
+            if is_multiple { "$true" } else { "$false" },
+            default_path.map_or(String::new(), |p| format!("$f.FileName = '{p}'; "))
+        )
+    };
+
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let out = String::from_utf8_lossy(&output.stdout);
+    let paths: Vec<String> = out
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .collect();
+
+    if paths.is_empty() { None } else { Some(paths) }
 }
 
 pub(crate) fn extract_cef_string_list(mut list: Option<&mut CefStringList>) -> Vec<String> {

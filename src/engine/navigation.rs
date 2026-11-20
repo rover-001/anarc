@@ -9,6 +9,7 @@ impl Engine {
             !events.plugin_events.is_empty()
                 || !events.popups.is_empty()
                 || !events.close_requests.is_empty()
+                || events.live_share_space_request.is_some()
                 || !events.fullscreen.is_empty()
                 || !events.created.is_empty()
         })
@@ -32,6 +33,9 @@ impl Engine {
             .lock()
             .map(|mut events| std::mem::take(&mut events.close_requests))
             .unwrap_or_default()
+    }
+    pub(crate) fn take_live_share_space_request(&self) -> Option<LiveShareSpaceRequest> {
+        self.events.lock().ok()?.live_share_space_request.take()
     }
     pub fn take_fullscreen_changes(&self) -> Vec<(String, bool)> {
         self.events

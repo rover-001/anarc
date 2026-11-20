@@ -61,6 +61,7 @@ impl Engine {
                 self.https_state.clone(),
                 self.events.clone(),
                 self.panel_packages.clone(),
+                self.ui_update_wake.clone(),
             );
             let dialog_handler = LumenDialogHandler::new(self.ui_update_wake.clone());
             let mut client = LumenClient::new(

@@ -138,10 +138,12 @@ impl Lumen {
     }
 
     pub(crate) fn activate_space(&mut self, id: &str) {
+        self.close_peek();
+        self.close_app_page();
+        self.plugins_menu_open = false;
         if self.active_space == id {
             return;
         }
-        self.close_peek();
         let previous_space = self.active_space.clone();
         if let Some(to_index) = self.spaces.iter().position(|space| space.id == id) {
             let from_index = self
@@ -215,7 +217,11 @@ impl Lumen {
         });
         let previous_space = self.active_space.clone();
         self.close_peek();
+        self.close_app_page();
+        self.plugins_menu_open = false;
         self.active_space = id.to_owned();
+        let target_theme = crate::ui::visual::theme_for_space(self.active_space());
+        crate::ui::visual::update_theme_caret(target_theme, cx);
         if previous_space != id {
             self.emit_plugin_text("space.switched", format!("{previous_space}\n{id}"));
         }

@@ -610,6 +610,22 @@ fn plugin_manager_content(
             });
         });
 
+    let open_panel_entity = entity.clone();
+    let on_open_panel: crate::ui::plugin_manager::PluginActionCallback =
+        Rc::new(move |id, _, window, app| {
+            let entity = open_panel_entity.clone();
+            app.update_entity(&entity, move |this, cx| {
+                match this.open_plugin_panel(&id) {
+                    Ok(()) => {
+                        this.set_plugin_action_error(None);
+                        this.focus_browser(window, cx);
+                    }
+                    Err(error) => this.set_plugin_action_error(Some(error)),
+                }
+                cx.notify();
+            });
+        });
+
     crate::ui::plugin_manager::render(
         &plugin_rows,
         &[],
@@ -619,6 +635,7 @@ fn plugin_manager_content(
         on_remove,
         on_install,
         on_open_plugin_folder,
+        on_open_panel,
     )
 }
 
@@ -671,10 +688,47 @@ fn pick_plugin_path(
         Err("No file chooser is installed. Install zenity or kdialog to select plugins.".into())
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        let is_folder = matches!(source, crate::ui::plugin_manager::InstallSource::Folder);
+        let title_str = if is_folder {
+            "Select plugin folder"
+        } else {
+            "Select plugin package"
+        };
+        let script = if is_folder {
+            format!(
+                "Add-Type -AssemblyName System.Windows.Forms; \
+                 $f = New-Object System.Windows.Forms.FolderBrowserDialog; \
+                 $f.Description = '{title_str}'; \
+                 if ($f.ShowDialog() -eq 'OK') {{ [Console]::WriteLine($f.SelectedPath) }}"
+            )
+        } else {
+            format!(
+                "Add-Type -AssemblyName System.Windows.Forms; \
+                 $f = New-Object System.Windows.Forms.OpenFileDialog; \
+                 $f.Title = '{title_str}'; \
+                 $f.Filter = 'Anarc plugins (*.anarcplugin;*.lumenplugin)|*.anarcplugin;*.lumenplugin|All files (*.*)|*.*'; \
+                 if ($f.ShowDialog() -eq 'OK') {{ [Console]::WriteLine($f.FileName) }}"
+            )
+        };
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .map_err(|e| format!("could not start powershell: {e}"))?;
+        if output.status.success() {
+            let selected = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if !selected.is_empty() {
+                return Ok(Some(selected.into()));
+            }
+        }
+        return Ok(None);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = source;
-        Err("Plugin installation picker is currently available on Linux only.".into())
+        Err("Plugin installation picker is currently available on Linux and Windows only.".into())
     }
 }
 
@@ -719,6 +773,7 @@ fn settings_tab(
     let selected = section == selected_section;
     div()
         .id(format!("settings-tab-{label}"))
+        .debug_selector(|| format!("settings-tab-{label}"))
         .px_3()
         .py_1p5()
         .rounded_md()

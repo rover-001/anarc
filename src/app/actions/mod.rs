@@ -149,24 +149,25 @@ impl Lumen {
             eprintln!("Failed to mount core plugin: {error}");
         }
         crate::plugins::register(&mut plugins);
-        if let Err(error) =
-            crate::plugin::register_packs(&mut plugins, &crate::paths::data_dir().join("plugins"))
+        let data_plugins = crate::paths::data_dir().join("plugins");
+        let bundled_plugins = std::path::PathBuf::from("plugins");
+        let exe_plugins = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.join("plugins")));
+        for root in [&data_plugins, &bundled_plugins]
+            .into_iter()
+            .chain(exe_plugins.as_ref())
         {
-            eprintln!("Failed to scan plugin packs: {error}");
-        }
-        if let Err(error) = crate::plugin::register_panel_plugins(
-            &mut plugins,
-            &crate::paths::data_dir().join("plugins"),
-            panel_registry.clone(),
-        ) {
-            eprintln!("Failed to scan panel plugins: {error}");
-        }
-        #[cfg(feature = "wasm-plugins")]
-        if let Err(error) = crate::plugin::register_wasm_plugins(
-            &mut plugins,
-            &crate::paths::data_dir().join("plugins"),
-        ) {
-            eprintln!("Failed to scan WASM plugins: {error}");
+            if root.is_dir() {
+                let _ = crate::plugin::register_packs(&mut plugins, root);
+                let _ = crate::plugin::register_panel_plugins(
+                    &mut plugins,
+                    root,
+                    panel_registry.clone(),
+                );
+                #[cfg(feature = "wasm-plugins")]
+                let _ = crate::plugin::register_wasm_plugins(&mut plugins, root);
+            }
         }
         if let Err(error) = plugins.mount_enabled() {
             eprintln!("Failed to mount enabled plugins: {error}");
@@ -263,7 +264,7 @@ impl Lumen {
             theme_transition_id: 0,
             space_switch_transition: None,
             space_switch_transition_id: 0,
-            #[cfg(all(target_os = "linux", not(test)))]
+            #[cfg(not(test))]
             resize_drag: split_view::ResizeDrag::default(),
             address,
             address_active_tab: None,
@@ -298,7 +299,7 @@ impl Lumen {
                 .service(crate::plugin::SETTINGS)
                 .expect("core settings service is mounted")
                 .load_zooms(),
-            #[cfg(all(target_os = "linux", not(test)))]
+            #[cfg(not(test))]
             active_zoom_target: None,
             show_suggestions: false,
             engine,
@@ -336,6 +337,8 @@ impl Lumen {
             crate::plugin::EventMode::Parallel,
             crate::plugin::EventPayload::Empty,
         );
+        let initial_theme = crate::ui::visual::theme_for_space(app.active_space());
+        crate::ui::visual::update_theme_caret(initial_theme, cx);
         app
     }
     pub(crate) fn close_app_page(&mut self) {
@@ -394,7 +397,7 @@ impl Lumen {
             .and_then(|preset| preset.sidebar_collapsed)
             .unwrap_or(self.sidebar_collapsed)
     }
-    #[cfg(all(target_os = "linux", not(test)))]
+    #[cfg(not(test))]
     pub(in crate::app) fn browser_sizes_for_sidebar(
         &self,
         window: &Window,
@@ -434,7 +437,7 @@ impl Lumen {
                 .unwrap_or_default()
         }
     }
-    #[cfg(all(target_os = "linux", not(test)))]
+    #[cfg(not(test))]
     pub(in crate::app) fn begin_browser_resize_drag(
         &mut self,
         window: &Window,
@@ -517,6 +520,13 @@ impl Lumen {
         self.peek_focused = false;
         self.show_suggestions = false;
         self.selected_suggestion = None;
+        self.close_app_page();
+        self.plugins_menu_open = false;
+        self.tab_context_menu = None;
+        self.space_context_menu = None;
+        self.folder_context_menu = None;
+        self.web_context_menu = None;
+        self.theme_editor = None;
         window.focus(&self.browser_focus_handle, cx);
         if let Some(pair) = self.current_split_pair() {
             self.engine.set_focus(&pair.first, false);
@@ -543,6 +553,8 @@ impl Lumen {
     }
     pub(crate) fn set_focused_pane(&mut self, pane_index: usize) {
         self.focused_pane = pane_index.min(1);
+        self.close_app_page();
+        self.plugins_menu_open = false;
         if let Some(pair) = self.stored_split_pair() {
             self.active_space_mut().active = Some(
                 split_view::tab_for_pane(&pair.first, &pair.second, self.focused_pane).to_owned(),
@@ -552,6 +564,8 @@ impl Lumen {
     pub(in crate::app) fn activate_split_group(&mut self) {
         if let Some(pair) = self.stored_split_pair() {
             self.focused_pane = 0;
+            self.close_app_page();
+            self.plugins_menu_open = false;
             self.active_space_mut().active = Some(pair.first);
         }
     }

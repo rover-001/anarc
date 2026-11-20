@@ -126,7 +126,7 @@ pub(crate) struct Lumen {
     pub(super) space_switch_transition:
         Option<(Space, space_switcher::SpaceSwitchState, Instant, u64)>,
     pub(super) space_switch_transition_id: u64,
-    #[cfg(all(target_os = "linux", not(test)))]
+    #[cfg(not(test))]
     pub(super) resize_drag: split_view::ResizeDrag,
     pub(super) address: gpui_kit::Entity<InputState>,
     pub(super) address_active_tab: Option<(String, String, String)>,
@@ -149,7 +149,7 @@ pub(crate) struct Lumen {
     pub(super) selected_suggestion: Option<usize>,
     pub(super) recent_searches: Vec<String>,
     pub(super) zoom_levels: std::collections::HashMap<String, f64>,
-    #[cfg(all(target_os = "linux", not(test)))]
+    #[cfg(not(test))]
     pub(super) active_zoom_target: Option<(String, String)>,
     pub(super) show_suggestions: bool,
     pub(crate) engine: crate::engine::Engine,

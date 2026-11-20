@@ -151,8 +151,9 @@ pub(crate) fn section_tab_row(
             this.drop_tab_in_target_section(&drag.tab_id, &before_target, false);
             cx.notify();
         }))
-        .on_click(cx.listener(move |this, _, _, cx| {
+        .on_click(cx.listener(move |this, _, window, cx| {
             this.activate_tab_in_active_space(&click_id);
+            this.focus_browser(window, cx);
             cx.notify();
         }))
         .on_mouse_down(

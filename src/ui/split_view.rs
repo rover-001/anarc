@@ -37,7 +37,7 @@ impl ResizeDrag {
             .find_map(|size| (size.tab_id == tab_id).then_some((size.width, size.height)))
     }
 
-    #[cfg(all(target_os = "linux", not(test)))]
+    #[cfg(not(test))]
     pub fn target_size(&self, tab_id: &str) -> Option<(i32, i32)> {
         self.pending_targets.get(tab_id).copied()
     }

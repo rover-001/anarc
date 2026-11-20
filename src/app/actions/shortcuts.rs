@@ -25,6 +25,9 @@ impl Lumen {
         let active_id = space.tabs[next].id.clone();
         space.active = Some(active_id.clone());
         let _ = space;
+        self.close_peek();
+        self.close_app_page();
+        self.plugins_menu_open = false;
         self.emit_plugin_text("tab.activated", active_id);
         self.save_state();
     }
@@ -45,6 +48,9 @@ impl Lumen {
             let active_id = tab.id.clone();
             space.active = Some(active_id.clone());
             let _ = space;
+            self.close_peek();
+            self.close_app_page();
+            self.plugins_menu_open = false;
             self.emit_plugin_text("tab.activated", active_id);
             self.save_state();
         }
@@ -94,8 +100,14 @@ impl Lumen {
             "next-tab" => self.cycle_tab(false),
             "previous-tab" => self.cycle_tab(true),
             "activate-tab-number" => self.activate_tab_number(key.parse().unwrap_or(1)),
-            "reload" => self.reload_active(false),
-            "hard-reload" => self.reload_active(true),
+            "reload" => {
+                self.close_app_page();
+                self.reload_active(false);
+            }
+            "hard-reload" => {
+                self.close_app_page();
+                self.reload_active(true);
+            }
             "zoom-in" => self.change_zoom(0.1),
             "zoom-out" => self.change_zoom(-0.1),
             "zoom-reset" => self.change_zoom(0.0),

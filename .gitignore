@@ -17,6 +17,8 @@ id_rsa*
 *.p12
 
 # OS & Editor
+__pycache__/
+*.pyc
 .DS_Store
 Thumbs.db
 *.swp
@@ -29,3 +31,10 @@ Thumbs.db
 refactor.md
 performance.md
 scratch/
+scroll.log
+.heald
+.junie
+agent
+.claude
+.playwright-mcp
+.wrangler/

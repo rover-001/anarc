@@ -102,15 +102,15 @@ pub(crate) fn register_panel_plugins(
     entries.sort_by_key(|entry| entry.file_name());
 
     for entry in entries {
-        if !entry
-            .file_type()
-            .map_err(|error| format!("{}: {error}", entry.path().display()))?
-            .is_dir()
-        {
+        if !entry.path().is_dir() {
             continue;
         }
         let directory = entry.path();
-        let manifest_path = directory.join(MANIFEST_FILE);
+        let manifest_path = if directory.join("anarc-plugin.toml").is_file() {
+            directory.join("anarc-plugin.toml")
+        } else {
+            directory.join(MANIFEST_FILE)
+        };
         let text = match fs::read_to_string(&manifest_path) {
             Ok(text) => text,
             Err(_) => continue,
@@ -130,6 +130,15 @@ pub(crate) fn register_panel_plugins(
 
         match parse_panel(&directory, &text) {
             Ok((metadata, package)) => {
+                if host.is_registered(&metadata.id) {
+                    continue;
+                }
+                let enabled_by_default = metadata.id == "com.anarc.live-share"
+                    || value
+                        .get("plugin")
+                        .and_then(|p| p.get("enabled_by_default"))
+                        .and_then(toml::Value::as_bool)
+                        .unwrap_or(false);
                 let descriptor = PluginDescriptor {
                     id: metadata.id.clone(),
                     name: metadata.name,
@@ -141,7 +150,7 @@ pub(crate) fn register_panel_plugins(
                         .into_iter()
                         .map(|host| format!("HTTPS: {host}"))
                         .collect(),
-                    enabled_by_default: false,
+                    enabled_by_default,
                     can_toggle: true,
                 };
                 let plugin = MountedPanel {
