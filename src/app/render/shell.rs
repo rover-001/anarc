@@ -64,7 +64,7 @@ impl Lumen {
             .child(visual::space_backdrop(
                 self.space_modal
                     .as_ref()
-                    .map_or(&active_space, |modal| &modal.theme_draft),
+                    .map_or(active_space, |modal| &modal.theme_draft),
             ))
             .text_color(rgb(theme.text))
             .on_mouse_move(cx.listener(
@@ -196,12 +196,6 @@ impl Lumen {
                         .items_center()
                         .gap_2()
                         .px_4()
-                        .window_control_area(gpui_kit::WindowControlArea::Drag)
-                        .on_click(cx.listener(|_, event: &gpui_kit::ClickEvent, window, _| {
-                            if event.click_count() == 2 {
-                                window.zoom_window();
-                            }
-                        }))
                         .child(
                             div()
                                 .id("navigation-controls")
@@ -414,7 +408,6 @@ impl Lumen {
                                                 style.bg(rgb(theme.surface_hover)).text_color(rgb(theme.text))
                                             })
                                             .active(|style| style.opacity(0.8))
-                                            .window_control_area(gpui_kit::WindowControlArea::Min)
                                             .on_click(cx.listener(|_, _, window, _| {
                                                 window.minimize_window();
                                             }))
@@ -434,7 +427,6 @@ impl Lumen {
                                                 style.bg(rgb(theme.surface_hover)).text_color(rgb(theme.text))
                                             })
                                             .active(|style| style.opacity(0.8))
-                                            .window_control_area(gpui_kit::WindowControlArea::Max)
                                             .on_click(cx.listener(|_, _, window, _| {
                                                 window.zoom_window();
                                             }))
@@ -461,7 +453,6 @@ impl Lumen {
                                                 style.bg(rgb(0xe53935)).text_color(rgb(0xffffff))
                                             })
                                             .active(|style| style.opacity(0.85))
-                                            .window_control_area(gpui_kit::WindowControlArea::Close)
                                             .on_click(cx.listener(|_, _, window, _| {
                                                 window.remove_window();
                                             }))
