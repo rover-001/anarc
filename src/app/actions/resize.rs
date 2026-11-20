@@ -50,9 +50,9 @@ impl Lumen {
                 from + (to - from) * progress
             },
         );
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         self.begin_browser_resize_drag(window, false);
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         let final_sizes = self.browser_sizes_for_sidebar(window, target);
         self.sidebar_transition_serial = self.sidebar_transition_serial.wrapping_add(1);
         let serial = self.sidebar_transition_serial;
@@ -63,7 +63,7 @@ impl Lumen {
             self.save_state();
         }
 
-        #[cfg(all(target_os = "linux", not(test)))]
+        #[cfg(not(test))]
         cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(ui::motion::sidebar().duration())
@@ -80,7 +80,7 @@ impl Lumen {
 
         cx.notify();
     }
-    #[cfg(all(target_os = "linux", not(test)))]
+    #[cfg(not(test))]
     pub(in crate::app) fn finish_browser_resize_drag(
         &mut self,
         sizes: Vec<split_view::BrowserSize>,

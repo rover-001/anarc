@@ -22,7 +22,9 @@ pub(crate) const MAX_PACKAGE_UNCOMPRESSED_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_PACKAGE_ARCHIVE_BYTES: u64 = 160 * 1024 * 1024;
 pub(crate) const MAX_PACKAGE_PATH_BYTES: usize = 1024;
 const MANIFEST_NAME: &str = "lumen-plugin.toml";
+const ANARC_MANIFEST_NAME: &str = "anarc-plugin.toml";
 const SIGNATURE_NAME: &str = "META-INF/lumen.signature";
+const ANARC_SIGNATURE_NAME: &str = "META-INF/anarc.signature";
 const MAX_SIGNATURE_BYTES: u64 = 1024;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 
@@ -98,7 +100,7 @@ pub(crate) fn validate_entries(entries: &[PackageEntry]) -> Result<(), PackageEr
             .map(|component| component.as_os_str().to_string_lossy().to_lowercase())
             .collect::<Vec<_>>()
             .join("/");
-        if normalized == MANIFEST_NAME {
+        if normalized == MANIFEST_NAME || normalized == "anarc-plugin.toml" {
             has_manifest = true;
         }
         if !normalized_names.insert(normalized.clone()) {
@@ -209,7 +211,7 @@ pub(crate) fn export_package(
     let mut files = BTreeMap::new();
     let mut total_size = 0u64;
     collect_source_files(&root, &root, &mut files, &mut total_size)?;
-    if files.contains_key(SIGNATURE_NAME) {
+    if files.contains_key(SIGNATURE_NAME) || files.contains_key(ANARC_SIGNATURE_NAME) {
         return Err(PackageError(format!(
             "source must not contain reserved path {SIGNATURE_NAME}"
         )));
@@ -226,7 +228,7 @@ pub(crate) fn export_package(
     let canonical = canonical_package_bytes(files.iter())?;
     let signature = pair.sign(&canonical);
     let signature_file = format!(
-        "LUMEN-PLUGIN-SIGNATURE-1\npub={}\nsig={}\n",
+        "ANARC-PLUGIN-SIGNATURE-1\npub={}\nsig={}\n",
         encode_hex(pair.public_key().as_ref()),
         encode_hex(signature.as_ref()),
     );
@@ -260,13 +262,14 @@ pub(crate) fn inspect_package(
 ) -> Result<PackageInfo, PackageError> {
     let files = read_zip(package_path)?;
     let signature = files
-        .get(SIGNATURE_NAME)
-        .ok_or_else(|| PackageError(format!("package is missing {SIGNATURE_NAME}")))?;
+        .get("META-INF/anarc.signature")
+        .or_else(|| files.get(SIGNATURE_NAME))
+        .ok_or_else(|| PackageError("package is missing signature".into()))?;
     let (signer_key, signature_bytes) = parse_signature(signature)?;
     let canonical = canonical_package_bytes(
         files
             .iter()
-            .filter(|(path, _)| path.as_str() != SIGNATURE_NAME),
+            .filter(|(path, _)| path.as_str() != "META-INF/anarc.signature" && path.as_str() != SIGNATURE_NAME),
     )?;
     let signature_valid = UnparsedPublicKey::new(&ED25519, signer_key.as_slice())
         .verify(&canonical, &signature_bytes)
@@ -286,8 +289,9 @@ pub(crate) fn install_package(
 ) -> Result<InstalledPackage, PackageError> {
     let files = read_zip(package_path)?;
     let signature = files
-        .get(SIGNATURE_NAME)
-        .ok_or_else(|| PackageError(format!("package is missing {SIGNATURE_NAME}")))?;
+        .get("META-INF/anarc.signature")
+        .or_else(|| files.get(SIGNATURE_NAME))
+        .ok_or_else(|| PackageError("package is missing signature".into()))?;
     let (signer_key, signature_bytes) = parse_signature(signature)?;
     if signer_key != trusted_public_key {
         return Err(PackageError("package signer is not trusted".into()));
@@ -295,7 +299,7 @@ pub(crate) fn install_package(
     let canonical = canonical_package_bytes(
         files
             .iter()
-            .filter(|(path, _)| path.as_str() != SIGNATURE_NAME),
+            .filter(|(path, _)| path.as_str() != "META-INF/anarc.signature" && path.as_str() != SIGNATURE_NAME),
     )?;
     UnparsedPublicKey::new(&ED25519, trusted_public_key)
         .verify(&canonical, &signature_bytes)
@@ -371,7 +375,9 @@ fn read_zip(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, PackageError> {
                 entry.name()
             )));
         }
-        if entry.name() == SIGNATURE_NAME && entry.size() > MAX_SIGNATURE_BYTES {
+        if (entry.name() == SIGNATURE_NAME || entry.name() == ANARC_SIGNATURE_NAME)
+            && entry.size() > MAX_SIGNATURE_BYTES
+        {
             return Err(PackageError("signature metadata is too large".into()));
         }
         entries.push(PackageEntry {
@@ -411,8 +417,9 @@ fn package_info(
     signature_trusted: bool,
 ) -> Result<PackageInfo, PackageError> {
     let manifest = files
-        .get(MANIFEST_NAME)
-        .ok_or_else(|| PackageError(format!("package is missing {MANIFEST_NAME}")))?;
+        .get("anarc-plugin.toml")
+        .or_else(|| files.get(MANIFEST_NAME))
+        .ok_or_else(|| PackageError(format!("package is missing manifest ({MANIFEST_NAME} or anarc-plugin.toml)")))?;
     if manifest.len() > MAX_MANIFEST_BYTES {
         return Err(PackageError("plugin manifest is too large".into()));
     }
@@ -560,7 +567,8 @@ fn parse_signature(bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>), PackageError> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| PackageError("signature metadata is not UTF-8".into()))?;
     let mut lines = text.lines();
-    if lines.next() != Some("LUMEN-PLUGIN-SIGNATURE-1") {
+    let header = lines.next();
+    if header != Some("ANARC-PLUGIN-SIGNATURE-1") && header != Some("LUMEN-PLUGIN-SIGNATURE-1") {
         return Err(PackageError("unsupported package signature format".into()));
     }
     let public_key = lines
@@ -703,6 +711,12 @@ fn write_zip(
             .write_all(content)
             .map_err(|error| PackageError(format!("could not write {name}: {error}")))?;
     }
+    archive
+        .start_file(ANARC_SIGNATURE_NAME, options)
+        .map_err(|error| PackageError(format!("could not write signature: {error}")))?;
+    archive
+        .write_all(signature)
+        .map_err(|error| PackageError(format!("could not write signature: {error}")))?;
     archive
         .start_file(SIGNATURE_NAME, options)
         .map_err(|error| PackageError(format!("could not write signature: {error}")))?;

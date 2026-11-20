@@ -149,6 +149,13 @@ impl Lumen {
         self.peek_focused = true;
         self.show_suggestions = false;
         self.selected_suggestion = None;
+        self.close_app_page();
+        self.plugins_menu_open = false;
+        self.tab_context_menu = None;
+        self.space_context_menu = None;
+        self.folder_context_menu = None;
+        self.web_context_menu = None;
+        self.theme_editor = None;
         window.focus(&self.browser_focus_handle, cx);
         let active = self.active_tab_id().to_owned();
         self.engine.set_focus(&active, false);

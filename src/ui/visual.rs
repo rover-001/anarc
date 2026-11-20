@@ -321,6 +321,36 @@ pub fn theme_for_space(space: &crate::model::Space) -> SpaceTheme {
     apply_pack_theme_tokens(theme, &pack_themes)
 }
 
+pub fn is_light_theme(theme: SpaceTheme) -> bool {
+    let channel = |c: u32, shift: u32| ((c >> shift) & 0xff) as f32 / 255.0;
+    let lum = |c: u32| 0.2126 * channel(c, 16) + 0.7152 * channel(c, 8) + 0.0722 * channel(c, 0);
+    lum(theme.surface) > 0.45 || lum(theme.base) > 0.45 || lum(theme.text) < 0.55
+}
+
+pub fn update_theme_caret(theme: SpaceTheme, cx: &mut gpui_kit::App) {
+    let is_light = is_light_theme(theme);
+    let desired_mode = if is_light {
+        gpui_kit::component::ThemeMode::Light
+    } else {
+        gpui_kit::component::ThemeMode::Dark
+    };
+    let desired_caret = if is_light {
+        gpui_kit::rgb(theme.text)
+    } else {
+        gpui_kit::rgb(0xffffff)
+    };
+    if cx.has_global::<gpui_kit::component::Theme>() {
+        let current = gpui_kit::component::Theme::global(cx);
+        if current.mode == desired_mode && current.caret == desired_caret.into() {
+            return;
+        }
+    }
+    gpui_kit::component::Theme::change(desired_mode, None, cx);
+    gpui_kit::component::Theme::update(cx, |t| {
+        t.caret = desired_caret.into();
+    });
+}
+
 fn apply_pack_theme_tokens(
     mut theme: SpaceTheme,
     packs: &[crate::plugin::ThemePack],

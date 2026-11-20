@@ -14,6 +14,8 @@ impl Lumen {
         let mut overlays = Vec::new();
         if self.plugins_menu_open {
             let ad_blocker_enabled = self.engine.ad_blocker_enabled();
+            let live_share_active = self.plugins.is_active("com.anarc.live-share");
+            let active_count = (if ad_blocker_enabled { 1 } else { 0 }) + (if live_share_active { 1 } else { 0 });
             let dismiss = div()
                 .id("plugins-menu-dismiss")
                 .occlude()
@@ -21,8 +23,11 @@ impl Lumen {
                 .inset_0()
                 .on_mouse_down(
                     gpui_kit::MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, _, window, cx| {
                         this.plugins_menu_open = false;
+                        if this.app_page.is_none() {
+                            this.focus_browser(window, cx);
+                        }
                         cx.notify();
                     }),
                 );
@@ -64,9 +69,122 @@ impl Lumen {
                             div()
                                 .text_xs()
                                 .text_color(rgb(theme.muted))
-                                .child("1 active"),
+                                .child(format!("{active_count} active")),
                         ),
                 )
+                .child({
+                    div()
+                        .id("toggle-live-share")
+                        .px_2()
+                        .py_2()
+                        .w_full()
+                        .min_w_0()
+                        .rounded_md()
+                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.plugins_menu_open = false;
+                            if let Err(error) = this.open_plugin_panel("com.anarc.live-share") {
+                                eprintln!("Could not open live share: {error}");
+                            } else {
+                                this.focus_browser(window, cx);
+                            }
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .min_w_0()
+                                .flex_1()
+                                .child(Icon::new(IconName::Share2).text_color(rgb(
+                                    if live_share_active {
+                                        0x76d7b2
+                                    } else {
+                                        theme.muted
+                                    },
+                                )))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .text_color(rgb(theme.text))
+                                                        .whitespace_nowrap()
+                                                        .child("Anarc Live Share"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .px_1p5()
+                                                        .py_0p5()
+                                                        .rounded_sm()
+                                                        .bg(rgb(theme.accent))
+                                                        .text_color(rgb(theme.base))
+                                                        .text_xs()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .child("Recommended"),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(theme.muted))
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .whitespace_nowrap()
+                                                .child("Live collaborative space sharing"),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("live-share-toggle-switch")
+                                .flex_shrink_0()
+                                .w(px(34.0 * UI_SCALE))
+                                .h(px(20.0 * UI_SCALE))
+                                .rounded_full()
+                                .bg(rgb(if live_share_active {
+                                    theme.accent
+                                } else {
+                                    theme.border
+                                }))
+                                .flex()
+                                .items_center()
+                                .justify_start()
+                                .px(px(2.0 * UI_SCALE))
+                                .child(
+                                    div()
+                                        .size(px(16.0 * UI_SCALE))
+                                        .rounded_full()
+                                        .bg(rgb(0xffffff))
+                                        .when(live_share_active, |thumb| {
+                                            thumb.ml(px(14.0 * UI_SCALE))
+                                        }),
+                                )
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    let current = this.plugins.is_active("com.anarc.live-share");
+                                    let _ = this.set_plugin_enabled("com.anarc.live-share", !current);
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                })),
+                        )
+                })
                 .child(
                     div()
                         .id("toggle-ad-blocker")
@@ -355,8 +473,11 @@ impl Lumen {
                 .inset_0()
                 .on_mouse_down(
                     gpui_kit::MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, _, window, cx| {
                         this.sidebar_context_menu = None;
+                        if this.app_page.is_none() {
+                            this.focus_browser(window, cx);
+                        }
                         cx.notify();
                     }),
                 );
@@ -453,8 +574,11 @@ impl Lumen {
                 .inset_0()
                 .on_mouse_down(
                     gpui_kit::MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, _, window, cx| {
                         this.theme_editor = None;
+                        if this.app_page.is_none() {
+                            this.focus_browser(window, cx);
+                        }
                         cx.notify();
                     }),
                 );
@@ -472,8 +596,11 @@ impl Lumen {
                 .inset_0()
                 .on_mouse_down(
                     gpui_kit::MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, _, window, cx| {
                         this.space_context_menu = None;
+                        if this.app_page.is_none() {
+                            this.focus_browser(window, cx);
+                        }
                         cx.notify();
                     }),
                 );
@@ -598,8 +725,11 @@ impl Lumen {
                 .inset_0()
                 .on_mouse_down(
                     gpui_kit::MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, _, window, cx| {
                         this.tab_context_menu = None;
+                        if this.app_page.is_none() {
+                            this.focus_browser(window, cx);
+                        }
                         cx.notify();
                     }),
                 );
@@ -1047,8 +1177,11 @@ impl Lumen {
                 .inset_0()
                 .on_mouse_down(
                     gpui_kit::MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, _, window, cx| {
                         this.folder_context_menu = None;
+                        if this.app_page.is_none() {
+                            this.focus_browser(window, cx);
+                        }
                         cx.notify();
                     }),
                 );
@@ -1139,15 +1272,21 @@ impl Lumen {
                 .inset_0()
                 .on_mouse_down(
                     gpui_kit::MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, _, window, cx| {
                         this.web_context_menu = None;
+                        if this.app_page.is_none() {
+                            this.focus_browser(window, cx);
+                        }
                         cx.notify();
                     }),
                 )
                 .on_mouse_down(
                     gpui_kit::MouseButton::Right,
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, _, window, cx| {
                         this.web_context_menu = None;
+                        if this.app_page.is_none() {
+                            this.focus_browser(window, cx);
+                        }
                         cx.notify();
                     }),
                 );

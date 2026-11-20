@@ -977,7 +977,11 @@ pub(crate) fn register_wasm_plugins(host: &mut PluginHost, root: &Path) -> Resul
             continue;
         }
         let directory = entry.path();
-        let manifest_path = directory.join("lumen-plugin.toml");
+        let manifest_path = if directory.join("anarc-plugin.toml").is_file() {
+            directory.join("anarc-plugin.toml")
+        } else {
+            directory.join("lumen-plugin.toml")
+        };
         let Ok(source) = fs::read_to_string(&manifest_path) else {
             continue;
         };
