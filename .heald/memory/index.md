@@ -6,6 +6,7 @@ title: "Memory Index"
 
 | Title | Type | Date | Tags | Summary |
 | :--- | :--- | :--- | :--- | :--- |
+| **Windows compatibility custom client topbar light theme caret and live-share default** (`windows-compatibility-custom-client-topbar-light-theme-caret-and-live-share-default.md`) | `decision` | 2026-11-20 | - | 1. Made Anarc fully compatible with Windows by targeting ... |
 | **Prevent Settings modal dismissal on plugin open and menu dismiss** (`prevent-settings-modal-dismissal-on-plugin-open-and-menu-dismiss.md`) | `decision` | 2026-11-20 | - | Removed close_app_page() from on_open_panel in app_pages.... |
 | **Anarc Identity Migration and Plugin Open Integration** (`anarc-identity-migration-and-plugin-open-integration.md`) | `decision` | 2026-11-19 | - | Renamed repository directory from lumen to anarc while pr... |
 | **Ed25519 Signed Plugin Packages and In-Browser WebRTC P2P Live Share** (`ed25519-signed-plugin-packages-and-in-browser-webrtc-p2p-live-share.md`) | `decision` | 2026-11-19 | - | Stopped background daemon. Implemented lumen-signer (at ~... |
