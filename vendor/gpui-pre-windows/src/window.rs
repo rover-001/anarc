@@ -571,6 +571,23 @@ impl WindowsWindow {
         let hwnd = creation_result?;
         let this = this.unwrap();
 
+        if !icon.is_invalid() {
+            unsafe {
+                SendMessageW(
+                    hwnd,
+                    WM_SETICON,
+                    WPARAM(ICON_BIG as _),
+                    LPARAM(icon.0 as _),
+                );
+                SendMessageW(
+                    hwnd,
+                    WM_SETICON,
+                    WPARAM(ICON_SMALL as _),
+                    LPARAM(icon.0 as _),
+                );
+            }
+        }
+
         register_drag_drop(&this)?;
         set_non_rude_hwnd(hwnd, true);
         configure_dwm_dark_mode(hwnd, appearance);
