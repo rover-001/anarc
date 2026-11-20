@@ -123,9 +123,9 @@ impl Lumen {
             .on_mouse_up(
                 gpui_kit::MouseButton::Left,
                 cx.listener(move |this, _, _window, cx| {
-                    #[cfg(all(target_os = "linux", not(test)))]
+                    #[cfg(not(test))]
                     let finish_split_resize = this.split_resizing;
-                    #[cfg(all(target_os = "linux", not(test)))]
+                    #[cfg(not(test))]
                     if this.sidebar_resizing || finish_split_resize {
                         let bounds = _window.bounds();
                         let sidebar = this.effective_sidebar_width();
@@ -190,11 +190,18 @@ impl Lumen {
             .when(topbar_mode != "hidden", |col| {
                 col.child(
                     div()
+                        .id("topbar-container")
                         .h(px(topbar_height))
                         .flex()
                         .items_center()
                         .gap_2()
                         .px_4()
+                        .window_control_area(gpui_kit::WindowControlArea::Drag)
+                        .on_click(cx.listener(|_, event: &gpui_kit::ClickEvent, window, _| {
+                            if event.click_count() == 2 {
+                                window.zoom_window();
+                            }
+                        }))
                         .child(
                             div()
                                 .id("navigation-controls")
@@ -225,11 +232,13 @@ impl Lumen {
                                                 },
                                             )
                                         })
-                                        .on_click(cx.listener(|this, _, _, cx| {
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.close_app_page();
                                             this.address_editing = false;
                                             this.show_suggestions = false;
                                             this.selected_suggestion = None;
                                             this.engine.go_back(this.focused_tab_id());
+                                            this.focus_browser(window, cx);
                                             cx.notify();
                                         }))
                                         .child(
@@ -261,11 +270,13 @@ impl Lumen {
                                                 },
                                             )
                                         })
-                                        .on_click(cx.listener(|this, _, _, cx| {
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.close_app_page();
                                             this.address_editing = false;
                                             this.show_suggestions = false;
                                             this.selected_suggestion = None;
                                             this.engine.go_forward(this.focused_tab_id());
+                                            this.focus_browser(window, cx);
                                             cx.notify();
                                         }))
                                         .child(
@@ -372,12 +383,90 @@ impl Lumen {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.app_page = if this.app_page == Some(AppPage::Downloads)
                                         {
-                                            None
+                                             None
                                         } else {
                                             Some(AppPage::Downloads)
                                         };
                                         cx.notify();
                                     })),
+                            )
+                        })
+                        .when(!cfg!(target_os = "macos"), |row| {
+                            let is_max = window.is_maximized();
+                            row.child(
+                                div()
+                                    .id("topbar-window-controls")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .ml_1()
+                                    .child(
+                                        div()
+                                            .id("window-control-minimize")
+                                            .size(px(26.0 * UI_SCALE))
+                                            .rounded_md()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .cursor_pointer()
+                                            .text_color(rgb(theme.muted))
+                                            .hover(move |style| {
+                                                style.bg(rgb(theme.surface_hover)).text_color(rgb(theme.text))
+                                            })
+                                            .active(|style| style.opacity(0.8))
+                                            .window_control_area(gpui_kit::WindowControlArea::Min)
+                                            .on_click(cx.listener(|_, _, window, _| {
+                                                window.minimize_window();
+                                            }))
+                                            .child(Icon::new(IconName::WindowMinimize).size(px(14.0 * UI_SCALE))),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("window-control-maximize")
+                                            .size(px(26.0 * UI_SCALE))
+                                            .rounded_md()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .cursor_pointer()
+                                            .text_color(rgb(theme.muted))
+                                            .hover(move |style| {
+                                                style.bg(rgb(theme.surface_hover)).text_color(rgb(theme.text))
+                                            })
+                                            .active(|style| style.opacity(0.8))
+                                            .window_control_area(gpui_kit::WindowControlArea::Max)
+                                            .on_click(cx.listener(|_, _, window, _| {
+                                                window.zoom_window();
+                                            }))
+                                            .child(
+                                                Icon::new(if is_max {
+                                                    IconName::WindowRestore
+                                                } else {
+                                                    IconName::WindowMaximize
+                                                })
+                                                .size(px(14.0 * UI_SCALE)),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("window-control-close")
+                                            .size(px(26.0 * UI_SCALE))
+                                            .rounded_md()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .cursor_pointer()
+                                            .text_color(rgb(theme.muted))
+                                            .hover(|style| {
+                                                style.bg(rgb(0xe53935)).text_color(rgb(0xffffff))
+                                            })
+                                            .active(|style| style.opacity(0.85))
+                                            .window_control_area(gpui_kit::WindowControlArea::Close)
+                                            .on_click(cx.listener(|_, _, window, _| {
+                                                window.remove_window();
+                                            }))
+                                            .child(Icon::new(IconName::WindowClose).size(px(14.0 * UI_SCALE))),
+                                    ),
                             )
                         }),
                 )
@@ -399,16 +488,16 @@ impl Lumen {
                     .unwrap_or_else(|| active_tab_id_string.clone());
                 let left_image = self.engine.get_image(&left_tab_id);
                 let left_cursor = self.engine.get_cursor(&left_tab_id);
-                #[cfg(all(target_os = "linux", not(test)))]
+                #[cfg(not(test))]
                 let left_frame_matches_target = self
                     .resize_drag
                     .target_size(&left_tab_id)
                     .is_some_and(|(w, h)| self.engine.frame_matches_size(&left_tab_id, w, h));
-                #[cfg(all(target_os = "linux", not(test)))]
+                #[cfg(not(test))]
                 let left_edge_color = self
                     .resize_drag
                     .edge_color_until_frame(&left_tab_id, left_frame_matches_target);
-                #[cfg(any(not(target_os = "linux"), test))]
+                #[cfg(test)]
                 let left_edge_color = None;
                 if self.fullscreen_tab.is_none() {
                     self.web_viewport.update(cx, |viewport, cx| {
@@ -442,16 +531,16 @@ impl Lumen {
                 if let Some(right_tab_id) = right_tab_id {
                     let right_image = self.engine.get_image(&right_tab_id);
                     let right_cursor = self.engine.get_cursor(&right_tab_id);
-                    #[cfg(all(target_os = "linux", not(test)))]
+                    #[cfg(not(test))]
                     let right_frame_matches_target = self
                         .resize_drag
                         .target_size(&right_tab_id)
                         .is_some_and(|(w, h)| self.engine.frame_matches_size(&right_tab_id, w, h));
-                    #[cfg(all(target_os = "linux", not(test)))]
+                    #[cfg(not(test))]
                     let right_edge_color = self
                         .resize_drag
                         .edge_color_until_frame(&right_tab_id, right_frame_matches_target);
-                    #[cfg(any(not(target_os = "linux"), test))]
+                    #[cfg(test)]
                     let right_edge_color = None;
                     self.second_web_viewport.update(cx, |viewport, cx| {
                         let mut changed = viewport.set_theme(theme);
@@ -511,7 +600,7 @@ impl Lumen {
                                         gpui_kit::MouseButton::Left,
                                         cx.listener(|this, _, _window, cx| {
                                             this.split_resizing = true;
-                                            #[cfg(all(target_os = "linux", not(test)))]
+                                            #[cfg(not(test))]
                                             this.begin_browser_resize_drag(_window, true);
                                             cx.notify();
                                         }),
@@ -549,7 +638,8 @@ impl Lumen {
                     {
                         div().id("empty-space").size_full().on_mouse_down(
                             gpui_kit::MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
+                            cx.listener(|this, _, window, cx| {
+                                this.focus_browser(window, cx);
                                 if this.show_suggestions {
                                     this.show_suggestions = false;
                                     this.selected_suggestion = None;
@@ -611,6 +701,7 @@ impl Lumen {
             root = root.child(
                 div()
                     .id("app-page-overlay")
+                    .occlude()
                     .absolute()
                     .top(px(topbar_height))
                     .bottom(px(CONTENT_BEZEL_BOTTOM))
@@ -651,7 +742,7 @@ impl Lumen {
                         gpui_kit::MouseButton::Left,
                         cx.listener(|this, _, _window, cx| {
                             this.sidebar_resizing = true;
-                            #[cfg(all(target_os = "linux", not(test)))]
+                            #[cfg(not(test))]
                             this.begin_browser_resize_drag(_window, false);
                             cx.notify();
                         }),

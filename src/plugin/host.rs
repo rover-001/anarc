@@ -64,6 +64,10 @@ impl PluginHost {
         self.manager.register(descriptor, RuntimeStatus::Pending);
     }
 
+    pub(crate) fn is_registered(&self, id: &str) -> bool {
+        self.factories.contains_key(id)
+    }
+
     /// Mount built-ins enabled by the current config. Missing entries preserve
     /// each descriptor's default, keeping an old profile behavior-compatible.
     pub(crate) fn mount_enabled(&mut self) -> Result<(), String> {

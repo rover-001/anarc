@@ -87,7 +87,12 @@ impl Lumen {
                 if !root.is_dir() {
                     return Err("selected plugin source is not a folder".into());
                 }
-                let manifest = fs::read_to_string(root.join("lumen-plugin.toml"))
+                let manifest_path = if root.join("anarc-plugin.toml").is_file() {
+                    root.join("anarc-plugin.toml")
+                } else {
+                    root.join("lumen-plugin.toml")
+                };
+                let manifest = fs::read_to_string(&manifest_path)
                     .map_err(|error| format!("{}: {error}", root.display()))?;
                 let value: toml::Value = toml::from_str(&manifest)
                     .map_err(|error| format!("invalid plugin manifest: {error}"))?;
@@ -247,17 +252,27 @@ impl Lumen {
     }
 
     pub(crate) fn reload_plugins(&mut self) -> Result<(), String> {
-        let plugin_root = crate::paths::data_dir().join("plugins");
         self.plugins.unmount_external()?;
-        crate::plugin::register_packs(&mut self.plugins, &plugin_root)
-            .map_err(|error| format!("could not scan plugin packs: {error}"))?;
-        crate::plugin::register_panel_plugins(
-            &mut self.plugins,
-            &plugin_root,
-            self.panel_registry.clone(),
-        )?;
-        #[cfg(feature = "wasm-plugins")]
-        crate::plugin::register_wasm_plugins(&mut self.plugins, &plugin_root)?;
+        let data_plugins = crate::paths::data_dir().join("plugins");
+        let bundled_plugins = std::path::PathBuf::from("plugins");
+        let exe_plugins = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.join("plugins")));
+        for root in [&data_plugins, &bundled_plugins]
+            .into_iter()
+            .chain(exe_plugins.as_ref())
+        {
+            if root.is_dir() {
+                let _ = crate::plugin::register_packs(&mut self.plugins, root);
+                let _ = crate::plugin::register_panel_plugins(
+                    &mut self.plugins,
+                    root,
+                    self.panel_registry.clone(),
+                );
+                #[cfg(feature = "wasm-plugins")]
+                let _ = crate::plugin::register_wasm_plugins(&mut self.plugins, root);
+            }
+        }
         self.plugins.mount_enabled()
     }
 }
@@ -387,6 +402,7 @@ fn validate_install_manifest(
     let id = string_field(plugin, "id")?;
     let valid_id = id.len() <= 253
         && !id.starts_with("lumen.")
+        && !id.starts_with("anarc.")
         && id.split('.').all(|part| {
             !part.is_empty()
                 && part.len() <= 63
@@ -401,7 +417,7 @@ fn validate_install_manifest(
         });
     if !valid_id {
         return Err(
-            "plugin id must be reverse-DNS and outside the reserved lumen.* namespace".into(),
+            "plugin id must be reverse-DNS and outside the reserved anarc.* and lumen.* namespaces".into(),
         );
     }
     let version = string_field(plugin, "version")?;
@@ -438,7 +454,8 @@ fn validate_install_kind(
             let package = crate::plugin::PanelPackage::new(id, root, network)
                 .map_err(|error| format!("invalid panel package: {error:?}"))?;
             package
-                .response(&format!("lumen-plugin://{id}/"), "GET")
+                .response(&format!("anarc-plugin://{id}/"), "GET")
+                .or_else(|_| package.response(&format!("lumen-plugin://{id}/"), "GET"))
                 .map(|_| ())
                 .map_err(|error| format!("invalid panel entry point: {error:?}"))
         }

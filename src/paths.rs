@@ -68,7 +68,7 @@ pub fn cache_dir() -> PathBuf {
     resolve_cache_dir(
         std::env::var_os("ANARC_CACHE_DIR"),
         std::env::var_os("XDG_CACHE_HOME"),
-        std::env::var_os("HOME"),
+        std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")),
         std::env::temp_dir(),
     )
 }
@@ -92,7 +92,7 @@ fn resolve_cache_dir(
 fn override_or_home(variable: &str, default_suffix: &str) -> PathBuf {
     resolve_override_or_home(
         std::env::var_os(variable),
-        std::env::var_os("HOME"),
+        std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")),
         default_suffix,
     )
 }
