@@ -174,6 +174,7 @@ fn resize_debug(message: std::fmt::Arguments<'_>) {
 }
 
 mod actions;
+pub(crate) use actions::ensure_live_share_daemon_running;
 mod render;
 mod state;
 #[cfg(test)]

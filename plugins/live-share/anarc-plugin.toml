@@ -10,4 +10,4 @@ enabled_by_default = true
 
 [permissions]
 storage = true
-network = ["*.ts.net", "localhost"]
+network = ["*.ts.net", "localhost", "127.0.0.1"]

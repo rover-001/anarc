@@ -38,3 +38,4 @@ agent
 .claude
 .playwright-mcp
 .wrangler/
+tools/sync-windows.sh

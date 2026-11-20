@@ -52,6 +52,12 @@ impl PanelPackage {
 
     pub(crate) fn allows_host(&self, host: &str) -> bool {
         let host = host.trim_end_matches('.').to_ascii_lowercase();
+        if (host == "127.0.0.1" || host == "localhost")
+            && (self.allowed_hosts.contains("localhost")
+                || self.allowed_hosts.contains("127.0.0.1"))
+        {
+            return true;
+        }
         self.allowed_hosts.iter().any(|pattern| {
             if let Some(suffix) = pattern.strip_prefix("*.") {
                 host.len() > suffix.len()
@@ -72,7 +78,9 @@ impl PanelPackage {
             .allowed_hosts
             .iter()
             .map(|host| {
-                if let Some(suffix) = host.strip_prefix("*.") {
+                if host == "localhost" || host == "127.0.0.1" {
+                    format!("http://{host}:* ws://{host}:* http://localhost:* ws://localhost:*")
+                } else if let Some(suffix) = host.strip_prefix("*.") {
                     format!("https://*.{suffix}")
                 } else {
                     format!("https://{host}")

@@ -321,6 +321,14 @@ impl Render for WebViewport {
                                         r#"(function() {{
                                             const text = {};
                                             const active = document.activeElement;
+                                            if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {{
+                                                const start = active.selectionStart ?? active.value.length;
+                                                const end = active.selectionEnd ?? active.value.length;
+                                                active.setRangeText(text, start, end, 'end');
+                                                active.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                                active.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                                return;
+                                            }}
                                             let handled = false;
                                             try {{
                                                 const event = new ClipboardEvent('paste', {{
@@ -345,6 +353,7 @@ impl Render for WebViewport {
                                     );
                                     this.engine.execute_script(&key_tab_id, &script);
                                 }
+                                this.engine.send_key_down(&key_tab_id, event);
                                 this.engine.paste(&key_tab_id);
                                 return true;
                             }

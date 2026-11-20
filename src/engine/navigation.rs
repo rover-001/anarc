@@ -10,6 +10,7 @@ impl Engine {
                 || !events.popups.is_empty()
                 || !events.close_requests.is_empty()
                 || events.live_share_space_request.is_some()
+                || events.live_share_switch_space.is_some()
                 || !events.fullscreen.is_empty()
                 || !events.created.is_empty()
         })
@@ -36,6 +37,9 @@ impl Engine {
     }
     pub(crate) fn take_live_share_space_request(&self) -> Option<LiveShareSpaceRequest> {
         self.events.lock().ok()?.live_share_space_request.take()
+    }
+    pub(crate) fn take_live_share_switch_space(&self) -> Option<String> {
+        self.events.lock().ok()?.live_share_switch_space.take()
     }
     pub fn take_fullscreen_changes(&self) -> Vec<(String, bool)> {
         self.events
