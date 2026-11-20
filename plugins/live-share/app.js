@@ -1,7 +1,10 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+const API_BASE = "anarc-plugin://com.anarc.live-share/api-proxy";
 const chooseSpaceUrl = "anarc-plugin://com.anarc.live-share/__anarc_choose_space";
+const switchSpaceUrl = "anarc-plugin://com.anarc.live-share/__anarc_switch_to_space?id=shared-space";
+
 const searchUrls = {
   google: "https://www.google.com/search?q=",
   duckduckgo: "https://duckduckgo.com/?q=",
@@ -9,12 +12,9 @@ const searchUrls = {
 };
 
 let mode = "host";
-let phase = "ready";
 let selectedSpace = null;
-let sharedSpaceName = "";
-let tabs = [];
-let peer = null;
-let channel = null;
+let currentStatus = null;
+let tailscaleInfo = null;
 
 function setFeedback(message = "", isError = false) {
   const feedback = $("feedback");
@@ -22,528 +22,290 @@ function setFeedback(message = "", isError = false) {
   feedback.dataset.error = String(isError);
 }
 
-function tabCount(count) {
-  return `${count} web ${count === 1 ? "tab" : "tabs"}`;
-}
-
-function isConnected() {
-  return channel?.readyState === "open";
-}
-
-function render() {
-  const isHost = mode === "host";
-  const connected = isConnected();
-  const processing = phase === "working" || phase === "connecting";
-  const pickerAvailable = document.documentElement.dataset.anarcSpacePicker === "available";
-  const statusText = {
-    ready: "Ready",
-    working: "Preparing code",
-    exchange: "Waiting for partner",
-    connecting: "Connecting",
-    connected: "Connected",
-  };
-  $("status").textContent = statusText[phase];
-  $("status").dataset.state = phase;
-  $("setup").hidden = connected;
-  $("session").hidden = !connected;
-  $("host-mode").setAttribute("aria-pressed", String(isHost));
-  $("join-mode").setAttribute("aria-pressed", String(!isHost));
-  $("host-setup").hidden = !isHost;
-  $("join-setup").hidden = isHost;
-  $("choose-space").disabled = processing || !pickerAvailable;
-  $("picker-unavailable").hidden = pickerAvailable;
-  $("choose-space").textContent = selectedSpace ? "Change space" : "Choose space";
-  $("space-name").textContent = selectedSpace?.name ?? "No space selected";
-  $("space-tab-count").hidden = !selectedSpace;
-  $("space-tab-count").textContent = selectedSpace ? tabCount(selectedSpace.tabs.length) : "";
-  $("create-invite-btn").disabled = !selectedSpace || processing;
-  $("create-invite-btn").hidden = phase === "exchange" || phase === "connecting";
-  $("host-exchange").hidden = !$("share-code").value;
-  $("join-exchange").hidden = !$("response-code").value;
-  for (const form of [$("join-form"), $("confirm-form")]) {
-    for (const control of form.elements) control.disabled = processing;
-  }
-  if (connected) {
-    $("session-name").textContent = sharedSpaceName || "Shared space";
-    $("session-tab-count").textContent = tabCount(tabs.length);
-    renderTabs();
-  }
-}
-
-function webUrl(value) {
-  if (typeof value !== "string") return null;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
-  } catch {
-    return null;
-  }
-}
-
-function normalizeTab(value) {
-  const url = webUrl(value?.url);
-  if (!url || typeof value.id !== "string" || !value.id) return null;
-  return {
-    id: value.id,
-    title: typeof value.title === "string" && value.title.trim() ? value.title : url,
-    url,
-  };
-}
-
-function normalizeTabs(input) {
-  if (!Array.isArray(input)) return [];
-  const byId = new Map();
-  for (const value of input) {
-    const tab = normalizeTab(value);
-    if (tab) byId.set(tab.id, tab);
-  }
-  return Array.from(byId.values());
-}
-
-function openUrl(url) {
-  window.open(url, "_blank", "noopener,noreferrer");
-}
-
-function renderTabs() {
-  $("empty-tabs").hidden = tabs.length > 0;
-  const rows = document.createDocumentFragment();
-  for (const tab of tabs) {
-    const row = document.createElement("li");
-    row.className = "tab-row";
-    const details = document.createElement("div");
-    details.className = "tab-details";
-    const title = document.createElement("strong");
-    title.textContent = tab.title;
-    const url = document.createElement("p");
-    url.className = "tab-url";
-    url.textContent = tab.url;
-    details.append(title, url);
-    const actions = document.createElement("div");
-    actions.className = "tab-actions";
-    const open = document.createElement("button");
-    open.type = "button";
-    open.textContent = "Open";
-    open.setAttribute("aria-label", `Open ${tab.title}`);
-    open.addEventListener("click", () => openUrl(tab.url));
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.textContent = "Remove";
-    remove.setAttribute("aria-label", `Remove ${tab.title} from shared tabs`);
-    remove.addEventListener("click", () => {
-      send({type: "close_tab", tab_id: tab.id});
-      tabs = tabs.filter(({id}) => id !== tab.id);
-      render();
-      $("launch-input").focus();
-    });
-    actions.append(open, remove);
-    row.append(details, actions);
-    rows.append(row);
-  }
-  $("shared-tabs").replaceChildren(rows);
-}
-
-function resetPeer() {
-  const oldChannel = channel;
-  const oldPeer = peer;
-  channel = null;
-  peer = null;
-  oldChannel?.close();
-  oldPeer?.close();
-  phase = "ready";
-  tabs = [];
-  sharedSpaceName = "";
-  for (const id of ["share-code", "response-code", "response-input", "share-input", "launch-input"]) {
-    $(id).value = "";
-  }
-}
-
 function setMode(nextMode) {
   if (mode === nextMode) return;
-  resetPeer();
   mode = nextMode;
+  $("host-mode").setAttribute("aria-pressed", String(mode === "host"));
+  $("join-mode").setAttribute("aria-pressed", String(mode === "join"));
+  $("host-setup").hidden = mode !== "host";
+  $("join-setup").hidden = mode === "host";
   setFeedback();
-  render();
 }
 
-function createPeerConnection() {
-  const connection = new RTCPeerConnection({
-    iceServers: [{urls: "stun:stun.l.google.com:19302"}],
-  });
-  peer = connection;
-  connection.addEventListener("connectionstatechange", () => {
-    if (peer !== connection) return;
-    if (connection.connectionState === "failed") {
-      resetPeer();
-      setFeedback("The connection failed. Generate a new code to try again.", true);
-      render();
-    }
-  });
-  return connection;
-}
-
-function attachChannel(nextChannel) {
-  channel = nextChannel;
-  nextChannel.addEventListener("open", () => {
-    if (channel !== nextChannel) return;
-    phase = "connected";
-    setFeedback();
-    if (mode === "host") {
-      send({type: "sync_state", space_name: sharedSpaceName, tabs});
-    }
-    render();
-    $("launch-input").focus();
-  });
-  nextChannel.addEventListener("message", ({data}) => {
-    if (channel !== nextChannel || typeof data !== "string") return;
-    let message;
-    try {
-      message = JSON.parse(data);
-    } catch {
-      return;
-    }
-    switch (message?.type) {
-      case "sync_state":
-        if (mode === "join") {
-          sharedSpaceName = typeof message.space_name === "string" ? message.space_name : "";
-          tabs = normalizeTabs(message.tabs);
-        }
-        break;
-      case "open_tab": {
-        const tab = normalizeTab(message.tab);
-        if (tab && !tabs.some(({id}) => id === tab.id)) tabs.push(tab);
-        break;
-      }
-      case "close_tab":
-        tabs = tabs.filter(({id}) => id !== message.tab_id);
-        break;
-      default:
-        return;
-    }
-    render();
-  });
-  nextChannel.addEventListener("close", () => {
-    if (channel !== nextChannel) return;
-    resetPeer();
-    setFeedback("Your partner disconnected.");
-    render();
-  });
-}
-
-function send(message) {
-  if (isConnected()) {
-    try {
-      channel.send(JSON.stringify(message));
-    } catch {
-      setFeedback("The update could not be sent to your partner.", true);
-    }
+async function apiFetch(path, options = {}, retried = false) {
+  let url = `${API_BASE}${path}`;
+  if (options.body && typeof options.body === "string") {
+    const sep = url.includes("?") ? "&" : "?";
+    url = `${url}${sep}__body=${encodeURIComponent(options.body)}`;
   }
-}
-
-function waitForIce(connection) {
-  if (connection.iceGatheringState === "complete") return Promise.resolve();
-  return new Promise((resolve) => {
-    const done = () => {
-      clearTimeout(timeout);
-      connection.removeEventListener("icegatheringstatechange", check);
-      resolve();
-    };
-    const check = () => {
-      if (connection.iceGatheringState === "complete") done();
-    };
-    const timeout = setTimeout(done, 2500);
-    connection.addEventListener("icegatheringstatechange", check);
-  });
-}
-
-function encodeCode(object) {
-  const json = JSON.stringify(object);
-  const bytes = new TextEncoder().encode(json);
-  let binary = "";
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-function decodeCode(value, expectedType) {
-  if (typeof value !== "string") {
-    throw new Error("No code provided.");
-  }
-  let source = value.trim();
-  if (!source) {
-    throw new Error("Please paste a share code.");
-  }
-
-  let code;
   try {
-    const parsed = JSON.parse(source);
-    if (parsed && typeof parsed === "object" && typeof parsed.sdp === "string") {
-      code = parsed;
-    } else if (typeof parsed === "string") {
-      source = parsed.trim();
+    const res = await fetch(url, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+    if (res.ok) {
+      return await res.json();
     }
-  } catch {}
-
-  if (!code) {
-    const jsonMatch = source.match(/\{[\s\S]*"sdp"[\s\S]*\}/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[0]);
-        if (parsed && typeof parsed === "object" && typeof parsed.sdp === "string") {
-          code = parsed;
-        }
-      } catch {}
-    }
-  }
-
-  if (!code) {
-    let cleaned = source
-      .replace(/^```[a-z]*\s*/i, "")
-      .replace(/\s*```$/, "")
-      .replace(/^[`"'\.]+|[`"'\.]+$/g, "")
-      .trim();
-
-    cleaned = cleaned.replace(/^(?:share\s*code|response\s*code|offer|answer|code)\s*[:=-]\s*/i, "");
-
-    const variants = [cleaned];
+  } catch (_) {}
+  if (!retried) {
     try {
-      const decoded = decodeURIComponent(cleaned);
-      if (decoded !== cleaned) variants.push(decoded);
-    } catch {}
-
-    for (const variant of variants) {
-      const compactAll = variant.replace(/[\r\n\t\u200B\uFEFF\s]/g, "");
-      const base64Candidates = [compactAll];
-
-      const matches = compactAll.match(/[A-Za-z0-9+/=_-]{32,}/g);
-      if (matches) {
-        matches.sort((a, b) => b.length - a.length);
-        for (const m of matches) base64Candidates.push(m);
-      }
-
-      for (const candidate of new Set(base64Candidates)) {
-        let normalized = candidate.replace(/-/g, "+").replace(/_/g, "/");
-        normalized = normalized.replace(/=+$/, "");
-        if (!normalized || normalized.length < 16) continue;
-
-        const mod = normalized.length % 4;
-        if (mod === 1) continue;
-        const padLen = mod === 0 ? 0 : 4 - mod;
-        const padded = normalized + "=".repeat(padLen);
-
-        try {
-          const binary = atob(padded);
-          try {
-            const direct = JSON.parse(binary);
-            if (direct && typeof direct === "object" && typeof direct.sdp === "string") {
-              code = direct;
-              break;
-            }
-          } catch {}
-
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-          }
-          const utf8Str = new TextDecoder().decode(bytes);
-          const parsedUtf8 = JSON.parse(utf8Str);
-          if (parsedUtf8 && typeof parsedUtf8 === "object" && typeof parsedUtf8.sdp === "string") {
-            code = parsedUtf8;
-            break;
-          }
-        } catch {}
-      }
-      if (code) break;
-    }
+      await fetch("anarc-plugin://com.anarc.live-share/__anarc_start_service").catch(() => {});
+      await new Promise((r) => setTimeout(r, 600));
+      return await apiFetch(path, options, true);
+    } catch (_) {}
   }
-
-  if (!code) {
-    throw new Error("The pasted code is incomplete or its characters changed while copying.");
-  }
-  if (typeof code !== "object" || typeof code.sdp !== "string") {
-    throw new Error("The pasted text doesn't contain a WebRTC share offer.");
-  }
-  if (code.type !== expectedType) {
-    if (code.type === "answer") {
-      throw new Error("This is a response code. Paste the host's Share code here.");
-    }
-    throw new Error("This code is not a host offer. Ask the host to generate a new Share code in Live Share.");
-  }
-  return code;
+  console.warn("Live Share API error:", path);
+  return null;
 }
 
-async function createShareCode() {
-  if (!selectedSpace || phase !== "ready") return;
-  phase = "working";
-  sharedSpaceName = selectedSpace.name;
-  tabs = selectedSpace.tabs.slice();
-  setFeedback();
-  render();
-  let connection;
-  try {
-    connection = createPeerConnection();
-    attachChannel(connection.createDataChannel("anarc-live-share"));
-    await connection.setLocalDescription(await connection.createOffer());
-    await waitForIce(connection);
-    if (peer !== connection) return;
-    $("share-code").value = encodeCode(connection.localDescription);
-    phase = "exchange";
-    render();
-    $("copy-share").focus();
-  } catch {
-    if (connection && peer !== connection) return;
-    resetPeer();
-    setFeedback("The share code could not be generated. Try again.", true);
-    render();
+async function refreshTailscale() {
+  const data = await apiFetch("/api/tailscale/peers");
+  if (!data) return;
+  tailscaleInfo = data;
+  if (data.self) {
+    $("my-ts-machine").textContent = data.self.hostname || "This Machine";
+    $("my-ts-ip").textContent = data.self.ip ? `(${data.self.ip})` : "";
   }
+  renderPeers(data.peers || []);
 }
 
-async function joinSession(event) {
-  event.preventDefault();
-  const input = $("share-input");
-  let offer;
-  try {
-    offer = decodeCode(input.value, "offer");
-  } catch (error) {
-    setFeedback(error.message || "Could not read that share code. Ask the host to generate a new one.", true);
-    input.focus();
+function renderPeers(peers) {
+  const list = $("peers-list");
+  if (!peers.length) {
+    list.innerHTML = `<p class="empty-peers">No Tailscale peers discovered. Enter an IP or hostname below.</p>`;
     return;
   }
-  const shareCode = input.value;
-  resetPeer();
-  input.value = shareCode;
-  phase = "working";
-  setFeedback();
-  render();
-  let connection;
-  try {
-    connection = createPeerConnection();
-    connection.addEventListener("datachannel", ({channel: incoming}) => {
-      if (peer === connection) attachChannel(incoming);
-    });
-    await connection.setRemoteDescription(offer);
-    await connection.setLocalDescription(await connection.createAnswer());
-    await waitForIce(connection);
-    if (peer !== connection) return;
-    $("response-code").value = encodeCode(connection.localDescription);
-    phase = "exchange";
-    render();
-    $("copy-response").focus();
-  } catch {
-    if (connection && peer !== connection) return;
-    resetPeer();
-    input.value = shareCode;
-    setFeedback("The response code could not be generated. Check the share code and try again.", true);
-    render();
-    input.focus();
+  list.innerHTML = "";
+  for (const peer of peers) {
+    const card = document.createElement("div");
+    card.className = "peer-card";
+
+    const info = document.createElement("div");
+    info.className = "peer-info";
+
+    const name = document.createElement("strong");
+    name.textContent = peer.hostname || peer.ip;
+
+    const ip = document.createElement("span");
+    ip.className = "ts-ip";
+    ip.textContent = peer.ip;
+
+    const badge = document.createElement("span");
+    badge.className = "peer-badge";
+    badge.dataset.online = String(peer.online);
+    badge.textContent = peer.online ? "Online" : "Offline";
+
+    info.append(name, ip, badge);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "primary sm-btn";
+    btn.textContent = "Connect";
+    btn.addEventListener("click", () => connectToAddress(`${peer.ip}:7433`));
+
+    card.append(info, btn);
+    list.appendChild(card);
   }
 }
 
-async function confirmSession(event) {
-  event.preventDefault();
-  const connection = peer;
-  if (!connection || phase !== "exchange") return;
-  const input = $("response-input");
-  try {
-    const answer = decodeCode(input.value, "answer");
-    phase = "connecting";
-    setFeedback();
-    render();
-    await connection.setRemoteDescription(answer);
-  } catch {
-    if (peer !== connection) return;
-    phase = "exchange";
-    setFeedback("Paste the response code your partner generated for this share code.", true);
-    render();
-    input.focus();
+async function connectToAddress(address) {
+  let addr = address.trim();
+  if (!addr) return;
+  if (!addr.includes(":")) {
+    addr = `${addr}:7433`;
   }
-}
-
-async function copyCode(id) {
-  const input = $(id);
-  input.focus();
-  input.select();
-  let copied = false;
-  try {
-    copied = document.execCommand("copy");
-  } catch {}
-  if (!copied && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(input.value);
-      copied = true;
-    } catch {}
-  }
-  if (copied) {
-    setFeedback("Code copied to clipboard.");
+  setFeedback(`Connecting to ${addr}...`);
+  const res = await apiFetch("/api/connect", {
+    method: "POST",
+    body: JSON.stringify({ peer_address: addr }),
+  });
+  if (res?.success) {
+    setFeedback("Connected to peer! Space added to sidebar.");
+    await refreshStatus();
+    // Switch to the shared space in Anarc
+    window.location.href = switchSpaceUrl;
   } else {
-    setFeedback("Code selected. Press Ctrl+C to copy.", true);
+    setFeedback(res?.error || "Connection failed. Make sure the host has shared a space.", true);
   }
 }
 
-async function pasteCode(id) {
-  const input = $(id);
-  input.focus();
-  let text = "";
-  if (navigator.clipboard?.readText) {
-    try {
-      text = await navigator.clipboard.readText();
-    } catch {}
+async function loadSpaces() {
+  const data = await apiFetch("/api/spaces");
+  const eligible = (data?.spaces || []).filter(
+    (s) => s.id !== "shared-space" && !s.name?.startsWith("[Shared]")
+  );
+  if (eligible.length && !selectedSpace) {
+    const first = eligible[0];
+    selectedSpace = {
+      id: first.id,
+      name: first.name,
+      tabs: first.tabs || [],
+    };
+    $("space-name").textContent = first.name;
+    $("space-tab-count").hidden = false;
+    const count = first.tabs?.length || 0;
+    $("space-tab-count").textContent = `${count} web ${count === 1 ? "tab" : "tabs"}`;
   }
-  if (text) {
-    input.value = text.trim();
-    setFeedback("Code pasted.");
+}
+
+async function startSharing() {
+  const spaceId = selectedSpace?.id || selectedSpace?.name || "personal";
+  setFeedback("Starting Live Share on Tailscale...");
+  let res = await apiFetch("/api/share", {
+    method: "POST",
+    body: JSON.stringify({ space_id: spaceId }),
+  });
+  if (!res?.success) {
+    await fetch("anarc-plugin://com.anarc.live-share/__anarc_start_service").catch(() => {});
+    await new Promise((r) => setTimeout(r, 800));
+    res = await apiFetch("/api/share", {
+      method: "POST",
+      body: JSON.stringify({ space_id: spaceId }),
+    }, true);
+  }
+  if (res?.success) {
+    setFeedback(`Now sharing "${selectedSpace?.name || spaceId}" on Tailscale!`);
+    await refreshStatus();
   } else {
-    input.select();
-    setFeedback("Press Ctrl+V to paste the code.");
+    setFeedback("Failed to start sharing. Ensure Anarc Live Share service is running.", true);
   }
 }
 
-function launchTab(event) {
+async function disconnect() {
+  setFeedback("Ending session...");
+  await apiFetch("/api/disconnect", { method: "POST" });
+  selectedSpace = null;
+  $("space-name").textContent = "No space selected";
+  $("space-tab-count").hidden = true;
+  $("start-share-btn").disabled = true;
+  await refreshStatus();
+  setFeedback("Session ended.");
+}
+
+async function launchTab(event) {
   event.preventDefault();
   const input = $("launch-input");
   const query = input.value.trim();
-  if (!query || !isConnected()) return;
-  const url = webUrl(query) ?? searchUrls[$("search-engine").value] + encodeURIComponent(query);
-  const tab = {id: crypto.randomUUID(), title: query, url};
-  tabs.push(tab);
-  send({type: "open_tab", tab});
+  if (!query) return;
+  const url = query.startsWith("http://") || query.startsWith("https://")
+    ? query
+    : searchUrls[$("search-engine").value] + encodeURIComponent(query);
+  
+  const res = await apiFetch("/api/action", {
+    method: "POST",
+    body: JSON.stringify({ action: "open_tab", url, title: query }),
+  });
   input.value = "";
-  render();
-  openUrl(url);
-}
-
-$("host-mode").addEventListener("click", () => setMode("host"));
-$("join-mode").addEventListener("click", () => setMode("join"));
-$("choose-space").addEventListener("click", () => { window.location.href = chooseSpaceUrl; });
-window.addEventListener("anarc:space-picker-ready", render);
-window.addEventListener("anarc:space-selected", ({detail}) => {
-  if (typeof detail?.name !== "string" || !Array.isArray(detail.tabs)) return;
-  resetPeer();
-  selectedSpace = {name: detail.name, tabs: normalizeTabs(detail.tabs)};
-  setFeedback();
-  render();
-  if (mode === "host") $("create-invite-btn").focus();
-});
-$("create-invite-btn").addEventListener("click", createShareCode);
-$("join-form").addEventListener("submit", joinSession);
-$("confirm-form").addEventListener("submit", confirmSession);
-$("copy-share").addEventListener("click", () => copyCode("share-code"));
-$("copy-response").addEventListener("click", () => copyCode("response-code"));
-$("paste-share")?.addEventListener("click", () => pasteCode("share-input"));
-$("paste-response")?.addEventListener("click", () => pasteCode("response-input"));
-for (const id of ["share-code", "response-code"]) {
-  const el = $(id);
-  if (el) {
-    el.addEventListener("focus", () => el.select());
-    el.addEventListener("click", () => el.select());
+  if (res?.success) {
+    setFeedback("Tab opened in shared space!");
+    await refreshStatus();
   }
 }
-$("launch-form").addEventListener("submit", launchTab);
-$("disconnect").addEventListener("click", () => {
-  resetPeer();
-  setFeedback();
-  render();
-  $(mode === "host" ? "host-mode" : "join-mode").focus();
+
+async function refreshStatus() {
+  const status = await apiFetch("/api/status");
+  if (!status) return;
+  currentStatus = status;
+
+  const hasSharedSpace = Boolean(status.shared_space_id);
+  const isConnected = hasSharedSpace;
+
+  $("setup").hidden = isConnected;
+  $("session").hidden = !isConnected;
+  $("status").textContent = isConnected ? "Connected" : "Ready";
+  $("status").dataset.state = isConnected ? "connected" : "ready";
+
+  if (isConnected) {
+    $("session-name").textContent = status.shared_space_name
+      ? `[Shared] ${status.shared_space_name}`
+      : "Shared space";
+    
+    const count = status.tabs?.length || 0;
+    const noun = count === 1 ? "tab" : "tabs";
+    const peerText = status.peers?.length
+      ? `with ${status.peers.map((p) => p.address).join(", ")}`
+      : "(Hosting on Tailscale)";
+    $("session-peer-info").textContent = `${count} web ${noun} ${peerText}`;
+  }
+}
+
+function initSSE() {
+  // SSE cannot tunnel through the anarc-plugin:// proxy; poll instead.
+  setInterval(refreshStatus, 5000);
+}
+
+// Global paste fallback for inputs: prevent repeat triggers and double pasting
+document.addEventListener("keydown", async (e) => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+    if (e.repeat) {
+      e.preventDefault();
+      return;
+    }
+    const active = document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+      e.preventDefault();
+      try {
+        if (navigator.clipboard?.readText) {
+          const text = await navigator.clipboard.readText();
+          if (text) {
+            const start = active.selectionStart ?? active.value.length;
+            const end = active.selectionEnd ?? active.value.length;
+            active.setRangeText(text, start, end, "end");
+            active.dispatchEvent(new Event("input", { bubbles: true }));
+            active.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        }
+      } catch (_) {}
+    }
+  }
 });
-render();
+
+// Event listeners
+$("host-mode").addEventListener("click", () => setMode("host"));
+$("join-mode").addEventListener("click", () => setMode("join"));
+$("refresh-peers").addEventListener("click", refreshTailscale);
+
+$("choose-space").addEventListener("click", () => {
+  window.location.href = chooseSpaceUrl;
+});
+
+window.addEventListener("anarc:space-selected", ({ detail }) => {
+  if (!detail || typeof detail.name !== "string") return;
+  selectedSpace = detail;
+  $("space-name").textContent = detail.name;
+  $("space-tab-count").hidden = false;
+  const count = detail.tabs?.length || 0;
+  $("space-tab-count").textContent = `${count} web ${count === 1 ? "tab" : "tabs"}`;
+  $("start-share-btn").disabled = false;
+  setFeedback(`Selected "${detail.name}". Click "Start sharing" to begin.`);
+});
+
+$("start-share-btn").addEventListener("click", startSharing);
+
+$("direct-connect-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  connectToAddress($("peer-address-input").value);
+});
+
+$("paste-address")?.addEventListener("click", async () => {
+  try {
+    if (navigator.clipboard?.readText) {
+      const text = await navigator.clipboard.readText();
+      if (text) $("peer-address-input").value = text.trim();
+    }
+  } catch (_) {}
+});
+
+$("disconnect").addEventListener("click", disconnect);
+$("switch-space-btn").addEventListener("click", () => {
+  window.location.href = switchSpaceUrl;
+});
+$("launch-form").addEventListener("submit", launchTab);
+
+// Initialize
+fetch("anarc-plugin://com.anarc.live-share/__anarc_start_service").catch(() => {});
+loadSpaces();
+refreshTailscale();
+refreshStatus();
+initSSE();
+setInterval(refreshTailscale, 10000);

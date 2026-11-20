@@ -24,6 +24,7 @@ impl Lumen {
         let choices: Vec<_> = self
             .spaces
             .iter()
+            .filter(|space| !space.name.starts_with("[Shared]") && !space.id.starts_with("shared-"))
             .map(|space| {
                 (
                     space.id.clone(),
@@ -89,6 +90,9 @@ impl Lumen {
         if !row.enabled || !self.plugins.is_active(id) {
             return Err(format!("panel is not enabled: {id}"));
         }
+        if id == "com.anarc.live-share" {
+            super::ensure_live_share_daemon_running();
+        }
         let registered = self
             .panel_registry
             .lock()
@@ -151,7 +155,7 @@ fn live_share_selection(space: &Space) -> serde_json::Value {
     let tabs: Vec<_> = shareable_web_tabs(space)
         .map(|tab| serde_json::json!({ "id": tab.id, "title": tab.title, "url": tab.url }))
         .collect();
-    serde_json::json!({ "name": space.name, "tabs": tabs })
+    serde_json::json!({ "id": space.id, "name": space.name, "tabs": tabs })
 }
 
 #[cfg(test)]
@@ -170,6 +174,7 @@ mod tests {
         assert_eq!(
             live_share_selection(&space),
             serde_json::json!({
+                "id": "work",
                 "name": "Work",
                 "tabs": [{ "id": "1", "title": "Notes", "url": "https://example.com/notes" }]
             })

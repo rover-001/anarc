@@ -366,6 +366,25 @@ cef::wrap_request_handler! {
                 }
                 return 1;
             }
+            if url.starts_with("anarc-plugin://com.anarc.live-share") {
+                crate::app::ensure_live_share_daemon_running();
+            }
+            if url.starts_with("anarc-plugin://com.anarc.live-share/__anarc_start_service") {
+                crate::app::ensure_live_share_daemon_running();
+                return 1;
+            }
+            if url.starts_with("anarc-plugin://com.anarc.live-share/__anarc_switch_to_space") {
+                let space_id = url
+                    .split("?id=")
+                    .nth(1)
+                    .unwrap_or("shared-space")
+                    .to_string();
+                if let Ok(mut events) = self.events.lock() {
+                    events.live_share_switch_space = Some(space_id);
+                    let _ = self.ui_update_wake.try_send(());
+                }
+                return 1;
+            }
             if let Ok(mut events) = self.events.lock() {
                 events.plugin_events.push((
                     "navigation.before".to_string(),
@@ -1687,10 +1706,14 @@ fn run_windows_file_picker(
         )
     };
 
-    let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let output = cmd.output().ok()?;
 
     if !output.status.success() {
         return None;
