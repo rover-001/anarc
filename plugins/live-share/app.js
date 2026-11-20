@@ -189,7 +189,7 @@ async function launchTab(event) {
   if (!query) return;
   const url = query.startsWith("http://") || query.startsWith("https://")
     ? query
-    : searchUrls[$("search-engine").value] + encodeURIComponent(query);
+    : "https://www.google.com/search?q=" + encodeURIComponent(query);
   
   const res = await apiFetch("/api/action", {
     method: "POST",
