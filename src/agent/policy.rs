@@ -127,7 +127,7 @@ pub fn check_sensitive_intent(label: &str, config: &PolicyConfig) -> Option<Stri
     let lower = label.to_lowercase();
     for intent in &config.confirm_intents {
         if lower.contains(intent.as_str()) {
-            return Some(format!("needs_confirm: Action on '{label}' requires confirmation for intent '{intent}'"));
+            return Some(format!("needs_confirm: approve {intent} in Anarc, then retry"));
         }
     }
     None
@@ -145,7 +145,7 @@ pub fn check_human_handoff(title: &str, url: &str, raw_text: &str) -> Option<&'s
         || combined.contains("bot detection")
         || combined.contains("please complete the security check")
     {
-        return Some("needs_human: CAPTCHA / bot challenge detected on page");
+        return Some("needs_human: complete CAPTCHA in Anarc. use: see");
     }
 
     if combined.contains("two-factor")
@@ -157,13 +157,13 @@ pub fn check_human_handoff(title: &str, url: &str, raw_text: &str) -> Option<&'s
         || combined.contains("one-time password")
         || combined.contains("sms code")
     {
-        return Some("needs_human: 2FA / One-Time Password verification detected on page");
+        return Some("needs_human: complete verification in Anarc. use: see");
     }
 
     if (combined.contains("credit card") || combined.contains("card number") || combined.contains("cvv"))
         && combined.contains("expiration")
     {
-        return Some("needs_human: Payment card information entry detected");
+        return Some("needs_human: complete card entry in Anarc. use: see");
     }
 
     None
