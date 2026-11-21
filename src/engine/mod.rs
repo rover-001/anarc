@@ -767,6 +767,8 @@ pub struct Engine {
     /// without the app having to know about them ahead of time.
     popup_serial: Arc<std::sync::atomic::AtomicU64>,
     devtools: Mutex<devtools::DevToolsManager>,
+    agent_state: Arc<Mutex<crate::agent::plugin::AgentState>>,
+    agent_receiver: async_channel::Receiver<(crate::agent::protocol::AgentRequest, async_channel::Sender<crate::agent::protocol::AgentResponse>)>,
 }
 
 fn resize_should_send(

@@ -267,6 +267,7 @@ impl Render for Lumen {
                                 cx.notify();
                             }
                         }
+                        this.process_agent_requests();
                         if let Some(mtime) = crate::persist::spaces_mtime()
                             && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
                         {
