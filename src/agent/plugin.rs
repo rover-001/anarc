@@ -32,12 +32,16 @@ pub(crate) fn forward_request_to_engine(
 ) {
     if let Ok(guard) = ENGINE_REQUEST_CHANNEL.lock() {
         if let Some((ref r_tx, ref w_tx)) = *guard {
-            let _ = r_tx.try_send((req, resp_tx));
-            let _ = w_tx.try_send(());
+            if let Err(error) = r_tx.try_send((req, resp_tx)) {
+                let (_, reply) = error.into_inner();
+                let _ = reply.try_send(AgentResponse::err("agent busy. use: status"));
+            } else {
+                let _ = w_tx.try_send(());
+            }
             return;
         }
     }
-    let _ = resp_tx.try_send(AgentResponse::err("Engine agent channel not registered"));
+    let _ = resp_tx.try_send(AgentResponse::err("engine unavailable. use: status"));
 }
 
 #[derive(Default)]
@@ -115,7 +119,7 @@ pub(crate) fn handle_agent_request(
     let is_paused = agent_state.lock().map(|s| s.is_paused).unwrap_or(false);
 
     if is_paused && !matches!(req, AgentRequest::Resume | AgentRequest::Status) {
-        let _ = resp_tx.try_send(AgentResponse::err("Agent is paused. Use 'resume' to continue."));
+        let _ = resp_tx.try_send(AgentResponse::err("agent paused. use: resume"));
         return;
     }
 
@@ -123,7 +127,7 @@ pub(crate) fn handle_agent_request(
         match super::act::parse_dsl(ops) {
             Ok(ops) => ops,
             Err(e) => {
-                let _ = resp_tx.try_send(AgentResponse::err(format!("DSL parse error: {e}")));
+                let _ = resp_tx.try_send(AgentResponse::err(e));
                 return;
             }
         }
@@ -204,20 +208,20 @@ pub(crate) fn handle_agent_request(
                     let raw_res = futures_lite::future::block_on(async { eval_rx.recv().await });
                     let raw_json = match raw_res {
                         Ok(Ok(s)) => s,
-                        Ok(Err(e)) => {
-                            let _ = resp_tx.try_send(AgentResponse::err(format!("See evaluation failed: {e}")));
+                        Ok(Err(_)) => {
+                            let _ = resp_tx.try_send(AgentResponse::err("page unavailable. use: tabs"));
                             return;
                         }
-                        Err(e) => {
-                            let _ = resp_tx.try_send(AgentResponse::err(format!("See channel closed: {e}")));
+                        Err(_) => {
+                            let _ = resp_tx.try_send(AgentResponse::err("page disconnected. use: tabs"));
                             return;
                         }
                     };
 
                     let raw_index: RawIndex = match serde_json::from_str(&raw_json) {
                         Ok(idx) => idx,
-                        Err(e) => {
-                            let _ = resp_tx.try_send(AgentResponse::err(format!("Failed to parse index JSON: {e}")));
+                        Err(_) => {
+                            let _ = resp_tx.try_send(AgentResponse::err("index unavailable. use: tabs"));
                             return;
                         }
                     };
@@ -225,7 +229,7 @@ pub(crate) fn handle_agent_request(
                     let mut guard = match state_arc.lock() {
                         Ok(g) => g,
                         Err(_) => {
-                            let _ = resp_tx.try_send(AgentResponse::err("Agent state poisoned"));
+                            let _ = resp_tx.try_send(AgentResponse::err("state unavailable. use: status"));
                             return;
                         }
                     };
@@ -255,12 +259,12 @@ pub(crate) fn handle_agent_request(
                     let raw_res = futures_lite::future::block_on(async { eval_rx.recv().await });
                     let text = match raw_res {
                         Ok(Ok(s)) => s,
-                        Ok(Err(e)) => {
-                            let _ = resp_tx.try_send(AgentResponse::err(format!("Read evaluation failed: {e}")));
+                        Ok(Err(_)) => {
+                            let _ = resp_tx.try_send(AgentResponse::err("read failed. use: see"));
                             return;
                         }
-                        Err(e) => {
-                            let _ = resp_tx.try_send(AgentResponse::err(format!("Read channel closed: {e}")));
+                        Err(_) => {
+                            let _ = resp_tx.try_send(AgentResponse::err("page disconnected. use: tabs"));
                             return;
                         }
                     };
@@ -274,7 +278,7 @@ pub(crate) fn handle_agent_request(
             let guard = match agent_state.lock() {
                 Ok(g) => g,
                 Err(_) => {
-                    let _ = resp_tx.try_send(AgentResponse::err("Agent state poisoned"));
+                    let _ = resp_tx.try_send(AgentResponse::err("state unavailable. use: status"));
                     return;
                 }
             };
@@ -283,9 +287,7 @@ pub(crate) fn handle_agent_request(
                 let results = execute_find(registry, &query);
                 let _ = resp_tx.try_send(AgentResponse::success(results));
             } else {
-                let _ = resp_tx.try_send(AgentResponse::err(format!(
-                    "No index available for tab '{target_tab}'. Run 'see' first."
-                )));
+                let _ = resp_tx.try_send(AgentResponse::err("index missing. use: see"));
             }
         }
         AgentRequest::Do { tab_id, .. } => {
@@ -310,13 +312,13 @@ pub(crate) fn handle_agent_request(
                                     return;
                                 }
                             }
-                            let _ = resp_tx.try_send(AgentResponse::err("Screenshot capture returned invalid payload"));
+                            let _ = resp_tx.try_send(AgentResponse::err("screenshot invalid. use: see"));
                         }
-                        Ok(Err(e)) => {
-                            let _ = resp_tx.try_send(AgentResponse::err(format!("Screenshot DevTools error: {e}")));
+                        Ok(Err(_)) => {
+                            let _ = resp_tx.try_send(AgentResponse::err("screenshot failed. use: see"));
                         }
-                        Err(e) => {
-                            let _ = resp_tx.try_send(AgentResponse::err(format!("Screenshot channel error: {e}")));
+                        Err(_) => {
+                            let _ = resp_tx.try_send(AgentResponse::err("page disconnected. use: tabs"));
                         }
                     }
                 })
@@ -339,6 +341,9 @@ pub(crate) fn handle_agent_request(
 }
 
 pub(crate) fn no_such_tab(tabs: &str) -> String {
+    if tabs.is_empty() {
+        return "no such tab. tabs: none. use: do \"tab new\"".into();
+    }
     format!("no such tab. tabs: {tabs}. use: do \"tab 1\"")
 }
 

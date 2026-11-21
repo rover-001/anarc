@@ -92,7 +92,7 @@ impl PlaybookRegistry {
     pub fn expand_macro(&self, name: &str, args: &[String]) -> Result<String, String> {
         let m = match self.macros.get(name) {
             Some(m) => m,
-            None => return Err(format!("Macro '@{name}' not found in playbook")),
+            None => return Err("macro missing. use: see".into()),
         };
 
         let mut expanded = m.ops.clone();
