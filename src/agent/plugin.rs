@@ -51,18 +51,33 @@ pub(crate) fn forward_request_to_engine(
     req: AgentRequest,
     resp_tx: async_channel::Sender<AgentResponse>,
 ) {
-    if !WINDOW_PAINTED.load(Ordering::Acquire) {
-        let reply = match req {
-            AgentRequest::Doctor => AgentResponse::success(format!(
-                "{}\ntabs: unavailable before first paint", doctor_header(false, false, 0)
-            )),
-            AgentRequest::Tabs | AgentRequest::See { .. } | AgentRequest::Do { .. } =>
-                AgentResponse::err(WINDOW_NOT_READY),
-            _ => AgentResponse::err("anarc window starting. use: anarc-ctl doctor"),
-        };
-        let _ = resp_tx.try_send(reply);
-        return;
+    let requires_paint = matches!(
+        req,
+        AgentRequest::See { .. }
+            | AgentRequest::Do { .. }
+            | AgentRequest::Read { .. }
+            | AgentRequest::Find { .. }
+            | AgentRequest::Shot { .. }
+    );
+
+    if requires_paint && !WINDOW_PAINTED.load(Ordering::Acquire) {
+        if let Ok(guard) = ENGINE_REQUEST_CHANNEL.lock() {
+            if let Some((_, ref w_tx)) = *guard {
+                let _ = w_tx.try_send(());
+            }
+        }
+        for _ in 0..60 {
+            if WINDOW_PAINTED.load(Ordering::Acquire) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        if !WINDOW_PAINTED.load(Ordering::Acquire) {
+            let _ = resp_tx.try_send(AgentResponse::err(WINDOW_NOT_READY));
+            return;
+        }
     }
+
     if let Ok(guard) = ENGINE_REQUEST_CHANNEL.lock() {
         if let Some((ref r_tx, ref w_tx)) = *guard {
             if let Err(error) = r_tx.try_send((req, resp_tx)) {
@@ -255,7 +270,15 @@ pub(crate) fn handle_agent_request(
                 lines.push(format!("Space: {} ({})", space.name, space.id));
                 for tab in &space.tabs {
                     let active_mark = if space.active.as_deref() == Some(&tab.id) { "*" } else { " " };
-                    lines.push(format!("  [{active_mark}] {} \"{}\" -> {} ({})", tab.id, tab.title, tab.url, browser_state(app, &tab.id)));
+                    let mut flags = Vec::new();
+                    if tab.pinned {
+                        flags.push("pinned");
+                    }
+                    if tab.favorite {
+                        flags.push("fav");
+                    }
+                    let flag_str = if flags.is_empty() { String::new() } else { format!(" [{}]", flags.join(",")) };
+                    lines.push(format!("  [{active_mark}] {}{} \"{}\" -> {} ({})", tab.id, flag_str, tab.title, tab.url, browser_state(app, &tab.id)));
                 }
             }
             let _ = resp_tx.try_send(AgentResponse::success(lines.join("\n")));

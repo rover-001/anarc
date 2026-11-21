@@ -37,6 +37,7 @@ fn print_usage() {
            read [<ref>|page|last]            Read page content (modes: text, table, links, outline)\n\
            find <query>                 Find elements matching query (<= 5 refs)\n\
            tabs                         List open tabs and spaces\n\
+           tab <action> [target]        Tab control: pin, unpin, fav, unfav, close, new, select\n\
            doctor                       Diagnose agent control failures\n\
            do <ops>                     Execute action DSL (click, type, key, wait)\n\
            shot [ref|view]              Save a PNG and print its path\n\
@@ -65,7 +66,7 @@ fn connect_socket(target: &SocketTarget, mcp: bool, doctor: bool) -> Result<(Uni
     use std::io::ErrorKind;
     use std::time::Duration;
 
-    let tries = if mcp { 5 } else { 3 };
+    let tries = if target.explicit.is_some() { 1 } else if mcp { 5 } else { 3 };
     for attempt in 1..=tries {
         let discovery = target.resolve();
         let path = discovery.resolved;
@@ -79,8 +80,11 @@ fn connect_socket(target: &SocketTarget, mcp: bool, doctor: bool) -> Result<(Uni
             Err(error) => error,
         };
         let kind = error.kind();
-        if matches!(kind, ErrorKind::NotFound | ErrorKind::ConnectionRefused) && attempt == 1 {
-            // Attempt socket activation or daemon launch
+        if target.explicit.is_none() && matches!(kind, ErrorKind::NotFound | ErrorKind::ConnectionRefused) && attempt == 1 {
+            // Attempt launch and focus
+            let _ = std::process::Command::new("omarchy-launch-or-focus")
+                .args(["anarc", "/home/rover/.local/bin/anarc"])
+                .status();
             let _ = std::process::Command::new("systemctl")
                 .args(["--user", "start", "anarc.socket"])
                 .status();
@@ -216,13 +220,13 @@ fn get_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "do",
-            "description": format!("Browser actions: click, type, key, submit, navigate, scroll, wait stable. {RECOVERY}"),
+            "description": format!("Browser actions: click, type, key, submit, navigate, scroll, wait stable. Tab actions: tab new [url], tab close [target], tab pin [target], tab unpin [target], tab fav [target], tab unfav [target], tab <N>. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "ops": {
                         "type": "string",
-                        "description": "DSL ops (e.g. b1; i2=\"text\"; key Enter; scroll down)"
+                        "description": "DSL ops (e.g. b1; i2=\"text\"; key Enter; scroll down; tab pin; tab fav; tab close; tab new https://example.com)"
                     },
                     "tab_id": {
                         "type": "string"
@@ -272,8 +276,31 @@ fn get_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "tabs",
-            "description": format!("List tabs and spaces. {RECOVERY}"),
+            "description": format!("List tabs and spaces, showing active status, pinned/favorite state, URLs, and titles. {RECOVERY}"),
             "inputSchema": { "type": "object" }
+        },
+        {
+            "name": "tab",
+            "description": format!("Manage browser tabs: pin, unpin, fav, unfav, close, new, select. {RECOVERY}"),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "Tab action: new, close, pin, unpin, fav, unfav, select",
+                        "enum": ["new", "close", "pin", "unpin", "fav", "unfav", "select"]
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Tab index (e.g. '1', '2') or tab ID. Omit for active tab."
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "URL to open (for 'new' action)"
+                    }
+                },
+                "required": ["action"]
+            }
         },
         {
             "name": "doctor",
@@ -412,6 +439,26 @@ fn handle_mcp_request(
                     "target": arguments.get("target").and_then(|v| v.as_str()),
                     "scale": arguments.get("scale").and_then(|v| v.as_f64()).map(|f| f as f32)
                 }),
+                "tab" => {
+                    let action = arguments.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+                    let target = arguments.get("target").and_then(|v| v.as_str()).unwrap_or("");
+                    let url = arguments.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                    let ops = match action {
+                        "new" => if url.is_empty() { "tab new".to_string() } else { format!("tab new {url}") },
+                        "close" | "remove" => if target.is_empty() { "tab close".to_string() } else { format!("tab close {target}") },
+                        "pin" => if target.is_empty() { "tab pin".to_string() } else { format!("tab pin {target}") },
+                        "unpin" => if target.is_empty() { "tab unpin".to_string() } else { format!("tab unpin {target}") },
+                        "fav" | "favorite" => if target.is_empty() { "tab fav".to_string() } else { format!("tab fav {target}") },
+                        "unfav" | "unfavorite" => if target.is_empty() { "tab unfav".to_string() } else { format!("tab unfav {target}") },
+                        "select" | "switch" => if target.is_empty() { "tab 1".to_string() } else { format!("tab {target}") },
+                        other => if target.is_empty() { format!("tab {other}") } else { format!("tab {other} {target}") },
+                    };
+                    serde_json::json!({
+                        "cmd": "do",
+                        "tab_id": tab_id,
+                        "ops": ops
+                    })
+                }
                 _ => {
                     return Some(serde_json::json!({
                         "jsonrpc": "2.0",
@@ -462,6 +509,9 @@ fn handle_mcp_request(
 }
 
 fn run_mcp_server(socket: SocketTarget, shot_as_path: bool) {
+    let _ = std::process::Command::new("omarchy-launch-or-focus")
+        .args(["anarc", "/home/rover/.local/bin/anarc"])
+        .status();
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut stdout_lock = stdout.lock();
@@ -692,6 +742,29 @@ fn main() {
                 "cmd": cmd
             })
         }
+        "tab" => {
+            let action = filtered_args.get(1).map(|s| s.as_str()).unwrap_or("list");
+            let target = filtered_args.get(2).map(|s| s.as_str()).unwrap_or("");
+            if action == "list" {
+                serde_json::json!({ "cmd": "tabs" })
+            } else {
+                let ops = match action {
+                    "new" => if target.is_empty() { "tab new".to_string() } else { format!("tab new {target}") },
+                    "close" | "remove" => if target.is_empty() { "tab close".to_string() } else { format!("tab close {target}") },
+                    "pin" => if target.is_empty() { "tab pin".to_string() } else { format!("tab pin {target}") },
+                    "unpin" => if target.is_empty() { "tab unpin".to_string() } else { format!("tab unpin {target}") },
+                    "fav" | "favorite" => if target.is_empty() { "tab fav".to_string() } else { format!("tab fav {target}") },
+                    "unfav" | "unfavorite" => if target.is_empty() { "tab unfav".to_string() } else { format!("tab unfav {target}") },
+                    "select" | "switch" => if target.is_empty() { "tab 1".to_string() } else { format!("tab {target}") },
+                    other => if target.is_empty() { format!("tab {other}") } else { format!("tab {other} {target}") },
+                };
+                serde_json::json!({
+                    "cmd": "do",
+                    "tab_id": explicit_tab,
+                    "ops": ops
+                })
+            }
+        }
         "do" => {
             let ops = if filtered_args.len() > 1 {
                 filtered_args[1..].join(" ")
@@ -899,7 +972,7 @@ mod tests {
 
         // Also assert each individual tool description is <= 60 tokens (~240 chars)
         let tool_array = tools.as_array().unwrap();
-        assert_eq!(tool_array.len(), 7, "Expected five core tools, tabs, and doctor");
+        assert_eq!(tool_array.len(), 8, "Expected five core tools, tabs, tab, and doctor");
         for tool in tool_array {
             let desc = tool.get("description").and_then(|d| d.as_str()).unwrap();
             let desc_tokens = desc.len() / 4;
@@ -976,7 +1049,7 @@ mod tests {
         });
         let list_resp = handle_mcp_request(&list_req, &socket_path, false).unwrap();
         let tools = list_resp.get("result").unwrap().get("tools").unwrap().as_array().unwrap();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 8);
 
         // 5. Tools call with Anarc offline - should return clean error message without hanging
         let call_req = serde_json::json!({
