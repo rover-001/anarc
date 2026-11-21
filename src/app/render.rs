@@ -105,6 +105,7 @@ impl Render for Lumen {
                         let was_initialized = this.engine.is_initialized();
                         if let Err(error) = this.engine.initialize() {
                             eprintln!("Lumen CEF startup failed: {error}");
+                            this.process_agent_requests();
                             return None;
                         }
                         // Fast path: skip heavy event processing when no CEF events

@@ -15,7 +15,7 @@ triggers:
 Anarc exposes five high-density, low-token tools over a local socket: `see`, `do`, `read`, `find`, and `shot`.
 Control is available via stdio MCP (`anarc-ctl mcp`) or direct CLI (`anarc-ctl <cmd>`).
 
-Never read Anarc source. On any error run `tabs` then `see`. Errors say what to do next.
+Never read Anarc source. On any error run `doctor` (CLI: `anarc-ctl doctor`) first. Errors say what to do next.
 
 ## Five Core Tools
 
