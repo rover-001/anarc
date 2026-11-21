@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Trusted input fixture</title>
+<main>
+  <div contenteditable="true" role="textbox" aria-label="Message">initial text</div>
+  <button>Send</button>
+  <p role="article" id="reply">Ready</p>
+</main>
+<script>
+const editor = document.querySelector('[contenteditable]');
+const reply = document.querySelector('#reply');
+function send(path) {
+  reply.textContent = path + ': ' + editor.innerText.trim();
+  editor.textContent = '';
+}
+editor.addEventListener('keydown', event => {
+  if (!event.isTrusted || event.key !== 'Enter') return;
+  event.preventDefault();
+  if (!editor.innerText.startsWith('fallback')) send('Enter');
+});
+document.querySelector('button').addEventListener('click', event => {
+  if (event.isTrusted) send('Button');
+});
+</script>
