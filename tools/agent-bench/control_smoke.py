@@ -28,28 +28,43 @@ def run(anarc, ctl):
         (config / "spaces.json").write_text(json.dumps({
             "active_space": "personal",
             "spaces": [{"id": "personal", "name": "Personal", "icon": "home", "color": 0,
-                        "active": "personal-tab-7", "tabs": [{"id": "personal-tab-7", "title": "Fixture", "url": url}]}],
+                        "active": "personal-tab-7", "tabs": [{"id": "personal-tab-7", "title": "New tab", "url": "about:blank"}]}],
         }))
 
-        def call(*args):
+        def call(*args, ok=True):
             proc = subprocess.run([ctl, *args], env=env, text=True, capture_output=True, timeout=38)
-            assert proc.returncode == 0, (args, proc.stderr)
-            return proc.stdout
+            assert (proc.returncode == 0) == ok, (args, proc.stdout, proc.stderr)
+            return proc.stdout if ok else proc.stderr
+
+        def mcp_shot(*options):
+            request = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "shot"}}
+            proc = subprocess.run([ctl, "mcp", *options], env=env, input=json.dumps(request) + "\n",
+                                  text=True, capture_output=True, timeout=20, check=True)
+            return json.loads(proc.stdout)["result"]["content"][0]
+
+        def check_png(line):
+            saved = re.fullmatch(r"saved (.+) (\d+)x(\d+) \(image file: do not read_file/cat it\)\n?", line)
+            assert saved, "Expected a one-line screenshot receipt"
+            path = Path(saved.group(1))
+            assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+            path.unlink()
 
         with (root / "browser.log").open("w") as log:
             browser = subprocess.Popen([anarc], env=env, stdout=log, stderr=log)
             try:
                 deadline = time.monotonic() + 20
+                while not (root / "ctl.sock").exists() and time.monotonic() < deadline and browser.poll() is None:
+                    time.sleep(0.05)
+                call("do", f"go {url}")
                 ref = None
+                last = ""
                 while time.monotonic() < deadline and browser.poll() is None:
-                    try:
-                        ref = re.search(r'(?m)^(i\d+) "Message"', call("see"))
-                    except AssertionError:
-                        pass
+                    last = call("see")
+                    ref = re.search(r'(?m)^(i\d+) "Message"', last)
                     if ref:
                         break
                     time.sleep(0.1)
-                assert ref, "Fixture editor did not appear"
+                assert ref, f"Fixture editor did not appear: {last}"
                 editor = ref.group(1)
                 call("do", f'{editor}="trusted"; {editor}+" key"; key Enter')
                 assert "Enter: trusted key" in call("read")
@@ -59,6 +74,25 @@ def run(anarc, ctl):
                 result = call("do", f'{editor}="fallback"; submit')
                 assert "submit via button" in result, result
                 assert "Button: fallback" in call("read")
+                call("see")
+                confirm = call("do", 'b:"Pay $40"', ok=False)
+                assert "needs_confirm: waiting for user approval in Anarc (intent=purchase)." in confirm, confirm
+                start = time.monotonic()
+                result = call("do", 'b:"Stream"; wait stable')
+                assert "streaming" not in result and time.monotonic() - start >= 4.3, result
+                assert call("read", "last").strip() == "stream 1 2 3 4 5 6 7 8 9 10 complete"
+                assert "ok 1" in call("wait", "stable", "100")
+                check_png(call("shot"))
+                image = mcp_shot()
+                assert image["type"] == "image" and image["mimeType"] == "image/png"
+                assert image["data"].startswith("iVBORw0KGgo")
+                check_png(mcp_shot("--shot-as", "path")["text"])
+                stats = call("stats")
+                assert re.search(r"(?m)^shot 3 .* 0\.0%$", stats), stats
+                log = root / "data" / "agent" / "log.jsonl"
+                entries = [json.loads(line) for line in log.read_text().splitlines()]
+                assert all(entry.keys() == {"op", "ok", "reply_bytes", "est_tokens"} for entry in entries)
+                assert any(entry["op"] == "do" and not entry["ok"] for entry in entries)
             except Exception:
                 print((root / "browser.log").read_text()[-3000:])
                 raise

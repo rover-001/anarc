@@ -246,10 +246,10 @@ pub(crate) fn handle_agent_request(
                 })
                 .ok();
         }
-        AgentRequest::Read { tab_id, target: _, mode, max } => {
+        AgentRequest::Read { tab_id, target, mode, max } => {
             let target_tab = tab_id.unwrap_or_default();
 
-            let m = mode.as_deref().unwrap_or("text");
+            let m = if target.as_deref() == Some("last") { "last" } else { mode.as_deref().unwrap_or("text") };
             let max_chars = max.unwrap_or(4000);
             let script = build_read_call_script(m, max_chars);
             let eval_rx = app.engine.evaluate(&target_tab, &script);
@@ -293,8 +293,7 @@ pub(crate) fn handle_agent_request(
         }
         AgentRequest::Do { tab_id, .. } => {
             let target_tab = tab_id.unwrap_or_else(|| app.active_tab_id().to_string());
-            let resp = super::act::execute_dsl(app, &target_tab, &parsed_ops);
-            let _ = resp_tx.try_send(resp);
+            super::act::execute_dsl(app, &target_tab, &parsed_ops, resp_tx);
         }
         AgentRequest::Shot { tab_id, target: _, scale: _ } => {
             let target_tab = tab_id.unwrap_or_default();

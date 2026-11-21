@@ -36,6 +36,23 @@ pub enum AgentRequest {
 }
 
 impl AgentRequest {
+    #[cfg(target_family = "unix")]
+    pub fn op(&self) -> &'static str {
+        match self {
+            Self::See { .. } => "see",
+            Self::Read { .. } => "read",
+            Self::Find { .. } => "find",
+            Self::Do { .. } => "do",
+            Self::Shot { .. } => "shot",
+            Self::Tabs => "tabs",
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+            Self::Status => "status",
+            Self::Attach { .. } => "attach",
+        }
+    }
+
+
     pub fn target_tab_mut(&mut self) -> Option<&mut Option<String>> {
         match self {
             Self::See { tab_id, .. }

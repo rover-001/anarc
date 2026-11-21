@@ -190,10 +190,44 @@
     });
   };
 
+  function lastVisibleText(selector) {
+    const candidates = document.querySelectorAll(selector);
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      const el = candidates.item(i);
+      if (isVisible(el) && el.innerText?.trim()) return el.innerText.trim();
+    }
+    return '';
+  }
+
+  function lastMessage() {
+    return lastVisibleText('article, [role=article], [data-message], [data-message-author-role]')
+      || lastVisibleText('main > div:last-child, [role=main] > div:last-child');
+  }
+
+  window.__anarc_wait_stable = async function(ms) {
+    const start = performance.now();
+    let lastChange = start;
+    const length = () => (lastMessage() || (document.querySelector('main,[role=main]') || document.body)?.innerText || '').length;
+    let previous = length();
+    while (true) {
+      const now = performance.now();
+      const current = length();
+      if (current !== previous) {
+        previous = current;
+        lastChange = now;
+      }
+      if (now - start >= 30000) return 'streaming';
+      if (now - lastChange >= ms) return window.__anarc_index('view');
+      await new Promise(resolve => setTimeout(resolve, Math.min(100, ms, 30000 - (now - start))));
+    }
+  };
+
   window.__anarc_read = function(mode, maxChars) {
     mode = mode || 'text';
     maxChars = maxChars || 4000;
 
+    const last = mode === 'last' ? lastMessage() : '';
+    if (last) return last.slice(0, maxChars);
     if (mode === 'outline') {
       const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6'))
         .filter(isVisible)
@@ -248,6 +282,11 @@
       text = clone.innerText || clone.textContent || '';
     }
     text = text.replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n').trim();
+    if (mode === 'last') {
+      // Approximate the final 800 tokens using the same 3.5 bytes/token as telemetry.
+      const bytes = new TextEncoder().encode(text);
+      return new TextDecoder().decode(bytes.slice(-Math.min(maxChars, 2800))).replace(/^�/, '');
+    }
     if (text.length > maxChars) {
       text = text.slice(0, maxChars) + `\n… (trimmed to ${maxChars} chars)`;
     }
