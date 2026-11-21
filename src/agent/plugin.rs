@@ -171,7 +171,21 @@ pub(crate) fn handle_agent_request(
     let tab_only = !parsed_ops.is_empty()
         && parsed_ops.iter().all(|op| matches!(op, super::act::ActionOp::Tab { .. }));
     if !tab_only && let Some(tab_id) = req.target_tab_mut() {
-        let target = tab_id.clone().unwrap_or_else(|| app.active_tab_id().to_string());
+        let raw_target = tab_id.clone().unwrap_or_else(|| app.active_tab_id().to_string());
+        let target = if let Ok(idx) = raw_target.parse::<usize>() {
+            idx.checked_sub(1)
+                .and_then(|i| app.active_space().tabs.get(i))
+                .map(|t| t.id.clone())
+                .unwrap_or(raw_target)
+        } else if !app.spaces().iter().any(|s| s.tabs.iter().any(|t| t.id == raw_target)) {
+            app.spaces().iter().find_map(|s| {
+                s.tabs.iter().find(|t| {
+                    t.url.contains(&raw_target) || t.title.to_lowercase().contains(&raw_target.to_lowercase())
+                }).map(|t| t.id.clone())
+            }).unwrap_or(raw_target)
+        } else {
+            raw_target
+        };
         if !app.engine.has_browser(&target) {
             app.engine.log_agent_browser_miss(&target);
         }

@@ -65,7 +65,7 @@ fn connect_socket(target: &SocketTarget, mcp: bool, doctor: bool) -> Result<(Uni
     use std::io::ErrorKind;
     use std::time::Duration;
 
-    let tries = if mcp { 3 } else { 1 };
+    let tries = if mcp { 5 } else { 3 };
     for attempt in 1..=tries {
         let discovery = target.resolve();
         let path = discovery.resolved;
@@ -79,6 +79,24 @@ fn connect_socket(target: &SocketTarget, mcp: bool, doctor: bool) -> Result<(Uni
             Err(error) => error,
         };
         let kind = error.kind();
+        if matches!(kind, ErrorKind::NotFound | ErrorKind::ConnectionRefused) && attempt == 1 {
+            // Attempt socket activation or daemon launch
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "start", "anarc.socket"])
+                .status();
+            let started_unit = std::process::Command::new("systemctl")
+                .args(["--user", "start", "anarc.service"])
+                .status()
+                .is_ok_and(|s| s.success());
+            if !started_unit && std::path::Path::new("/home/rover/.local/bin/anarc").exists() {
+                let _ = std::process::Command::new("systemd-run")
+                    .args(["--user", "--unit=anarc", "/home/rover/.local/bin/anarc"])
+                    .status();
+            }
+            std::thread::sleep(Duration::from_millis(600));
+            continue;
+        }
+
         if matches!(kind, ErrorKind::NotFound | ErrorKind::ConnectionRefused | ErrorKind::TimedOut | ErrorKind::WouldBlock)
             && attempt < tries
         {
@@ -509,6 +527,19 @@ fn handle_install(harness: Option<&str>, socket: &SocketTarget) {
         "claude" => println!("# Claude Code\nAdd to .mcp.json\n\n{json}"),
         "antigravity" => println!("# Antigravity\nAdd to ~/.gemini/config/mcp_config.json or .agents/mcp_config.json\n\n{json}"),
         "codex" => println!("# Codex CLI\nAdd to ~/.codex/config.toml\n\n{codex}"),
+        "systemd" => {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/home/rover".into());
+            let user_dir = std::path::Path::new(&home).join(".config/systemd/user");
+            let _ = std::fs::create_dir_all(&user_dir);
+            let service_content = format!(
+                "[Unit]\nDescription=Anarc Browser Daemon\nAfter=graphical-session.target\n\n[Service]\nType=simple\nExecStart={home}/.local/bin/anarc\nRestart=on-failure\nRestartSec=2s\nEnvironment=DISPLAY=:0\nEnvironment=WAYLAND_DISPLAY=wayland-1\n\n[Install]\nWantedBy=default.target\n"
+            );
+            let socket_content = "[Unit]\nDescription=Anarc Agent Control Socket\n\n[Socket]\nListenStream=%t/anarc/ctl.sock\nSocketMode=0600\n\n[Install]\nWantedBy=sockets.target\n";
+            let _ = std::fs::write(user_dir.join("anarc.service"), service_content);
+            let _ = std::fs::write(user_dir.join("anarc.socket"), socket_content);
+            let _ = std::process::Command::new("systemctl").args(["--user", "daemon-reload"]).status();
+            println!("Installed systemd units to {}\nRun: systemctl --user enable --now anarc.socket", user_dir.display());
+        }
         _ => println!("# Claude Code and Antigravity (JSON)\n\n{json}\n\n# Codex CLI (TOML)\n\n{codex}"),
     }
 }
