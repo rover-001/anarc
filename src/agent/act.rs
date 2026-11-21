@@ -1,5 +1,5 @@
 use super::observe::{build_see_call_script, format_see_output};
-use super::policy::{check_navigation_policy, check_sensitive_intent, log_audit_event, resolve_secret, NavigationCheck, PolicyConfig};
+use super::policy::{check_navigation_policy, confirmation_message, ACTION_CONTEXT, log_audit_event, resolve_secret, NavigationCheck, PolicyConfig};
 use super::protocol::AgentResponse;
 use super::refs::RawIndex;
 
@@ -283,7 +283,7 @@ pub fn execute_dsl(
 ) -> AgentResponse {
     let agent_state = app.engine.agent_state();
     let mut op_count: usize = 0;
-    let policy_config = PolicyConfig::default();
+    let policy_config = PolicyConfig::load();
     let mut submissions = Vec::new();
 
     for (index, op) in ops.iter().enumerate() {
@@ -291,7 +291,11 @@ pub fn execute_dsl(
         let res = execute_single_op(app, tab_id, op, &agent_state, &policy_config, &mut submissions);
         if let Err(e) = res {
             log_audit_event(&format!("op{op_num}: {op:?}"), tab_id, &format!("fail: {e}"));
-            return AgentResponse::err(format!("fail op{op_num}: {e}"));
+            return if e.starts_with("needs_confirm:") {
+                AgentResponse::err(e)
+            } else {
+                AgentResponse::err(format!("fail op{op_num}: {e}"))
+            };
         }
         op_count = op_count.saturating_add(1);
     }
@@ -356,19 +360,9 @@ fn execute_single_op(
 ) -> Result<(), String> {
     match op {
         ActionOp::Click { ref_id } => {
-            // Check sensitive intent confirm gate
-            if let Ok(guard) = state_lock.lock() {
-                if let Some(reg) = guard.registries.get(tab_id) {
-                    if let Some(el) = reg.resolve_ref(ref_id) {
-                        if let Some(confirm_msg) = check_sensitive_intent(&el.name, policy_config) {
-                            return Err(confirm_msg);
-                        }
-                    }
-                }
-            }
-
             let (cx, cy) = resolve_ref_coords(ref_id, tab_id, state_lock)?;
             check_occlusion(app, tab_id, cx, cy, ref_id)?;
+            check_click_policy(app, tab_id, cx, cy, policy_config)?;
             click_at(app, tab_id, cx, cy)?;
             super::playbook::record_action(ref_id);
             Ok(())
@@ -392,11 +386,9 @@ fn execute_single_op(
             Ok(())
         }
         ActionOp::SemanticClick { kind, label } => {
-            if let Some(confirm_msg) = check_sensitive_intent(label, policy_config) {
-                return Err(confirm_msg);
-            }
             let (cx, cy, id) = resolve_semantic_coords(*kind, label, tab_id, state_lock)?;
             check_occlusion(app, tab_id, cx, cy, &id)?;
+            check_click_policy(app, tab_id, cx, cy, policy_config)?;
             click_at(app, tab_id, cx, cy)?;
             super::playbook::record_action(&format!("{kind}:\"{label}\""));
             Ok(())
@@ -414,12 +406,15 @@ fn execute_single_op(
             if crate::engine::windows_key_code_for_key(key) == 0 {
                 return Err("unknown key. use: do \"key Enter\"".into());
             }
+            if matches!(key.to_ascii_lowercase().as_str(), "enter" | "return" | "space") {
+                check_action_policy(app, tab_id, "document.activeElement", policy_config)?;
+            }
             press_key(app, tab_id, key, &mods);
             super::playbook::record_action(&format!("key {chord}"));
             Ok(())
         }
         ActionOp::Submit => {
-            submissions.push(submit(app, tab_id)?);
+            submissions.push(submit(app, tab_id, policy_config)?);
             Ok(())
         }
         ActionOp::Go { url } => {
@@ -506,7 +501,10 @@ fn execute_single_op(
             app.engine.send_mouse_click(tab_id, x2, y2, cef::MouseButtonType::LEFT, true, 1, &mods);
             Ok(())
         }
-        ActionOp::XY { x, y } => click_at(app, tab_id, *x, *y),
+        ActionOp::XY { x, y } => {
+            check_click_policy(app, tab_id, *x, *y, policy_config)?;
+            click_at(app, tab_id, *x, *y)
+        }
         ActionOp::Upload { ref_id, file_path } => {
             let p = std::path::Path::new(file_path);
             if !p.exists() {
@@ -555,6 +553,26 @@ fn execute_single_op(
             Ok(())
         }
     }
+}
+
+fn check_click_policy(
+    app: &crate::app::Lumen, tab: &str, x: i32, y: i32, policy: &PolicyConfig,
+) -> Result<(), String> {
+    check_action_policy(app, tab, &format!("document.elementFromPoint({x}, {y})"), policy)
+}
+
+fn check_action_policy(
+    app: &crate::app::Lumen, tab: &str, target: &str, policy: &PolicyConfig,
+) -> Result<(), String> {
+    let reply = evaluate_action(app, tab, &format!("({ACTION_CONTEXT})({target})"))?;
+    let (origin, intent) = serde_json::from_str::<(String, String)>(&reply)
+        .map_err(|_| "action context unavailable. use: see")?;
+    let state = app.engine.agent_state();
+    let state = state.lock().map_err(|_| "state unavailable. use: status")?;
+    if state.confirmations.required(policy, &origin, &intent) {
+        return Err(confirmation_message(&intent));
+    }
+    Ok(())
 }
 
 fn click_at(app: &crate::app::Lumen, tab: &str, x: i32, y: i32) -> Result<(), String> {
@@ -618,7 +636,7 @@ fn evaluate_action(app: &crate::app::Lumen, tab: &str, script: &str) -> Result<S
         .ok_or_else(|| "page unavailable. use: see".into())
 }
 
-fn submit(app: &crate::app::Lumen, tab: &str) -> Result<&'static str, String> {
+fn submit(app: &crate::app::Lumen, tab: &str, policy: &PolicyConfig) -> Result<&'static str, String> {
     let focus = r#"(() => {
         const selector = 'input:not([type=hidden]):not([type=submit]):not([type=button]), textarea, [contenteditable]:not([contenteditable=false]), [role=textbox]';
         const active = document.activeElement;
@@ -638,6 +656,7 @@ fn submit(app: &crate::app::Lumen, tab: &str) -> Result<&'static str, String> {
     })()"#;
     if evaluate_action(app, tab, focus)? == "field" {
         let before = evaluate_action(app, tab, fingerprint)?;
+        check_action_policy(app, tab, "document.activeElement", policy)?;
         press_key(app, tab, "Enter", &gpui_kit::Modifiers::default());
         std::thread::sleep(std::time::Duration::from_millis(200));
         match evaluate_action(app, tab, fingerprint) {
@@ -670,6 +689,7 @@ fn submit(app: &crate::app::Lumen, tab: &str) -> Result<&'static str, String> {
     let coords = evaluate_action(app, tab, button)?;
     let (x, y) = serde_json::from_str::<(i32, i32)>(&coords)
         .map_err(|_| "submit button unavailable. use: see")?;
+    check_click_policy(app, tab, x, y, policy)?;
     click_at(app, tab, x, y)?;
     Ok("submit via button")
 }
