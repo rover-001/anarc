@@ -96,6 +96,7 @@ impl Render for Lumen {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(180))
                     .await;
+                let mut had_peer_cursors = false;
                 loop {
                     // A queued wake can be coalesced into this update. A wake that
                     // arrives during the update stays queued for the next pass.
@@ -128,6 +129,57 @@ impl Render for Lumen {
                                             );
                                         }
                                     }
+
+                                    // Session cookie sync for Live Share spaces
+                                    let is_host_tab = this.spaces.iter().any(|s| {
+                                        s.id != "shared-space"
+                                            && !s.peer_ips.is_empty()
+                                            && s.tabs.iter().any(|t| t.id == tab_id)
+                                    });
+                                    if is_host_tab {
+                                        this.sync_host_cookies_if_needed();
+                                    } else if this.spaces.iter().any(|s| s.id == "shared-space" && s.tabs.iter().any(|t| t.id == tab_id)) {
+                                        let cookies_file = crate::paths::config_dir().join("shared-cookies.json");
+                                        if cookies_file.is_file() {
+                                            if let Ok(content) = std::fs::read_to_string(&cookies_file) {
+                                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                                                    let arr_opt = if val.is_array() {
+                                                        Some(val)
+                                                    } else {
+                                                        val.get("cookies").cloned()
+                                                    };
+                                                    if let Some(arr) = arr_opt && let Some(c_arr) = arr.as_array() && !c_arr.is_empty() {
+                                                        let cleaned: Vec<_> = c_arr.iter().filter_map(crate::engine::devtools::sanitize_cookie_for_cdp).collect();
+                                                        if !cleaned.is_empty() {
+                                                             let params = serde_json::json!({ "cookies": cleaned }).to_string();
+                                                             let _ = this.engine.devtools(tab_id, "Network.setCookies", Some(&params));
+
+                                                             let url_lower = url.to_ascii_lowercase();
+                                                             let is_landing = url_lower.contains("workspace.google.com")
+                                                                 || url_lower.contains("google.com/gmail/about")
+                                                                 || url_lower.contains("accounts.google.")
+                                                                 || url_lower.contains("/signin")
+                                                                 || url_lower.contains("/login");
+                                                             if is_landing {
+                                                                 let target_url = this.spaces.iter()
+                                                                     .find(|s| s.id == "shared-space")
+                                                                     .and_then(|s| s.tabs.iter().find(|t| t.id == tab_id))
+                                                                     .map(|t| t.pinned_url.as_deref().unwrap_or(&t.url).to_string());
+                                                                 if let Some(target) = target_url {
+                                                                     if !target.is_empty() && target != url && !target.contains("workspace.google.com") {
+                                                                         this.pending_auth_recovery.insert(
+                                                                             tab_id.to_string(),
+                                                                             (target, std::time::Instant::now() + std::time::Duration::from_millis(250)),
+                                                                         );
+                                                                     }
+                                                                 }
+                                                             }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                                 let mode = match event.as_str() {
                                     "address.suggest" => crate::plugin::EventMode::Parallel,
@@ -144,6 +196,27 @@ impl Render for Lumen {
                                 let active = this.active_tab_id().to_owned();
                                 this.engine.set_visible(&active);
                                 this.active_zoom_target = None;
+                                if this.active_space().id == "shared-space" {
+                                    let cookies_file = crate::paths::config_dir().join("shared-cookies.json");
+                                    if cookies_file.is_file() {
+                                        if let Ok(content) = std::fs::read_to_string(&cookies_file) {
+                                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                                                let arr_opt = if val.is_array() {
+                                                    Some(val)
+                                                } else {
+                                                    val.get("cookies").cloned()
+                                                };
+                                                if let Some(arr) = arr_opt && let Some(c_arr) = arr.as_array() && !c_arr.is_empty() {
+                                                    let cleaned: Vec<_> = c_arr.iter().filter_map(crate::engine::devtools::sanitize_cookie_for_cdp).collect();
+                                                    if !cleaned.is_empty() {
+                                                        let params = serde_json::json!({ "cookies": cleaned }).to_string();
+                                                        let _ = this.engine.devtools(&active, "Network.setCookies", Some(&params));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 cx.notify();
                             }
                             let popups = this.engine.take_popups();
@@ -179,6 +252,7 @@ impl Render for Lumen {
                                 this.choose_live_share_space(request, window, cx);
                             }
                             if let Some(space_id) = this.engine.take_live_share_switch_space() {
+                                this.sync_external_spaces(cx);
                                 this.activate_space_immediate(&space_id, cx);
                                 cx.notify();
                             }
@@ -200,11 +274,46 @@ impl Render for Lumen {
                             let last = this
                                 .last_spaces_mtime
                                 .load(std::sync::atomic::Ordering::Relaxed);
-                            if mtime_ms > last + 50 {
+                            if mtime_ms > last {
                                 this.last_spaces_mtime
                                     .store(mtime_ms, std::sync::atomic::Ordering::Relaxed);
                                 this.sync_external_spaces(cx);
                             }
+                        }
+
+                        let cookies_path = crate::paths::config_dir().join("shared-cookies.json");
+                        if let Ok(meta) = std::fs::metadata(&cookies_path)
+                            && let Ok(mtime) = meta.modified()
+                            && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
+                        {
+                            let mtime_ms = d.as_millis() as u64;
+                            let last = this
+                                .last_shared_cookies_mtime
+                                .load(std::sync::atomic::Ordering::Relaxed);
+                            if mtime_ms > last {
+                                this.last_shared_cookies_mtime
+                                    .store(mtime_ms, std::sync::atomic::Ordering::Relaxed);
+                                this.inject_shared_cookies_into_all_tabs();
+                            }
+                        }
+
+                        // Process delayed auth recoveries
+                        let now = std::time::Instant::now();
+                        let ready_recoveries: Vec<(String, String)> = this
+                            .pending_auth_recovery
+                            .iter()
+                            .filter(|(_, (_, when))| *when <= now)
+                            .map(|(tid, (dest, _))| (tid.clone(), dest.clone()))
+                            .collect();
+                        for (tid, dest) in ready_recoveries {
+                            this.pending_auth_recovery.remove(&tid);
+                            this.engine.navigate(&tid, &dest);
+                        }
+
+                        // Periodic cookie extraction for hosted Live Share space
+                        if this.last_cookie_sync.elapsed() >= std::time::Duration::from_secs(3) {
+                            this.last_cookie_sync = std::time::Instant::now();
+                            this.sync_host_cookies_if_needed();
                         }
                         let (visible_ids, split_active, peek_id) = this.visible_browser_panes();
                         let (dirty_tabs, has_root_updates) =
@@ -250,8 +359,10 @@ impl Render for Lumen {
                                     }
                                 }
                             }
+                            this.save_state();
                             cx.notify();
                         }
+                        let has_peer_cursors = !crate::app::live_cursor::get_active_peer_cursors().is_empty();
                         if !was_initialized {
                             cx.notify();
                         } else if !dirty_tabs.is_empty() {
@@ -262,6 +373,20 @@ impl Render for Lumen {
                                 peek_id.as_deref(),
                                 cx,
                             );
+                            if has_peer_cursors || had_peer_cursors {
+                                had_peer_cursors = has_peer_cursors;
+                                this.web_viewport.update(cx, |_, cx| cx.notify());
+                                if split_active {
+                                    this.second_web_viewport.update(cx, |_, cx| cx.notify());
+                                }
+                            }
+                        } else if has_peer_cursors || had_peer_cursors {
+                            had_peer_cursors = has_peer_cursors;
+                            this.web_viewport.update(cx, |_, cx| cx.notify());
+                            if split_active {
+                                this.second_web_viewport.update(cx, |_, cx| cx.notify());
+                            }
+                            cx.notify();
                         }
                         Some(())
                     });
@@ -303,6 +428,7 @@ impl Render for Lumen {
                         tab.url = u;
                     }
                 }
+                self.save_state();
             }
         }
 

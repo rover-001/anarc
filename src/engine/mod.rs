@@ -614,6 +614,7 @@ cef::wrap_app! {
 
 #[derive(Default)]
 pub struct BrowserSharedState {
+    pub space_id: String,
     pub width: i32,
     pub height: i32,
     pub initial_url: String,
@@ -655,6 +656,7 @@ pub struct BrowserSharedState {
 /// own size and zoom level; windows the page opened itself (OAuth popups) keep
 /// the default zoom.
 pub(super) fn new_shared_state(
+    space_id: &str,
     width: i32,
     height: i32,
     url: &str,
@@ -663,6 +665,7 @@ pub(super) fn new_shared_state(
     let initial_host = crate::shield::url_host(url);
     let initial_favicon = initial_host.as_deref().and_then(load_favicon_from_disk);
     BrowserSharedState {
+        space_id: space_id.to_string(),
         width: width.max(1),
         height: height.max(1),
         initial_url: url.to_string(),
@@ -723,6 +726,7 @@ fn median_edge_color_bgra(pixels: &[u8], width: usize, height: usize) -> Option<
 }
 
 mod callbacks;
+pub mod devtools;
 use callbacks::{
     HttpsFirstState, LumenClient, LumenContextMenuHandler, LumenDialogHandler, LumenDisplayHandler,
     LumenDownloadHandler, LumenLifeSpanHandler, LumenLoadHandler, LumenPermissionHandler,
@@ -732,6 +736,7 @@ use callbacks::{
 pub struct BrowserEntry {
     pub browser: Browser,
     pub state: Arc<Mutex<BrowserSharedState>>,
+    pub space_id: String,
 }
 
 pub struct Engine {
@@ -761,6 +766,7 @@ pub struct Engine {
     /// Names the browsers CEF creates for page popups so their ids stay unique
     /// without the app having to know about them ahead of time.
     popup_serial: Arc<std::sync::atomic::AtomicU64>,
+    devtools: Mutex<devtools::DevToolsManager>,
 }
 
 fn resize_should_send(
@@ -1092,6 +1098,7 @@ mod tests {
     fn forgetting_a_page_closed_browser_waits_for_pending_creation_instead_of_double_closing() {
         let mut engine = Engine::new();
         let state = Arc::new(Mutex::new(new_shared_state(
+            "test-space",
             10,
             10,
             "https://example.com",
