@@ -133,12 +133,11 @@ pub(crate) fn register_panel_plugins(
                 if host.is_registered(&metadata.id) {
                     continue;
                 }
-                let enabled_by_default = metadata.id == "com.anarc.live-share"
-                    || value
-                        .get("plugin")
-                        .and_then(|p| p.get("enabled_by_default"))
-                        .and_then(toml::Value::as_bool)
-                        .unwrap_or(false);
+                let enabled_by_default = value
+                    .get("plugin")
+                    .and_then(|p| p.get("enabled_by_default"))
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(false);
                 let descriptor = PluginDescriptor {
                     id: metadata.id.clone(),
                     name: metadata.name,
