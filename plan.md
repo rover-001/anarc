@@ -407,3 +407,11 @@ Each phase ships alone. Do not start N+1 until N's acceptance passes.
 3. Should `anarc-ctl` ship inside the same package as a second `[[bin]]`, or wait for the workspace split you asked about in `agent_plan.md` §9 Q3?
 4. Secret vault: Anarc-local encrypted file, or delegate to the system keyring (libsecret)?
 5. Do you want Hint-mode overlays (shared ids for human + agent) in P5, or defer?
+
+## Lessons from test 1
+
+- `ea79f98` Poll for CEF registration on the socket worker, keep each retry on the original tab, and show numbered hosts so a missing tab can be recovered in one step.
+- `236f22d` Give errors a concrete recovery command and expose `tabs` through MCP so agents can recover without reading source.
+- `671f21b` Use trusted browser input for editors and report whether `submit` used Enter or clicked a button.
+- `750511a` Classify confirmation by form and dialog context. Scope approvals to one origin and intent per session. Configure defaults with `confirm` and exceptions with `confirm_allow` in `plugins.toml`. The approval UI still needs a mock.
+- `e508dd4` Return PNG paths to the CLI and image blocks to MCP. Use `read last` and opt into `wait stable` for streams. Log only operation names, outcomes, and reply sizes.
