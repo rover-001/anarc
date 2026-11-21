@@ -68,7 +68,7 @@ mod tests {
         };
 
         let (header, els, _, _) = reg.update_from_raw(raw);
-        let output = format_see_output(&header, &els);
+        let output = format_see_output(&header, &els, None);
 
         // Approximate tokens: 1 token ~= 4 chars or whitespace-delimited words
         let char_count = output.len();
@@ -83,14 +83,15 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_server_lifecycle_and_socket_cleanup() {
+    #[cfg(target_family = "unix")]
+    fn test_agent_server_lifecycle_and_socket_cleanup() -> Result<(), Box<dyn std::error::Error>> {
         let (req_tx, req_rx) = async_channel::bounded(8);
         let test_socket = format!("/tmp/anarc-test-agent-{}.sock", std::process::id());
         unsafe {
             std::env::set_var("ANARC_SOCKET_PATH", &test_socket);
         }
 
-        let bound_path = start_server(req_tx).unwrap();
+        let bound_path = start_server(req_tx)?;
         assert!(bound_path.exists());
         assert!(super::server::is_running());
 
@@ -102,15 +103,15 @@ mod tests {
         });
 
         // Connect client
-        let mut client = UnixStream::connect(&bound_path).unwrap();
+        let mut client = UnixStream::connect(&bound_path)?;
         let req = AgentRequest::Tabs;
-        let req_json = serde_json::to_string(&req).unwrap();
-        writeln!(client, "{req_json}").unwrap();
+        let req_json = serde_json::to_string(&req)?;
+        writeln!(client, "{req_json}")?;
 
         let mut reader = BufReader::new(client);
         let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
-        let resp: AgentResponse = serde_json::from_str(line.trim()).unwrap();
+        reader.read_line(&mut line)?;
+        let resp: AgentResponse = serde_json::from_str(line.trim())?;
         assert!(resp.ok);
         assert_eq!(resp.result.as_deref(), Some("ok from mock handler"));
 
@@ -118,6 +119,7 @@ mod tests {
         stop_server();
         assert!(!super::server::is_running());
         assert!(!bound_path.exists(), "Socket file must be unlinked on stop");
+        Ok(())
     }
 }
 

@@ -1,7 +1,7 @@
 use super::observe::{build_read_call_script, build_see_call_script, execute_find, format_see_output};
 use super::protocol::{AgentRequest, AgentResponse};
 use super::refs::{RawIndex, RefRegistry};
-use super::server::start_server;
+use super::server::{start_server, stop_server};
 use crate::plugin::{
     Manifest, Plugin, PluginCtx, PluginDescriptor, PluginError, PluginHost, PluginKind,
 };
@@ -84,17 +84,22 @@ impl Plugin for AgentPlugin {
             Err(e) => return Err(PluginError(e)),
         };
 
-        std::thread::Builder::new()
+        let dispose_rx = req_rx.clone();
+        let forwarder = std::thread::Builder::new()
             .name("anarc-agent-forwarder".into())
             .spawn(move || {
                 while let Ok((request, resp_tx)) = futures_lite::future::block_on(async { req_rx.recv().await }) {
                     forward_request_to_engine(request, resp_tx);
                 }
-            })
-            .ok();
-
+            });
+        if forwarder.is_err() {
+            dispose_rx.close();
+            stop_server();
+            return Err(PluginError("Agent forwarder unavailable; use: status".into()));
+        }
         ctx.effect(move || {
-            // Teardown disposer
+            dispose_rx.close();
+            stop_server();
         });
 
         Ok(())
@@ -103,7 +108,7 @@ impl Plugin for AgentPlugin {
 
 pub(crate) fn handle_agent_request(
     app: &mut crate::app::Lumen,
-    req: AgentRequest,
+    mut req: AgentRequest,
     resp_tx: async_channel::Sender<AgentResponse>,
 ) {
     let agent_state = app.engine.agent_state();
@@ -112,6 +117,41 @@ pub(crate) fn handle_agent_request(
     if is_paused && !matches!(req, AgentRequest::Resume | AgentRequest::Status) {
         let _ = resp_tx.try_send(AgentResponse::err("Agent is paused. Use 'resume' to continue."));
         return;
+    }
+
+    let parsed_ops = if let AgentRequest::Do { ops, .. } = &req {
+        match super::act::parse_dsl(ops) {
+            Ok(ops) => ops,
+            Err(e) => {
+                let _ = resp_tx.try_send(AgentResponse::err(format!("DSL parse error: {e}")));
+                return;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let tab_only = !parsed_ops.is_empty()
+        && parsed_ops.iter().all(|op| matches!(op, super::act::ActionOp::Tab { .. }));
+    if !tab_only && let Some(tab_id) = req.target_tab_mut() {
+        let target = tab_id.clone().unwrap_or_else(|| app.active_tab_id().to_string());
+        let Some((space_id, url)) = app.spaces().iter().find_map(|space| {
+            space.tabs.iter().find(|tab| tab.id == target)
+                .map(|tab| (space.id.clone(), tab.url.clone()))
+        }) else {
+            let _ = resp_tx.try_send(AgentResponse::err(no_such_tab(&compact_tabs(app))));
+            return;
+        };
+        if !app.engine.has_browser(&target) {
+            // Blank tabs show native new-tab chrome, so rendering never starts CEF for them.
+            if url == "about:blank" || url.is_empty() {
+                let _ = app.engine.ensure_browser(&space_id, &target, "about:blank", 768, 512, 0, 0.0);
+            }
+            let mut response = AgentResponse::err("tab not ready, retry in 1s");
+            response.pending_tab = Some(target);
+            let _ = resp_tx.try_send(response);
+            return;
+        }
+        *tab_id = Some(target);
     }
 
     match req {
@@ -150,18 +190,13 @@ pub(crate) fn handle_agent_request(
             let _ = resp_tx.try_send(AgentResponse::success(lines.join("\n")));
         }
         AgentRequest::See { tab_id, scope } => {
-            let target_tab = match resolve_target_tab_id(app, tab_id.as_deref()) {
-                Ok(id) => id,
-                Err(e) => {
-                    let _ = resp_tx.try_send(AgentResponse::err(e));
-                    return;
-                }
-            };
+            let target_tab = tab_id.unwrap_or_default();
 
             let script = build_see_call_script(scope.as_deref().unwrap_or("view"));
             let eval_rx = app.engine.evaluate(&target_tab, &script);
             let state_arc = agent_state.clone();
             let tab_id_str = target_tab.clone();
+            let tabs = compact_tabs(app);
 
             std::thread::Builder::new()
                 .name("anarc-see-worker".into())
@@ -197,7 +232,7 @@ pub(crate) fn handle_agent_request(
 
                     let registry = guard.registries.entry(tab_id_str).or_default();
                     let (header, elements, _, _) = registry.update_from_raw(raw_index);
-                    let mut formatted = format_see_output(&header, &elements);
+                    let mut formatted = format_see_output(&header, &elements, Some(&tabs));
 
                     if let Some(reason) = super::policy::check_human_handoff(&header.title, &header.display_url, &formatted) {
                         formatted = format!("!human {reason}\n{formatted}");
@@ -207,13 +242,7 @@ pub(crate) fn handle_agent_request(
                 .ok();
         }
         AgentRequest::Read { tab_id, target: _, mode, max } => {
-            let target_tab = match resolve_target_tab_id(app, tab_id.as_deref()) {
-                Ok(id) => id,
-                Err(e) => {
-                    let _ = resp_tx.try_send(AgentResponse::err(e));
-                    return;
-                }
-            };
+            let target_tab = tab_id.unwrap_or_default();
 
             let m = mode.as_deref().unwrap_or("text");
             let max_chars = max.unwrap_or(4000);
@@ -240,13 +269,7 @@ pub(crate) fn handle_agent_request(
                 .ok();
         }
         AgentRequest::Find { tab_id, query } => {
-            let target_tab = match resolve_target_tab_id(app, tab_id.as_deref()) {
-                Ok(id) => id,
-                Err(e) => {
-                    let _ = resp_tx.try_send(AgentResponse::err(e));
-                    return;
-                }
-            };
+            let target_tab = tab_id.unwrap_or_default();
 
             let guard = match agent_state.lock() {
                 Ok(g) => g,
@@ -265,34 +288,13 @@ pub(crate) fn handle_agent_request(
                 )));
             }
         }
-        AgentRequest::Do { tab_id, ops } => {
-            let target_tab = match resolve_target_tab_id(app, tab_id.as_deref()) {
-                Ok(id) => id,
-                Err(e) => {
-                    let _ = resp_tx.try_send(AgentResponse::err(e));
-                    return;
-                }
-            };
-
-            let parsed_ops = match super::act::parse_dsl(&ops) {
-                Ok(o) => o,
-                Err(e) => {
-                    let _ = resp_tx.try_send(AgentResponse::err(format!("DSL parse error: {e}")));
-                    return;
-                }
-            };
-
+        AgentRequest::Do { tab_id, .. } => {
+            let target_tab = tab_id.unwrap_or_else(|| app.active_tab_id().to_string());
             let resp = super::act::execute_dsl(app, &target_tab, &parsed_ops);
             let _ = resp_tx.try_send(resp);
         }
         AgentRequest::Shot { tab_id, target: _, scale: _ } => {
-            let target_tab = match resolve_target_tab_id(app, tab_id.as_deref()) {
-                Ok(id) => id,
-                Err(e) => {
-                    let _ = resp_tx.try_send(AgentResponse::err(e));
-                    return;
-                }
-            };
+            let target_tab = tab_id.unwrap_or_default();
 
             let devtools_rx = app.engine.devtools(&target_tab, "Page.captureScreenshot", Some("{\"format\":\"png\"}"));
             std::thread::Builder::new()
@@ -336,18 +338,40 @@ pub(crate) fn handle_agent_request(
     }
 }
 
-fn resolve_target_tab_id(
-    app: &crate::app::Lumen,
-    explicit_tab: Option<&str>,
-) -> Result<String, String> {
-    if let Some(t) = explicit_tab {
-        return Ok(t.to_string());
-    }
-    let act = app.active_tab_id();
-    if !act.is_empty() {
-        Ok(act.to_string())
-    } else {
-        Err("No active browser tab found".to_string())
+pub(crate) fn no_such_tab(tabs: &str) -> String {
+    format!("no such tab. tabs: {tabs}. use: do \"tab 1\"")
+}
+
+pub(crate) fn compact_tabs(app: &crate::app::Lumen) -> String {
+    let space = app.active_space();
+    let active = space.active.as_deref();
+    let active_index = space.tabs.iter().position(|tab| Some(tab.id.as_str()) == active);
+    space.tabs.iter().enumerate()
+        .filter(|(index, _)| *index < 7 || Some(*index) == active_index
+            || (*index == 7 && active_index.is_none_or(|active| active < 8)))
+        .map(|(index, tab)| {
+            let star = if Some(tab.id.as_str()) == active { "*" } else { "" };
+            let host = crate::shield::url_host(&tab.url).unwrap_or_else(|| {
+                if tab.url.is_empty() || tab.url == "about:blank" {
+                    "about:blank".into()
+                } else {
+                    "local".into()
+                }
+            });
+            format!("{}{star} {host}", index + 1)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn missing_tab_includes_selection_hint() {
+        assert_eq!(
+            super::no_such_tab("1* chatgpt.com, 2 about:blank"),
+            "no such tab. tabs: 1* chatgpt.com, 2 about:blank. use: do \"tab 1\""
+        );
     }
 }
 

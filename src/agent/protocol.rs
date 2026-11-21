@@ -35,9 +35,24 @@ pub enum AgentRequest {
     Status,
 }
 
+impl AgentRequest {
+    pub fn target_tab_mut(&mut self) -> Option<&mut Option<String>> {
+        match self {
+            Self::See { tab_id, .. }
+            | Self::Read { tab_id, .. }
+            | Self::Find { tab_id, .. }
+            | Self::Do { tab_id, .. }
+            | Self::Shot { tab_id, .. } => Some(tab_id),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentResponse {
     pub ok: bool,
+    #[serde(skip)]
+    pub pending_tab: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,6 +63,7 @@ impl AgentResponse {
     pub fn success(msg: impl Into<String>) -> Self {
         Self {
             ok: true,
+            pending_tab: None,
             result: Some(msg.into()),
             error: None,
         }
@@ -56,6 +72,7 @@ impl AgentResponse {
     pub fn err(err: impl Into<String>) -> Self {
         Self {
             ok: false,
+            pending_tab: None,
             result: None,
             error: Some(err.into()),
         }

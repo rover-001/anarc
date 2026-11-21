@@ -205,7 +205,7 @@ mod tests {
 
         let expanded = reg
             .expand_macro("login", &[String::from("rover@x.com"), String::from("secret123")])
-            .unwrap();
+            .unwrap_or_default();
 
         assert_eq!(
             expanded,
@@ -225,7 +225,7 @@ mod tests {
 
         let site = reg.find_site_config("https://github.com/torvalds/linux");
         assert!(site.is_some());
-        assert_eq!(site.unwrap().hide.len(), 2);
+        assert_eq!(site.map(|site| site.hide.len()), Some(2));
 
         let non_site = reg.find_site_config("https://google.com");
         assert!(non_site.is_none());

@@ -325,7 +325,7 @@ pub fn execute_dsl(
     log_audit_event("batch", tab_id, &format!("ok {op_count} · g{}", header.generation));
 
     if gen_changed {
-        let see_output = format_see_output(&header, &elements);
+        let see_output = format_see_output(&header, &elements, Some(&super::plugin::compact_tabs(app)));
         AgentResponse::success(format!("ok {op_count} · g{}\n{see_output}", header.generation))
     } else if !diff.is_empty() {
         let diff_str = diff.format_diff();
@@ -592,7 +592,12 @@ fn execute_single_op(
             match action {
                 TabAction::New => app.add_tab(),
                 TabAction::Close => app.close_active_tab(),
-                TabAction::Select(n) => app.activate_tab_number(*n),
+                TabAction::Select(n) => {
+                    let id = n.checked_sub(1).and_then(|index| app.active_space().tabs.get(index))
+                        .map(|tab| tab.id.clone())
+                        .ok_or_else(|| super::plugin::no_such_tab(&super::plugin::compact_tabs(app)))?;
+                    app.activate_tab_in_active_space(&id);
+                }
             }
             Ok(())
         }
@@ -706,7 +711,7 @@ mod tests {
             wait idle;
         "#;
 
-        let ops = parse_dsl(script).unwrap();
+        let ops = parse_dsl(script).unwrap_or_default();
         assert_eq!(ops.len(), 8);
         assert_eq!(ops.get(0), Some(&ActionOp::Click { ref_id: "b1".into() }));
         assert_eq!(
@@ -748,7 +753,7 @@ mod tests {
             scroll down;
         "#;
 
-        let ops = parse_dsl(script).unwrap();
+        let ops = parse_dsl(script).unwrap_or_default();
         assert!(ops.len() >= 2);
     }
 
