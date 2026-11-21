@@ -342,9 +342,9 @@ impl Lumen {
             space.active = Some(other.clone());
             activated_new_tab = Some(other);
         } else if was_active {
-            // Activate the adjacent regular tab if one exists; otherwise activate
-            // any remaining kept/pinned tab in the space rather than infinitely
-            // regenerating an unwanted "New tab".
+            // Closing a regular tab should never open a favorite or pinned page.
+            // Kept tabs stay unloaded unless the user selects them, so keep a
+            // regular tab active even when it is the last regular tab.
             let next_regular = (index..space.tabs.len())
                 .chain((0..index.min(space.tabs.len())).rev())
                 .find_map(|candidate| {
@@ -354,14 +354,6 @@ impl Lumen {
             if let Some(next_regular) = next_regular {
                 space.active = Some(next_regular.clone());
                 activated_new_tab = Some(next_regular);
-            } else if let Some(fallback_tab) = space
-                .tabs
-                .get(index.min(space.tabs.len().saturating_sub(1)))
-                .or_else(|| space.tabs.first())
-            {
-                let act_id = fallback_tab.id.clone();
-                space.active = Some(act_id.clone());
-                activated_new_tab = Some(act_id);
             } else {
                 let id = next_tab_id(space);
                 space.tabs.push(Tab::new(&id, "New tab", "about:blank"));
