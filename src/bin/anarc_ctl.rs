@@ -35,6 +35,7 @@ fn print_usage() {
            read [<ref>|page|last]            Read page content (modes: text, table, links, outline)\n\
            find <query>                 Find elements matching query (<= 5 refs)\n\
            tabs                         List open tabs and spaces\n\
+           doctor                       Diagnose agent control failures\n\
            do <ops>                     Execute action DSL (click, type, key, wait)\n\
            shot [ref|view]              Save a PNG and print its path\n\
            wait stable [ms]             Wait for the latest text to stop growing\n\
@@ -85,7 +86,11 @@ fn send_socket_request(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        Ok(res)
+        if request_val.get("cmd").and_then(|cmd| cmd.as_str()) == Some("doctor") {
+            Ok(format!("socket: {socket_path:?}\n{res}"))
+        } else {
+            Ok(res)
+        }
     } else {
         let err = parsed
             .get("error")
@@ -109,7 +114,7 @@ fn send_socket_request(
 // ---------------------------------------------------------------------------
 
 fn get_tool_definitions() -> serde_json::Value {
-    const RECOVERY: &str = "Never read Anarc source. On any error run `tabs` then `see`. Errors say what to do next.";
+    const RECOVERY: &str = "On any error run `doctor` first.";
     serde_json::json!([
         {
             "name": "see",
@@ -187,6 +192,11 @@ fn get_tool_definitions() -> serde_json::Value {
         {
             "name": "tabs",
             "description": format!("List tabs and spaces. {RECOVERY}"),
+            "inputSchema": { "type": "object" }
+        },
+        {
+            "name": "doctor",
+            "description": "Diagnose agent control failures. Run first on any error.",
             "inputSchema": { "type": "object" }
         },
         {
@@ -286,7 +296,7 @@ fn handle_mcp_request(
             let tab_id = arguments.get("tab_id").and_then(|v| v.as_str()).map(|s| s.to_string());
 
             let socket_req = match tool_name {
-                "tabs" => serde_json::json!({"cmd": "tabs"}),
+                "tabs" | "doctor" => serde_json::json!({"cmd": tool_name}),
                 "see" => serde_json::json!({
                     "cmd": "see",
                     "tab_id": tab_id,
@@ -604,9 +614,9 @@ fn main() {
                 "query": q
             })
         }
-        "tabs" => {
+        "tabs" | "doctor" => {
             serde_json::json!({
-                "cmd": "tabs"
+                "cmd": cmd
             })
         }
         "do" => {
@@ -816,7 +826,7 @@ mod tests {
 
         // Also assert each individual tool description is <= 60 tokens (~240 chars)
         let tool_array = tools.as_array().unwrap();
-        assert_eq!(tool_array.len(), 6, "Expected five core tools and tabs");
+        assert_eq!(tool_array.len(), 7, "Expected five core tools, tabs, and doctor");
         for tool in tool_array {
             let desc = tool.get("description").and_then(|d| d.as_str()).unwrap();
             let desc_tokens = desc.len() / 4;
@@ -893,7 +903,7 @@ mod tests {
         });
         let list_resp = handle_mcp_request(&list_req, &socket_path, false).unwrap();
         let tools = list_resp.get("result").unwrap().get("tools").unwrap().as_array().unwrap();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 7);
 
         // 5. Tools call with Anarc offline - should return clean error message without hanging
         let call_req = serde_json::json!({

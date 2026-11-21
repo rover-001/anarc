@@ -18,6 +18,7 @@ pub enum AgentRequest {
         query: String,
     },
     Tabs,
+    Doctor,
     Do {
         tab_id: Option<String>,
         ops: String,
@@ -45,6 +46,7 @@ impl AgentRequest {
             Self::Do { .. } => "do",
             Self::Shot { .. } => "shot",
             Self::Tabs => "tabs",
+            Self::Doctor => "doctor",
             Self::Pause => "pause",
             Self::Resume => "resume",
             Self::Status => "status",

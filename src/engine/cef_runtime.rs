@@ -45,6 +45,7 @@ impl Engine {
         if self.initialized {
             return Ok(());
         }
+        crate::agent::plugin::note_window_painted();
         let mut app = LumenCefApp::new();
         let subprocess = cef::execute_process(
             Some(self.args.as_main_args()),
