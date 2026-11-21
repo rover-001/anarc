@@ -49,6 +49,7 @@ pub struct AgentState {
     pub registries: HashMap<String, RefRegistry>,
     pub attached_space: Option<String>,
     pub is_paused: bool,
+    pub confirmations: super::policy::Confirmations,
 }
 
 pub struct AgentPlugin {
