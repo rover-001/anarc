@@ -14,9 +14,13 @@ pub enum ScrollDirection {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TabAction {
-    New,
-    Select(usize),
-    Close,
+    New { url: Option<String> },
+    Select(String),
+    Close { target: Option<String> },
+    Pin { target: Option<String> },
+    Unpin { target: Option<String> },
+    Favorite { target: Option<String> },
+    Unfavorite { target: Option<String> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -337,19 +341,78 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         return Ok(ActionOp::Dialog { accept });
     }
 
-    // Tab: "tab new", "tab 2", "tab close"
+    // Tab: "tab new", "tab 2", "tab close", "tab pin", "tab fav", etc.
     if let Some(stripped) = s.strip_prefix("tab ") {
-        let t = stripped.trim();
-        let action = if t == "new" {
-            TabAction::New
-        } else if t == "close" {
-            TabAction::Close
-        } else if let Ok(num) = t.parse::<usize>() {
-            TabAction::Select(num)
+        let rest = stripped.trim();
+        let action = if rest == "new" {
+            TabAction::New { url: None }
+        } else if let Some(url) = rest.strip_prefix("new ") {
+            TabAction::New { url: Some(unquote(url).trim().to_string()) }
+        } else if rest == "close" || rest == "remove" {
+            TabAction::Close { target: None }
+        } else if let Some(target) = rest.strip_prefix("close ").or_else(|| rest.strip_prefix("remove ")) {
+            TabAction::Close { target: Some(target.trim().to_string()) }
+        } else if rest == "pin" {
+            TabAction::Pin { target: None }
+        } else if let Some(target) = rest.strip_prefix("pin ") {
+            TabAction::Pin { target: Some(target.trim().to_string()) }
+        } else if rest == "unpin" {
+            TabAction::Unpin { target: None }
+        } else if let Some(target) = rest.strip_prefix("unpin ") {
+            TabAction::Unpin { target: Some(target.trim().to_string()) }
+        } else if rest == "fav" || rest == "favorite" {
+            TabAction::Favorite { target: None }
+        } else if let Some(target) = rest.strip_prefix("fav ").or_else(|| rest.strip_prefix("favorite ")) {
+            TabAction::Favorite { target: Some(target.trim().to_string()) }
+        } else if rest == "unfav" || rest == "unfavorite" {
+            TabAction::Unfavorite { target: None }
+        } else if let Some(target) = rest.strip_prefix("unfav ").or_else(|| rest.strip_prefix("unfavorite ")) {
+            TabAction::Unfavorite { target: Some(target.trim().to_string()) }
+        } else if let Some(target) = rest.strip_prefix("select ") {
+            TabAction::Select(target.trim().to_string())
+        } else if rest.chars().all(|c| c.is_ascii_digit()) {
+            TabAction::Select(rest.to_string())
         } else {
-            return Err("unknown tab action. use: tabs".into());
+            return Err("unknown tab action. use: tab pin|fav|close|new|N".into());
         };
         return Ok(ActionOp::Tab { action });
+    }
+
+    if let Some(stripped) = s.strip_prefix("pin ") {
+        let rest = stripped.trim();
+        let target = rest.strip_prefix("tab ").unwrap_or(rest).trim();
+        let target = if target.is_empty() { None } else { Some(target.to_string()) };
+        return Ok(ActionOp::Tab { action: TabAction::Pin { target } });
+    }
+    if s == "pin" {
+        return Ok(ActionOp::Tab { action: TabAction::Pin { target: None } });
+    }
+    if let Some(stripped) = s.strip_prefix("unpin ") {
+        let rest = stripped.trim();
+        let target = rest.strip_prefix("tab ").unwrap_or(rest).trim();
+        let target = if target.is_empty() { None } else { Some(target.to_string()) };
+        return Ok(ActionOp::Tab { action: TabAction::Unpin { target } });
+    }
+    if s == "unpin" {
+        return Ok(ActionOp::Tab { action: TabAction::Unpin { target: None } });
+    }
+    if let Some(stripped) = s.strip_prefix("fav ").or_else(|| s.strip_prefix("favorite ")) {
+        let rest = stripped.trim();
+        let target = rest.strip_prefix("tab ").unwrap_or(rest).trim();
+        let target = if target.is_empty() { None } else { Some(target.to_string()) };
+        return Ok(ActionOp::Tab { action: TabAction::Favorite { target } });
+    }
+    if s == "fav" || s == "favorite" {
+        return Ok(ActionOp::Tab { action: TabAction::Favorite { target: None } });
+    }
+    if let Some(stripped) = s.strip_prefix("unfav ").or_else(|| s.strip_prefix("unfavorite ")) {
+        let rest = stripped.trim();
+        let target = rest.strip_prefix("tab ").unwrap_or(rest).trim();
+        let target = if target.is_empty() { None } else { Some(target.to_string()) };
+        return Ok(ActionOp::Tab { action: TabAction::Unfavorite { target } });
+    }
+    if s == "unfav" || s == "unfavorite" {
+        return Ok(ActionOp::Tab { action: TabAction::Unfavorite { target: None } });
     }
 
     // Wait: "wait idle", "wait 500", "wait stream", "wait stream 15000", "wait text-quiescent 1000", "wait \"Text\""
@@ -864,12 +927,43 @@ fn execute_single_op(
         }
         ActionOp::Tab { action } => {
             match action {
-                TabAction::New => app.add_tab(),
-                TabAction::Close => app.close_active_tab(),
-                TabAction::Select(n) => {
-                    let id = n.checked_sub(1).and_then(|index| app.active_space().tabs.get(index))
-                        .map(|tab| tab.id.clone())
-                        .ok_or_else(|| super::plugin::no_such_tab(&super::plugin::compact_tabs(app)))?;
+                TabAction::New { url } => {
+                    app.add_tab();
+                    if let Some(url) = url {
+                        let id = app.active_tab_id().to_owned();
+                        app.engine.navigate(&id, url);
+                        if let Some(tab) = app.active_space_mut().tabs.iter_mut().find(|t| t.id == id) {
+                            tab.url = url.clone();
+                        }
+                        app.save_state();
+                    }
+                }
+                TabAction::Close { target } => {
+                    if let Some(target) = target {
+                        let id = resolve_tab_target(app, Some(target))?;
+                        app.close_tab_by_id(&id);
+                    } else {
+                        app.close_active_tab();
+                    }
+                }
+                TabAction::Pin { target } => {
+                    let id = resolve_tab_target(app, target.as_deref())?;
+                    app.pin_tab(&id, true);
+                }
+                TabAction::Unpin { target } => {
+                    let id = resolve_tab_target(app, target.as_deref())?;
+                    app.pin_tab(&id, false);
+                }
+                TabAction::Favorite { target } => {
+                    let id = resolve_tab_target(app, target.as_deref())?;
+                    app.favorite_tab(&id, true);
+                }
+                TabAction::Unfavorite { target } => {
+                    let id = resolve_tab_target(app, target.as_deref())?;
+                    app.favorite_tab(&id, false);
+                }
+                TabAction::Select(target) => {
+                    let id = resolve_tab_target(app, Some(target))?;
                     app.activate_tab_in_active_space(&id);
                     // Ensure browser is awake for newly activated tab
                     let space_id = app.active_space().id.clone();
@@ -899,6 +993,33 @@ fn execute_single_op(
                 WaitCondition::Text(_) => std::thread::sleep(std::time::Duration::from_millis(200)),
             }
             Ok(())
+        }
+    }
+}
+
+fn resolve_tab_target(app: &crate::app::Lumen, target: Option<&str>) -> Result<String, String> {
+    if let Some(t) = target {
+        let t = t.trim();
+        if let Ok(n) = t.parse::<usize>() {
+            n.checked_sub(1)
+                .and_then(|idx| app.active_space().tabs.get(idx))
+                .map(|tab| tab.id.clone())
+                .ok_or_else(|| super::plugin::no_such_tab(&super::plugin::compact_tabs(app)))
+        } else if app.active_space().tabs.iter().any(|tab| tab.id == t) {
+            Ok(t.to_string())
+        } else if let Some(tab) = app.active_space().tabs.iter().find(|tab| {
+            tab.url.contains(t) || tab.title.to_lowercase().contains(&t.to_lowercase())
+        }) {
+            Ok(tab.id.clone())
+        } else {
+            Err(super::plugin::no_such_tab(&super::plugin::compact_tabs(app)))
+        }
+    } else {
+        let active = app.active_tab_id();
+        if active.is_empty() {
+            Err("no active tab".into())
+        } else {
+            Ok(active.to_string())
         }
     }
 }

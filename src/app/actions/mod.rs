@@ -536,7 +536,7 @@ impl Lumen {
             crate::agent::plugin::handle_agent_request(self, req, resp_tx);
         }
     }
-    pub(in crate::app) fn save_state(&self) {
+    pub(crate) fn save_state(&self) {
         #[cfg(not(test))]
         {
             let mut spaces_to_save = self.spaces.clone();
@@ -670,7 +670,7 @@ impl Lumen {
             self.save_state();
         }
     }
-    pub(in crate::app) fn active_space_mut(&mut self) -> &mut Space {
+    pub(crate) fn active_space_mut(&mut self) -> &mut Space {
         self.spaces
             .iter_mut()
             .find(|space| space.id == self.active_space)
