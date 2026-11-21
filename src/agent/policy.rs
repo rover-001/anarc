@@ -28,27 +28,43 @@ impl NavigationMode {
 
 #[derive(Clone, Debug)]
 pub struct PolicyConfig {
-    pub space: Option<String>,
     pub navigation_mode: NavigationMode,
     pub confirm_intents: HashSet<String>,
+    pub confirm_allow: HashSet<String>,
 }
 
 impl Default for PolicyConfig {
     fn default() -> Self {
-        let mut intents = HashSet::new();
-        intents.insert("purchase".to_string());
-        intents.insert("buy".to_string());
-        intents.insert("pay".to_string());
-        intents.insert("checkout".to_string());
-        intents.insert("send".to_string());
-        intents.insert("delete".to_string());
-        intents.insert("remove".to_string());
-        intents.insert("transfer".to_string());
-
         Self {
-            space: Some("Agent".to_string()),
             navigation_mode: NavigationMode::SameSite,
-            confirm_intents: intents,
+            confirm_intents: ["purchase", "payment", "delete", "permission_grant", "transfer"]
+                .into_iter().map(str::to_string).collect(),
+            confirm_allow: HashSet::new(),
+        }
+    }
+}
+
+impl PolicyConfig {
+    pub fn load() -> Self {
+        let config = crate::plugin::PluginConfig::load().ok();
+        let table = config.as_ref()
+            .and_then(|config| config.plugins.get(super::plugin::AGENT_PLUGIN_ID))
+            .map(|entry| &entry.config);
+        Self::from_table(table)
+    }
+
+    fn from_table(table: Option<&toml::Table>) -> Self {
+        let Some(table) = table else { return Self::default() };
+        let read_list = |key| {
+            table.get(key).and_then(toml::Value::as_array).map(|list| {
+                list.iter().filter_map(toml::Value::as_str)
+                    .map(|entry| entry.trim().to_ascii_lowercase()).collect()
+            })
+        };
+        Self {
+            navigation_mode: NavigationMode::from_str_opt(table.get("navigation").and_then(toml::Value::as_str)),
+            confirm_intents: read_list("confirm").unwrap_or_else(|| Self::default().confirm_intents),
+            confirm_allow: read_list("confirm_allow").unwrap_or_default(),
         }
     }
 }
@@ -122,15 +138,72 @@ pub fn check_navigation_policy(
     }
 }
 
-/// Check if an action target, element name, or DSL op involves a sensitive intent
-pub fn check_sensitive_intent(label: &str, config: &PolicyConfig) -> Option<String> {
-    let lower = label.to_lowercase();
-    for intent in &config.confirm_intents {
-        if lower.contains(intent.as_str()) {
-            return Some(format!("needs_confirm: approve {intent} in Anarc, then retry"));
-        }
+#[derive(Default)]
+pub struct Confirmations {
+    approved: HashSet<(String, String)>,
+}
+
+impl Confirmations {
+    // The approval UI can call this after the user approves. There is no agent command for it.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn approve(&mut self, origin: &str, intent: &str) {
+        self.approved.insert((origin.to_string(), intent.to_string()));
     }
-    None
+
+    pub fn required(&self, config: &PolicyConfig, origin: &str, intent: &str) -> bool {
+        if origin == "null" {
+            return config.confirm_intents.contains(intent);
+        }
+        config.confirm_intents.contains(intent)
+            && !config.confirm_allow.contains(&format!("{origin}:{intent}"))
+            && !crate::shield::url_host(origin).is_some_and(|host| {
+                config.confirm_allow.contains(&format!("{host}:{intent}"))
+            })
+            && !self.approved.contains(&(origin.to_string(), intent.to_string()))
+    }
+}
+
+pub const ACTION_CONTEXT: &str = r#"target => {
+    if (!target) return [location.origin, ''];
+    const selector = 'button, [role=button], input[type=submit], input[type=button], a';
+    let action = target.closest(selector) || target;
+    const form = action.form || action.closest('form');
+    if (action === target && form && !action.matches(selector)) {
+        action = Array.from(form.elements).find(el => el.type === 'submit' && !el.disabled) || action;
+    }
+    const dialog = action.closest('dialog[open], [role=alertdialog], [role=dialog]');
+    const name = (action.getAttribute('aria-label') || action.innerText || action.value || '').trim();
+    const panel = dialog || form || document.querySelector('main,[role=main]') || document.body;
+    const context = panel?.innerText || '';
+    const fields = Array.from(panel?.querySelectorAll('input, [role=textbox]') || [])
+        .filter(el => el.checkVisibility());
+    const fieldName = field => ['autocomplete', 'name', 'aria-label', 'placeholder']
+        .map(attr => field.getAttribute(attr) || '').join(' ');
+    const card = fields.some(field => /cc-(number|exp|csc)|card[ _-]?number|\bcvv\b|\bcvc\b/i.test(fieldName(field)));
+    const amount = fields.some(field => /\b(amount|currency|total|payment)\b/i.test(fieldName(field)));
+    const currency = /(?:[$€£]\s*\d|\d\s*(?:USD|EUR|GBP)\b)/i.test(context);
+    const submit = action.type === 'submit' || (target === action && !!form && target.matches('input'));
+    let intent = '';
+    if (dialog && /\b(delete|remove|erase|destroy)\b/i.test(name)
+        && /\b(confirm|are you sure|permanent(?:ly)?|cannot be undone)\b/i.test(context)) {
+        intent = 'delete';
+    } else if (dialog && /\b(allow|grant|approve|authorize)\b/i.test(name)
+        && /\b(permission|access|camera|microphone|location|notifications)\b/i.test(context)) {
+        intent = 'permission_grant';
+    } else if (/\b(transfer|send money)\b/i.test(name) && (amount || (form && currency))) {
+        intent = 'transfer';
+    } else if ((card && /\b(pay|purchase|buy|checkout|order)\b/i.test(name)) || (form && submit && currency)) {
+        intent = 'purchase';
+    } else if ((card || amount) && (submit || /\b(pay|payment)\b/i.test(name))) {
+        intent = 'payment';
+    } else if (/^send\b/i.test(name) && panel?.querySelector('textarea,[contenteditable=true],[role=textbox]')) {
+        intent = 'send';
+    }
+    return [location.origin, intent];
+}"#;
+
+pub fn confirmation_message(intent: &str) -> String {
+    format!("needs_confirm: waiting for user approval in Anarc (intent={intent}). Do not retry; call again after approval.")
 }
 
 /// Check if page contents or title indicate a human handoff is required (CAPTCHA, 2FA, OTP, payment gateway)
@@ -278,15 +351,23 @@ mod tests {
     }
 
     #[test]
-    fn test_sensitive_intent_confirm_gate() {
+    fn approvals_are_scoped_to_origin_and_intent() -> Result<(), toml::de::Error> {
         let config = PolicyConfig::default();
-        let res = check_sensitive_intent("Complete Purchase and Pay $50", &config);
-        assert!(res.is_some());
-        let msg = res.unwrap_or_default();
-        assert!(msg.contains("needs_confirm"));
+        let mut approvals = Confirmations::default();
+        assert!(!approvals.required(&config, "https://chatgpt.com", "send"));
+        assert!(approvals.required(&config, "https://shop.example", "purchase"));
+        approvals.approve("https://shop.example", "purchase");
+        assert!(!approvals.required(&config, "https://shop.example", "purchase"));
+        assert!(approvals.required(&config, "https://shop.example:444", "purchase"));
+        assert!(approvals.required(&config, "https://elsewhere.example", "purchase"));
+        assert!(approvals.required(&config, "https://shop.example", "delete"));
 
-        let safe = check_sensitive_intent("Search repository documentation", &config);
-        assert!(safe.is_none());
+        let table = toml::from_str("confirm = ['send']
+confirm_allow = ['chatgpt.com:send']")?;
+        let config = PolicyConfig::from_table(Some(&table));
+        assert!(!approvals.required(&config, "https://chatgpt.com", "send"));
+        assert!(approvals.required(&config, "https://another.example", "send"));
+        Ok(())
     }
 
     #[test]
