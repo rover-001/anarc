@@ -400,7 +400,7 @@ const BUNDLED_FILTER_LISTS: &[&str] = &[
     include_str!("../assets/filters/ublock-filters.txt"),
     include_str!("../assets/filters/ublock-badware.txt"),
     include_str!("../assets/filters/pgl.txt"),
-    include_str!("../assets/filters/lumen.txt"),
+    include_str!("../assets/filters/anarc.txt"),
 ];
 
 fn build_filter_engine(user_lists: &[String], pack_lists: &[String]) -> adblock::Engine {

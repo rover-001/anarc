@@ -2934,5 +2934,50 @@
     "symbols": [],
     "guidance": "Implemented all 6 Anarc Agent Control architectural enhancements across act.rs, indexer.js, observe.rs, refs.rs, plugin.rs, server.rs, callbacks.rs, and anarc_ctl.rs. Enabled systemd user socket activation and verified live against active ChatGPT tab.",
     "updated_at": "2026-11-21T12:58:25.280422645+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/agent/act.rs",
+      "src/agent/plugin.rs",
+      "src/app/actions/mod.rs",
+      "src/app/actions/tabs.rs",
+      "src/bin/anarc_ctl.rs"
+    ],
+    "symbols": [],
+    "guidance": "Implemented tab controls (pin, unpin, fav, close), removed headless fallback by connecting MCP to live GUI anarc-ctl, opened YouTube and pinned it in Anarc, retrieved user leads from Acquisition CRM, committed and pushed to feat/agent-control.",
+    "updated_at": "2026-11-21T14:00:43.048639904+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/agent/act.rs",
+      "src/agent/plugin.rs",
+      "src/app/actions/mod.rs",
+      "src/app/actions/tabs.rs",
+      "src/bin/anarc_ctl.rs"
+    ],
+    "symbols": [],
+    "guidance": "Opened YouTube in Anarc browser, pinned tab to pinned tabs, and fetched homepage recommendations.",
+    "updated_at": "2026-11-21T14:06:12.543356273+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "lumen-plugin-sdk/src/lib.rs",
+      "src/agent/act.rs",
+      "src/agent/plugin.rs",
+      "src/app/actions/mod.rs",
+      "src/app/actions/tabs.rs",
+      "src/bin/anarc_ctl.rs",
+      "src/shield.rs",
+      "tools/lumen-mcp/cli.py",
+      "tools/lumen-mcp/server.py",
+      "tools/lumen-mcp/test_lumen_mcp.py",
+      "tools/lumen-signer/src/main.rs"
+    ],
+    "symbols": [],
+    "guidance": "Renamed lumen to anarc across MCP configs, git worktrees (anarc-landing-page), plugin SDK (anarc-plugin-sdk), filters, install scripts, and removed legacy lumen tools and symlinks.",
+    "updated_at": "2026-11-21T14:16:07.270798225+00:00"
   }
 ]

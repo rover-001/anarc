@@ -1,8 +1,8 @@
 [package]
-name = "lumen-tidy-tabs"
+name = "anarc-tidy-tabs"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [dependencies]
-lumen-plugin-sdk = { path = "../../../lumen-plugin-sdk" }
+anarc-plugin-sdk = { path = "../../../anarc-plugin-sdk" }
