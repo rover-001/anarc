@@ -82,7 +82,7 @@ impl Lumen {
 
     /// Favorites take precedence over pinning and folders so each tab lives in
     /// exactly one sidebar section.
-    pub(in crate::app) fn favorite_tab(&mut self, tab_id: &str, favorite: bool) {
+    pub(crate) fn favorite_tab(&mut self, tab_id: &str, favorite: bool) {
         let mut changed = false;
         if let Some(space) = self
             .spaces
@@ -112,7 +112,7 @@ impl Lumen {
     }
 
     /// Pinned tabs render directly below the favorites grid.
-    pub(in crate::app) fn pin_tab(&mut self, tab_id: &str, pinned: bool) {
+    pub(crate) fn pin_tab(&mut self, tab_id: &str, pinned: bool) {
         let mut changed = false;
         if let Some(space) = self
             .spaces
@@ -143,7 +143,7 @@ impl Lumen {
 
     /// Dragging a tab out of a favorite/pinned/folder section and dropping it
     /// on the regular tab list returns it to the plain section.
-    pub(in crate::app) fn clear_tab_section(&mut self, tab_id: &str) {
+    pub(crate) fn clear_tab_section(&mut self, tab_id: &str) {
         let mut changed = false;
         if let Some(space) = self
             .spaces
@@ -296,7 +296,7 @@ impl Lumen {
             self.close_tab_by_id(&active_id);
         }
     }
-    pub(in crate::app) fn close_tab_by_id(&mut self, tab_id: &str) -> bool {
+    pub(crate) fn close_tab_by_id(&mut self, tab_id: &str) -> bool {
         let Some(space) = self
             .spaces
             .iter_mut()
