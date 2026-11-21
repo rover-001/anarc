@@ -98,7 +98,6 @@ rm -f "$APP_DIR/bin/anarc.tmp" 2>/dev/null || true
 cp -f "$BUNDLE_BIN" "$APP_DIR/bin/anarc.tmp"
 chmod 755 "$APP_DIR/bin/anarc.tmp"
 mv -f "$APP_DIR/bin/anarc.tmp" "$APP_DIR/bin/anarc"
-ln -sf anarc "$APP_DIR/bin/lumen"
 
 # CEF runtime: copy only runtime files (skip cmake/, include/, CMakeLists, etc.)
 echo "==> Installing CEF runtime to $CEF_DIR"
@@ -155,7 +154,6 @@ fi
 exec "$APP_DIR/bin/anarc" "\$@"
 EOF
 chmod 755 "$BIN_DIR/anarc"
-ln -sf anarc "$BIN_DIR/lumen"
 
 # --- Desktop entry + icon ---------------------------------------------------
 if [ "$NO_DESKTOP" -eq 0 ]; then
