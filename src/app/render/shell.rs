@@ -1207,9 +1207,14 @@ impl Lumen {
                 && browser_modifier
                 && !modifiers.shift
                 && key == "w"
-                && this.app_page.is_some()
             {
-                this.close_app_page();
+                if this.app_page.is_some() {
+                    this.close_app_page();
+                } else if this.peek.is_some() {
+                    this.close_peek();
+                } else {
+                    this.close_active_tab();
+                }
                 window.prevent_default();
                 cx.stop_propagation();
                 cx.notify();

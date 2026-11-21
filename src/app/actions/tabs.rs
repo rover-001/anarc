@@ -278,7 +278,6 @@ impl Lumen {
     pub(crate) fn close_active_tab(&mut self) {
         let active_id = self.focused_tab_id().to_owned();
         if active_id.is_empty() {
-            self.add_tab();
             return;
         }
         let is_kept_page = self
