@@ -1,7 +1,7 @@
 ---
 type: decision
 title: "Consolidated: Cloud Sync & Tombstones"
-timestamp: 2026-11-19T03:30:55.014822500+00:00
+timestamp: 2026-11-21T02:46:41.838783209+00:00
 tags: [consolidated, "cloud-sync-&-tombstones"]
 ---
 
@@ -11,6 +11,7 @@ Consolidated architectural decisions, system invariants, and implementation patt
 
 ## Core System Decisions & Invariants
 
+- **Push Live Share plugin and separate Agent Control branch**: Separated working tree into two clean, self-contained branches without touching main: 1) live-share: committed and pushed Live Share plugin, live cursor broadcasting, peer cursor overlays, space sync, and DevTools cookie synchronization to origin/live-share (803e85c); 2) feat/agent-control: branched from live-share, committed and pushed full Agent Control pipeline (src/agent/, anarc-ctl CLI/MCP server, indexer.js, typed refs, act/observe, skill docs, and benchmarks) to origin/feat/agent-control (dc296c1). main remained untouched.
 - **Frame sync via external begin frame driven by GPUI vsync**: Set external_begin_frame_enabled = 1 and aligned host.send_external_begin_frame() with GPUI per-frame vsync callbacks. Eliminated timer phase drift and reduced p99 frame latency from 25.6ms to 20.9ms on heavy pages.
 - **Wayland clipboard synchronization and scroll/cursor responsiveness**: Fixed web text copying across all methods by removing unregistered script URL schemes from execute_java_script, registering DOM copy and mouseup handlers in the capturing phase on window and document, proxying navigator.clipboard.writeText directly to wl-copy, forwarding keydown events during Ctrl+C/Ctrl+X, adding get_selected_text for context-menu Copy, falling back to system clipboard in the address bar, and waking the UI loop on cursor changes with round-based scroll delta accumulation.
 - **Fix pinch-to-zoom cursor anchoring and hianime ad shields**: 1. Derived the exact mathematical formula for visual viewport drift: (x + scroll_x) * (next / previous - 1.0) and clamped within allowable viewport boundaries to keep the cursor focal point stationary across all zoom scales and pans. 2. Preserved subpixel fractions across frames with step_pinch_accum and removed artificial smooth-scrolling momentum easing so scale and wheel input apply on the identical frame. 3. Tuned pinch coalescing to 6ms to sync with 144Hz displays and default windowless frame rate to monitor refresh rate. 4. Added hianime and anime streaming rotator ad networks, popup defusers, and cosmetic banner blockers to bundled shield filters.
@@ -19,10 +20,11 @@ Consolidated architectural decisions, system invariants, and implementation patt
 
 ## Impacted Files & Subsystems
 
-*(Files referenced in historical session logs)*
+- `indexer.js`
 
-## Consolidated Evolution History (5 items archived)
+## Consolidated Evolution History (6 items archived)
 
+- 2026-11-21 — Push Live Share plugin and separate Agent Control branch (`push-live-share-plugin-and-separate-agent-control-branch.md`)
 - 2026-11-19 — Frame sync via external begin frame driven by GPUI vsync (`frame-sync-via-external-begin-frame-driven-by-gpui-vsync.md`)
 - 2026-11-12 — Wayland clipboard synchronization and scroll/cursor responsiveness (`wayland-clipboard-synchronization-and-scrollcursor-responsiveness.md`)
 - 2026-11-12 — Fix pinch-to-zoom cursor anchoring and hianime ad shields (`fix-pinch-to-zoom-cursor-anchoring-and-hianime-ad-shields.md`)

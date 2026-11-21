@@ -23,6 +23,7 @@ pub enum TabAction {
 pub enum WaitCondition {
     Idle,
     Stable(u64),
+    Stream { quiescent_ms: u64, timeout_ms: u64 },
     Millis(u64),
     Text(String),
 }
@@ -35,6 +36,7 @@ pub enum ActionOp {
     AppendText { ref_id: String, text: String },
     TypeSecret { ref_id: String, secret_name: String },
     SemanticType { kind: char, label: String, text: String },
+    Paste { ref_id: Option<String>, text: Option<String> },
     Key { chord: String },
     Submit,
     Go { url: String },
@@ -46,10 +48,114 @@ pub enum ActionOp {
     Focus { ref_id: String },
     Drag { from_ref: String, to_ref: String },
     XY { x: i32, y: i32 },
-    Upload { ref_id: String, file_path: String },
+    Upload { ref_id: String, file_paths: Vec<String> },
     Dialog { accept: bool },
     Tab { action: TabAction },
     Wait { condition: WaitCondition },
+}
+
+static PENDING_UPLOADS: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+
+pub fn set_pending_upload_files(files: Vec<String>) {
+    if let Ok(mut guard) = PENDING_UPLOADS.lock() {
+        *guard = Some(files);
+    }
+}
+
+pub fn take_pending_upload_files() -> Option<Vec<String>> {
+    PENDING_UPLOADS.lock().ok()?.take()
+}
+
+fn read_file_arg(file_path: &str) -> Result<String, String> {
+    let unquoted = unquote(file_path);
+    let p = std::path::Path::new(unquoted.trim());
+    std::fs::read_to_string(p)
+        .map_err(|e| format!("cannot read file '{file_path}': {e}. use: see"))
+}
+
+fn expand_file_arg(arg: &str) -> Vec<String> {
+    if arg.contains('*') || arg.contains('?') {
+        let p = std::path::Path::new(arg);
+        let parent = p.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let file_pattern = p.file_name().and_then(|f| f.to_str()).unwrap_or("*");
+        let mut matched = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if matches_simple_glob(&name_str, file_pattern) {
+                    matched.push(entry.path().to_string_lossy().to_string());
+                }
+            }
+        }
+        matched.sort();
+        if !matched.is_empty() {
+            return matched;
+        }
+    }
+    vec![arg.to_string()]
+}
+
+fn matches_simple_glob(name: &str, pattern: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return name.ends_with(suffix);
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return name.starts_with(prefix);
+    }
+    name == pattern
+}
+
+fn split_statements(input: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+
+    for ch in input.chars() {
+        if ch == '\r' {
+            continue;
+        }
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            current.push(ch);
+            continue;
+        }
+        if ch == '"' && !in_single {
+            in_double = !in_double;
+            current.push(ch);
+            continue;
+        }
+        if ch == '\'' && !in_double {
+            in_single = !in_single;
+            current.push(ch);
+            continue;
+        }
+
+        if (ch == ';' || ch == '\n') && !in_single && !in_double {
+            let trimmed = current.trim();
+            if !trimmed.is_empty() {
+                statements.push(trimmed.to_string());
+            }
+            current.clear();
+        } else {
+            current.push(ch);
+        }
+    }
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        statements.push(trimmed.to_string());
+    }
+    statements
 }
 
 pub fn parse_dsl(input: &str) -> Result<Vec<ActionOp>, String> {
@@ -61,8 +167,7 @@ fn parse_dsl_at_depth(input: &str, depth: usize) -> Result<Vec<ActionOp>, String
         return Err("macro nesting limit. use: see".into());
     }
     let mut ops = Vec::new();
-    let sanitized = input.replace('\r', "");
-    let statements = sanitized.split([';', '\n']);
+    let statements = split_statements(input);
 
     for stmt in statements {
         let trimmed = stmt.trim();
@@ -169,12 +274,60 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         return Ok(ActionOp::XY { x, y });
     }
 
-    // Upload: "up ref /path/file"
-    if let Some(stripped) = s.strip_prefix("up ") {
+    // Paste: "paste", "paste b1", "paste b1 text", "paste b1 @file:...", "paste @file:..."
+    if s == "paste" || s.starts_with("paste ") {
+        let rest = s.strip_prefix("paste").unwrap_or("").trim();
+        if rest.is_empty() {
+            return Ok(ActionOp::Paste { ref_id: None, text: None });
+        }
+        if let Some(file_path) = rest.strip_prefix("@file:") {
+            let content = read_file_arg(file_path)?;
+            return Ok(ActionOp::Paste { ref_id: None, text: Some(content) });
+        }
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        let first = parts.get(0).copied().unwrap_or("");
+        let mut first_chars = first.chars();
+        let is_ref = first_chars.next().is_some_and(|c| c.is_ascii_lowercase())
+            && !first_chars.as_str().is_empty()
+            && first_chars.all(|c| c.is_ascii_digit());
+
+        if is_ref {
+            let ref_id = first.to_string();
+            let remainder = rest.get(first.len()..).unwrap_or("").trim();
+            if remainder.is_empty() {
+                return Ok(ActionOp::Paste { ref_id: Some(ref_id), text: None });
+            }
+            if let Some(file_path) = remainder.strip_prefix("@file:") {
+                let content = read_file_arg(file_path)?;
+                return Ok(ActionOp::Paste { ref_id: Some(ref_id), text: Some(content) });
+            }
+            return Ok(ActionOp::Paste { ref_id: Some(ref_id), text: Some(unquote(remainder)) });
+        } else {
+            return Ok(ActionOp::Paste { ref_id: None, text: Some(unquote(rest)) });
+        }
+    }
+
+    // Upload: "up ref /path/file...", "upload ref /path/file..."
+    if let Some(stripped) = s.strip_prefix("upload ").or_else(|| s.strip_prefix("up ")) {
         let parts: Vec<&str> = stripped.split_whitespace().collect();
+        if parts.is_empty() {
+            return Err("missing upload ref and path. use: do \"upload i1 /path/file\"".into());
+        }
         let r = parts.get(0).copied().unwrap_or("").to_string();
-        let path = parts.get(1).copied().unwrap_or("").to_string();
-        return Ok(ActionOp::Upload { ref_id: r, file_path: path });
+        let raw_paths = parts.get(1..).unwrap_or(&[]);
+        if raw_paths.is_empty() {
+            return Err("missing upload file path. use: do \"upload i1 /path/file\"".into());
+        }
+        let mut file_paths = Vec::new();
+        for &raw_path in raw_paths {
+            let unq = unquote(raw_path);
+            let expanded = expand_file_arg(&unq);
+            file_paths.extend(expanded);
+        }
+        if file_paths.is_empty() {
+            return Err("no matching files found for upload. use: see".into());
+        }
+        return Ok(ActionOp::Upload { ref_id: r, file_paths });
     }
 
     // Dialog: "dialog ok", "dialog cancel"
@@ -199,7 +352,7 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         return Ok(ActionOp::Tab { action });
     }
 
-    // Wait: "wait idle", "wait 500", "wait \"Text\""
+    // Wait: "wait idle", "wait 500", "wait stream", "wait stream 15000", "wait text-quiescent 1000", "wait \"Text\""
     if let Some(stripped) = s.strip_prefix("wait ") {
         let w = stripped.trim();
         let condition = if w == "idle" {
@@ -210,6 +363,17 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
             let ms = interval.trim().parse::<u64>().ok().filter(|ms| (1..=30000).contains(ms))
                 .ok_or("invalid stable wait. use: do \"wait stable 1500\"")?;
             WaitCondition::Stable(ms)
+        } else if w == "stream" {
+            WaitCondition::Stream { quiescent_ms: 1000, timeout_ms: 30000 }
+        } else if let Some(timeout) = w.strip_prefix("stream ") {
+            let ms = timeout.trim().parse::<u64>().ok().filter(|ms| (1..=60000).contains(ms))
+                .ok_or("invalid stream wait. use: do \"wait stream 15000\"")?;
+            WaitCondition::Stream { quiescent_ms: 1000, timeout_ms: ms }
+        } else if let Some(quiescent) = w.strip_prefix("text-quiescent ") {
+            let parts: Vec<&str> = quiescent.split_whitespace().collect();
+            let q_ms = parts.get(0).and_then(|v| v.parse::<u64>().ok()).unwrap_or(1000);
+            let t_ms = parts.get(1).and_then(|v| v.parse::<u64>().ok()).unwrap_or(30000);
+            WaitCondition::Stream { quiescent_ms: q_ms, timeout_ms: t_ms }
         } else if let Ok(ms) = w.parse::<u64>() {
             WaitCondition::Millis(ms)
         } else {
@@ -219,7 +383,7 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         return Ok(ActionOp::Wait { condition });
     }
 
-    // Semantic selectors: b:"Sign in" or i:"Email"="alice"
+    // Semantic selectors: b:"Sign in" or i:"Email"="alice" or i:"Prompt"=@file:...
     if let Some(colon_idx) = s.find(':') {
         let kind_str = s.get(0..colon_idx).unwrap_or("");
         if kind_str.len() == 1 {
@@ -229,10 +393,15 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
             if let Some(eq_idx) = rest.find('=') {
                 let label_part = rest.get(0..eq_idx).unwrap_or("");
                 let text_part = rest.get(eq_idx.saturating_add(1)..).unwrap_or("");
+                let text = if let Some(file_path) = text_part.trim().strip_prefix("@file:") {
+                    read_file_arg(file_path)?
+                } else {
+                    unquote(text_part)
+                };
                 return Ok(ActionOp::SemanticType {
                     kind: kind_char,
                     label: unquote(label_part),
-                    text: unquote(text_part),
+                    text,
                 });
             } else {
                 return Ok(ActionOp::SemanticClick {
@@ -243,7 +412,7 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         }
     }
 
-    // Assignment: ref=text or ref+text or ref=@secret:name
+    // Assignment: ref=text or ref+text or ref=@secret:name or ref=@file:path
     if let Some(eq_idx) = s.find('=') {
         let ref_id = s.get(0..eq_idx).unwrap_or("").trim().to_string();
         let val_part = s.get(eq_idx.saturating_add(1)..).unwrap_or("").trim();
@@ -252,6 +421,13 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
             return Ok(ActionOp::TypeSecret {
                 ref_id,
                 secret_name: secret_name.trim().to_string(),
+            });
+        }
+        if let Some(file_path) = val_part.strip_prefix("@file:") {
+            let content = read_file_arg(file_path)?;
+            return Ok(ActionOp::ClearAndType {
+                ref_id,
+                text: content,
             });
         }
         return Ok(ActionOp::ClearAndType {
@@ -263,6 +439,14 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
     if let Some(plus_idx) = s.find('+') {
         let ref_id = s.get(0..plus_idx).unwrap_or("").trim().to_string();
         let val_part = s.get(plus_idx.saturating_add(1)..).unwrap_or("").trim();
+
+        if let Some(file_path) = val_part.strip_prefix("@file:") {
+            let content = read_file_arg(file_path)?;
+            return Ok(ActionOp::AppendText {
+                ref_id,
+                text: content,
+            });
+        }
         return Ok(ActionOp::AppendText {
             ref_id,
             text: unquote(val_part),
@@ -294,6 +478,12 @@ fn unquote(s: &str) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum WaitMode {
+    Stable(u64),
+    Stream { quiescent_ms: u64, timeout_ms: u64 },
+}
+
 pub fn execute_dsl(
     app: &mut crate::app::Lumen,
     tab_id: &str,
@@ -303,12 +493,15 @@ pub fn execute_dsl(
     let agent_state = app.engine.agent_state();
     let policy_config = PolicyConfig::load();
     let mut submissions = Vec::new();
-    let (actions, stable) = match ops.split_last() {
-        Some((ActionOp::Wait { condition: WaitCondition::Stable(ms) }, actions)) => (actions, Some(*ms)),
+    let (actions, wait_mode) = match ops.split_last() {
+        Some((ActionOp::Wait { condition: WaitCondition::Stable(ms) }, actions)) => (actions, Some(WaitMode::Stable(*ms))),
+        Some((ActionOp::Wait { condition: WaitCondition::Stream { quiescent_ms, timeout_ms } }, actions)) => {
+            (actions, Some(WaitMode::Stream { quiescent_ms: *quiescent_ms, timeout_ms: *timeout_ms }))
+        }
         _ => (ops, None),
     };
-    if actions.iter().any(|op| matches!(op, ActionOp::Wait { condition: WaitCondition::Stable(_) })) {
-        let _ = response.try_send(AgentResponse::err("stable must be last. use: do \"wait stable\""));
+    if actions.iter().any(|op| matches!(op, ActionOp::Wait { condition: WaitCondition::Stable(_) | WaitCondition::Stream { .. } })) {
+        let _ = response.try_send(AgentResponse::err("stable or stream wait must be last. use: do \"wait stream\""));
         return;
     }
     let mut target = tab_id.to_owned();
@@ -333,25 +526,29 @@ pub fn execute_dsl(
         format!("ok {count} · {}", submissions.join(" · "))
     };
     let tabs = super::plugin::compact_tabs(app);
-    let script = if let Some(ms) = stable {
-        build_stable_call_script(ms)
-    } else {
-        build_see_call_script("view")
+    let script = match wait_mode {
+        Some(WaitMode::Stable(ms)) => build_stable_call_script(ms),
+        Some(WaitMode::Stream { quiescent_ms, timeout_ms }) => super::observe::build_stream_call_script(quiescent_ms, timeout_ms),
+        None => build_see_call_script("view"),
     };
     // DevTools awaits the page promise on its own threads. GPUI can render and process other calls.
     let started = std::time::Instant::now();
     let evaluation = app.engine.evaluate(&target, &script);
     let _ = std::thread::Builder::new().name("anarc-do-worker".into()).spawn(move || {
         let result = evaluation.recv_blocking().ok().and_then(Result::ok);
-        if stable.is_some() {
+        if let Some(mode) = wait_mode {
+            let max_timeout = match mode {
+                WaitMode::Stable(_) => std::time::Duration::from_secs(30),
+                WaitMode::Stream { timeout_ms, .. } => std::time::Duration::from_millis(timeout_ms),
+            };
             if result.as_deref() == Some("streaming")
-                || (result.is_none() && started.elapsed() >= std::time::Duration::from_secs(30))
+                || (result.is_none() && started.elapsed() >= max_timeout)
             {
                 let _ = response.try_send(AgentResponse::success("streaming"));
                 return;
             }
             if result.is_none() {
-                let _ = response.try_send(AgentResponse::err("stable wait interrupted. use: see"));
+                let _ = response.try_send(AgentResponse::err("wait interrupted. use: see"));
                 return;
             }
         }
@@ -526,22 +723,134 @@ fn execute_single_op(
             app.engine.send_mouse_click(tab_id, x2, y2, cef::MouseButtonType::LEFT, true, 1, &mods);
             Ok(())
         }
-        ActionOp::XY { x, y } => click_at(app, tab_id, *x, *y, policy_config),
-        ActionOp::Upload { ref_id, file_path } => {
-            let p = std::path::Path::new(file_path);
-            if !p.exists() {
-                return Err("file missing. use: see".into());
+        ActionOp::Paste { ref_id, text } => {
+            if let Some(r) = ref_id {
+                let (cx, cy) = resolve_ref_coords(r, tab_id, state_lock)?;
+                check_occlusion(app, tab_id, cx, cy, r)?;
+                click_at(app, tab_id, cx, cy, policy_config)?;
             }
-            let canonical = p.canonicalize().map_err(|_| "file path unavailable. use: see")?;
-            let path_str = canonical.to_string_lossy();
-            if path_str.contains("/.ssh") || path_str.contains("/.gnupg") || path_str.starts_with("/etc") {
-                return Err("upload blocked. use: see".into());
+            let paste_content = if let Some(t) = text {
+                crate::engine::clipboard::write_system_clipboard(t);
+                t.clone()
+            } else {
+                crate::engine::clipboard::read_system_clipboard().unwrap_or_default()
+            };
+            app.engine.set_focus(tab_id, true);
+            let script = format!(
+                r#"(function() {{
+                    const text = {text_json};
+                    const active = document.activeElement;
+                    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {{
+                        const start = active.selectionStart ?? active.value.length;
+                        const end = active.selectionEnd ?? active.value.length;
+                        active.setRangeText(text, start, end, 'end');
+                        active.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        active.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        return 'ok';
+                    }}
+                    let handled = false;
+                    try {{
+                        const event = new ClipboardEvent('paste', {{
+                            clipboardData: new DataTransfer(),
+                            bubbles: true,
+                            cancelable: true
+                        }});
+                        event.clipboardData.setData('text/plain', text);
+                        if (active) handled = !active.dispatchEvent(event);
+                        else handled = !document.dispatchEvent(event);
+                    }} catch (_) {{}}
+                    if (!handled) {{
+                        try {{
+                            document.execCommand('insertText', false, text);
+                            handled = true;
+                        }} catch (_) {{}}
+                    }}
+                    return handled ? 'ok' : 'fallback';
+                }})()"#,
+                text_json = serde_json::json!(paste_content)
+            );
+            let res = evaluate_action(app, tab_id, &script).unwrap_or_else(|_| "fallback".into());
+            if res != "ok" {
+                let control = gpui_kit::Modifiers { control: true, ..Default::default() };
+                press_key(app, tab_id, "v", &control);
+            }
+            let op_str = if let Some(r) = ref_id {
+                format!("paste {r}")
+            } else {
+                "paste".into()
+            };
+            super::playbook::record_action(&op_str);
+            Ok(())
+        }
+        ActionOp::XY { x, y } => click_at(app, tab_id, *x, *y, policy_config),
+        ActionOp::Upload { ref_id, file_paths } => {
+            let mut valid_paths = Vec::new();
+            for file_path in file_paths {
+                let p = std::path::Path::new(file_path);
+                if !p.exists() {
+                    return Err(format!("file missing: {file_path}. use: see"));
+                }
+                let canonical = p.canonicalize().map_err(|_| "file path unavailable. use: see")?;
+                let path_str = canonical.to_string_lossy().to_string();
+                if path_str.contains("/.ssh") || path_str.contains("/.gnupg") || path_str.starts_with("/etc") {
+                    return Err("upload blocked. use: see".into());
+                }
+                valid_paths.push(path_str);
+            }
+            if valid_paths.is_empty() {
+                return Err("no valid files to upload. use: see".into());
             }
 
+            // Set pending upload files for CEF on_file_dialog interception
+            set_pending_upload_files(valid_paths.clone());
+
             let (cx, cy) = resolve_ref_coords(ref_id, tab_id, state_lock)?;
+
+            // Try CDP DOM.setFileInputFiles first if ref is / contains input[type=file]
+            let cdp_eval_script = format!(
+                r#"(() => {{
+                    const el = document.elementFromPoint({cx}, {cy});
+                    if (!el) return null;
+                    const input = el.matches('input[type=file]') ? el :
+                        (el.querySelector('input[type=file]') || el.closest('label')?.querySelector('input[type=file]') || document.querySelector('input[type=file]'));
+                    return input ? true : false;
+                }})()"#
+            );
+            let has_file_input = evaluate_action(app, tab_id, &cdp_eval_script).map(|s| s == "true").unwrap_or(false);
+
+            if has_file_input {
+                let eval_params = serde_json::json!({
+                    "expression": format!(
+                        r#"document.elementFromPoint({cx}, {cy})?.matches('input[type=file]') ?
+                            document.elementFromPoint({cx}, {cy}) :
+                            (document.elementFromPoint({cx}, {cy})?.querySelector('input[type=file]') ||
+                             document.elementFromPoint({cx}, {cy})?.closest('label')?.querySelector('input[type=file]') ||
+                             document.querySelector('input[type=file]'))"#
+                    ),
+                    "returnByValue": false
+                });
+                if let Ok(Ok(obj_res)) = app.engine.devtools(tab_id, "Runtime.evaluate", Some(&eval_params.to_string())).recv_blocking() {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&obj_res) {
+                        if let Some(object_id) = parsed.pointer("/result/objectId").and_then(|v| v.as_str()) {
+                            let set_files_params = serde_json::json!({
+                                "files": valid_paths,
+                                "objectId": object_id
+                            });
+                            let _ = app.engine.devtools(tab_id, "DOM.setFileInputFiles", Some(&set_files_params.to_string())).recv_blocking();
+                        }
+                    }
+                }
+            }
+
+            // Click to trigger native file chooser if necessary (which LumenDialogHandler intercepts)
             click_at(app, tab_id, cx, cy, policy_config)?;
-            let script = "(function() { var el = document.activeElement; if (el && el.type === 'file') { el.dispatchEvent(new Event('change', { bubbles: true })); } })()";
-            app.engine.execute_script(tab_id, script);
+
+            let change_script = "(function() { var el = document.activeElement; if (el && el.type === 'file') { el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); } })()";
+            app.engine.execute_script(tab_id, change_script);
+
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let _ = take_pending_upload_files();
+            super::playbook::record_action(&format!("upload {ref_id}"));
             Ok(())
         }
         ActionOp::Dialog { accept } => {
@@ -562,13 +871,29 @@ fn execute_single_op(
                         .map(|tab| tab.id.clone())
                         .ok_or_else(|| super::plugin::no_such_tab(&super::plugin::compact_tabs(app)))?;
                     app.activate_tab_in_active_space(&id);
+                    // Ensure browser is awake for newly activated tab
+                    let space_id = app.active_space().id.clone();
+                    let url = app.active_space().tabs.iter().find(|t| t.id == id).map(|t| t.url.clone()).unwrap_or_default();
+                    if !app.engine.has_browser(&id) && !app.engine.agent_browser_pending(&id) {
+                        let wake_url = if url.is_empty() || url == "lumen://welcome" { "about:blank" } else { &url };
+                        let _ = app.engine.ensure_browser(&space_id, &id, wake_url, 768, 512, 0, 0.0);
+                    }
+                    // Wait for execution context / frame to mount
+                    for _ in 0..10 {
+                        if app.engine.has_browser(&id) {
+                            if let Ok(Ok(_)) = app.engine.evaluate(&id, "document.readyState").recv_blocking() {
+                                break;
+                            }
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
                 }
             }
             Ok(())
         }
         ActionOp::Wait { condition } => {
             match condition {
-                WaitCondition::Stable(_) => {}
+                WaitCondition::Stable(_) | WaitCondition::Stream { .. } => {}
                 WaitCondition::Millis(ms) => std::thread::sleep(std::time::Duration::from_millis((*ms).min(30000))),
                 WaitCondition::Idle => std::thread::sleep(std::time::Duration::from_millis(150)),
                 WaitCondition::Text(_) => std::thread::sleep(std::time::Duration::from_millis(200)),
@@ -650,6 +975,48 @@ fn type_at(
     } else {
         press_key(app, tab, "End", &control);
     }
+
+    if text.contains('\n') || text.len() > 300 {
+        let fast_paste_script = format!(
+            r#"(function() {{
+                const text = {text_json};
+                const active = document.activeElement;
+                if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {{
+                    const start = active.selectionStart ?? active.value.length;
+                    const end = active.selectionEnd ?? active.value.length;
+                    active.setRangeText(text, start, end, 'end');
+                    active.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    active.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    return 'ok';
+                }}
+                let handled = false;
+                try {{
+                    const event = new ClipboardEvent('paste', {{
+                        clipboardData: new DataTransfer(),
+                        bubbles: true,
+                        cancelable: true
+                    }});
+                    event.clipboardData.setData('text/plain', text);
+                    if (active) handled = !active.dispatchEvent(event);
+                    else handled = !document.dispatchEvent(event);
+                }} catch (_) {{}}
+                if (!handled) {{
+                    try {{
+                        document.execCommand('insertText', false, text);
+                        handled = true;
+                    }} catch (_) {{}}
+                }}
+                return handled ? 'ok' : 'fallback';
+            }})()"#,
+            text_json = serde_json::json!(text)
+        );
+        if let Ok(res) = evaluate_action(app, tab, &fast_paste_script) {
+            if res == "ok" {
+                return Ok(());
+            }
+        }
+    }
+
     app.engine.input_type(tab, text).recv_blocking().ok().and_then(Result::ok)
         .ok_or("typing failed. use: see")?;
     Ok(())
@@ -726,7 +1093,7 @@ fn resolve_ref_coords(
     let registry = guard.registries.get(tab_id).ok_or_else(|| {
         "index missing. use: see"
     })?;
-    let el = registry.resolve_ref(ref_id).ok_or("stale ref. use: see")?;
+    let el = registry.resolve_ref_with_fallback(ref_id).ok_or("stale ref. use: see")?;
     Ok(el.center)
 }
 
@@ -745,6 +1112,13 @@ fn resolve_semantic_coords(
     for el in registry.current_elements.values() {
         if el.kind == kind && el.name.to_lowercase().contains(&label_lower) {
             return Ok((el.center.0, el.center.1, el.id.clone()));
+        }
+    }
+    for el in registry.previous_elements.values() {
+        if el.kind == kind && el.name.to_lowercase().contains(&label_lower) {
+            if let Some(cur) = registry.resolve_ref_with_fallback(&el.id) {
+                return Ok((cur.center.0, cur.center.1, cur.id.clone()));
+            }
         }
     }
     Err("ref missing. use: see".into())
@@ -821,10 +1195,12 @@ mod tests {
             go https://example.com;
             scroll down;
             wait idle;
+            paste b1;
+            wait stream;
         "#;
 
         let ops = parse_dsl(script).unwrap_or_default();
-        assert_eq!(ops.len(), 8);
+        assert_eq!(ops.len(), 10);
         assert_eq!(ops.get(0), Some(&ActionOp::Click { ref_id: "b1".into() }));
         assert_eq!(
             ops.get(1),
@@ -856,6 +1232,37 @@ mod tests {
             })
         );
         assert_eq!(ops.get(7), Some(&ActionOp::Wait { condition: WaitCondition::Idle }));
+        assert_eq!(ops.get(8), Some(&ActionOp::Paste { ref_id: Some("b1".into()), text: None }));
+        assert_eq!(ops.get(9), Some(&ActionOp::Wait { condition: WaitCondition::Stream { quiescent_ms: 1000, timeout_ms: 30000 } }));
+    }
+
+    #[test]
+    fn test_quote_aware_multiline_statement_splitting() {
+        let script = "i1=\"line 1\nline 2; still line 2\"; b1";
+        let ops = parse_dsl(script).unwrap_or_default();
+        assert_eq!(ops.len(), 2);
+        assert_eq!(
+            ops.get(0),
+            Some(&ActionOp::ClearAndType {
+                ref_id: "i1".into(),
+                text: "line 1\nline 2; still line 2".into()
+            })
+        );
+        assert_eq!(ops.get(1), Some(&ActionOp::Click { ref_id: "b1".into() }));
+    }
+
+    #[test]
+    fn test_upload_parsing_multiple_files() {
+        let script = "upload b1 /tmp/test1.png /tmp/test2.png";
+        let ops = parse_dsl(script).unwrap_or_default();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(
+            ops.get(0),
+            Some(&ActionOp::Upload {
+                ref_id: "b1".into(),
+                file_paths: vec!["/tmp/test1.png".into(), "/tmp/test2.png".into()]
+            })
+        );
     }
 
     #[test]

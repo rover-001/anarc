@@ -56,6 +56,21 @@ pub fn is_running() -> bool {
     RUNNING.load(Ordering::SeqCst)
 }
 
+fn get_systemd_listener() -> Option<UnixListener> {
+    if let Ok(listen_pid) = std::env::var("LISTEN_PID") {
+        if listen_pid.parse::<u32>().ok() != Some(std::process::id()) {
+            return None;
+        }
+    }
+    let fds: i32 = std::env::var("LISTEN_FDS").ok()?.parse().ok()?;
+    if fds >= 1 {
+        use std::os::unix::io::FromRawFd;
+        Some(unsafe { UnixListener::from_raw_fd(3) })
+    } else {
+        None
+    }
+}
+
 pub fn start_server(
     handler_tx: async_channel::Sender<(AgentRequest, async_channel::Sender<AgentResponse>)>,
 ) -> Result<PathBuf, String> {
@@ -64,23 +79,34 @@ pub fn start_server(
         return Ok(path.clone());
     }
 
-    let socket_path = resolve_socket(None, None).bind;
-    let unavailable = |_| "socket unavailable. use: anarc-ctl doctor";
-    if let Some(parent) = socket_path.parent().filter(|path| !path.as_os_str().is_empty()) {
-        create_dir_all(parent).map_err(unavailable)?;
-    }
-    let owner = lock_owner(&socket_path, true).map_err(unavailable)?;
-    let _ = remove_dead_socket(&socket_path, &owner);
-    let listener = UnixListener::bind(&socket_path).map_err(unavailable)?;
-    if let Err(error) = set_permissions(&socket_path, Permissions::from_mode(0o600))
-        .and_then(|()| record_owner(&owner, &socket_path))
-    {
-        let _ = remove_file(&socket_path);
-        return Err(unavailable(error).into());
-    }
+    let (listener, socket_path, socket_owner) = if let Some(sys_listener) = get_systemd_listener() {
+        let sock_path = std::env::var("ANARC_CTL_SOCKET")
+            .or_else(|_| std::env::var("ANARC_SOCKET_PATH"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| resolve_socket(None, None).bind);
+        (sys_listener, sock_path, None)
+    } else {
+        let socket_path = resolve_socket(None, None).bind;
+        let unavailable = |_| "socket unavailable. use: anarc-ctl doctor";
+        if let Some(parent) = socket_path.parent().filter(|path| !path.as_os_str().is_empty()) {
+            create_dir_all(parent).map_err(unavailable)?;
+        }
+        let owner = lock_owner(&socket_path, true).map_err(unavailable)?;
+        let _ = remove_dead_socket(&socket_path, &owner);
+        let listener = UnixListener::bind(&socket_path).map_err(unavailable)?;
+        if let Err(error) = set_permissions(&socket_path, Permissions::from_mode(0o600))
+            .and_then(|()| record_owner(&owner, &socket_path))
+        {
+            let _ = remove_file(&socket_path);
+            return Err(unavailable(error).into());
+        }
+        (listener, socket_path, Some(owner))
+    };
 
     RUNNING.store(true, Ordering::SeqCst);
-    *active = Some((socket_path.clone(), owner));
+    if let Some(owner) = socket_owner {
+        *active = Some((socket_path.clone(), owner));
+    }
     drop(active);
 
     let server = std::thread::Builder::new()
