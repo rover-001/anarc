@@ -86,19 +86,19 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
     let s = raw.trim();
 
     // Key chord: "key Enter", "key ctrl+a"
-    if let Some(stripped) = s.strip_prefix("key ") {
+    if let Some(stripped) = s.strip_prefix("key ").or_else(|| (s == "key").then_some("")) {
         let chord = stripped.trim().to_string();
         if chord.is_empty() {
-            return Err("key op requires a key or chord".into());
+            return Err("missing key. use: do \"key Enter\"".into());
         }
         return Ok(ActionOp::Key { chord });
     }
 
     // Go url: "go https://..."
-    if let Some(stripped) = s.strip_prefix("go ") {
+    if let Some(stripped) = s.strip_prefix("go ").or_else(|| (s == "go").then_some("")) {
         let url = stripped.trim().to_string();
         if url.is_empty() {
-            return Err("go op requires a URL".into());
+            return Err("missing URL. use: do \"go https://example.com\"".into());
         }
         return Ok(ActionOp::Go { url });
     }
@@ -144,7 +144,7 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         let from = parts.get(0).copied().unwrap_or("").to_string();
         let to = parts.get(1).copied().unwrap_or("").to_string();
         if from.is_empty() || to.is_empty() {
-            return Err("drag requires from and to refs".into());
+            return Err("missing drag refs. use: see".into());
         }
         return Ok(ActionOp::Drag { from_ref: from, to_ref: to });
     }
@@ -182,7 +182,7 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         } else if let Ok(num) = t.parse::<usize>() {
             TabAction::Select(num)
         } else {
-            return Err(format!("unknown tab action: {t}"));
+            return Err("unknown tab action. use: tabs".into());
         };
         return Ok(ActionOp::Tab { action });
     }
@@ -256,7 +256,7 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         return Ok(ActionOp::Click { ref_id: s.to_string() });
     }
 
-    Err(format!("unrecognized op: {raw}"))
+    Err("unknown action. use: see".into())
 }
 
 fn unquote(s: &str) -> String {
@@ -427,7 +427,7 @@ fn execute_single_op(
             app.engine.execute_script(tab_id, clear_script);
             let secret_val = resolve_secret(secret_name).unwrap_or_default();
             if secret_val.is_empty() {
-                return Err(format!("Secret '{secret_name}' not found in vault"));
+                return Err("secret missing. use: see".into());
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
             let type_rx = app.engine.input_type(tab_id, &secret_val);
@@ -487,8 +487,8 @@ fn execute_single_op(
                 NavigationCheck::CrossSiteWarning(detail) => {
                     eprintln!("[anarc-agent] Cross-site navigation warning: {detail}");
                 }
-                NavigationCheck::RequiresConfirmation(detail) => {
-                    return Err(format!("needs_confirm: Navigation to {detail} requires user confirmation"));
+                NavigationCheck::RequiresConfirmation(_) => {
+                    return Err("needs_confirm: approve navigation in Anarc, then retry".into());
                 }
             }
 
@@ -565,12 +565,12 @@ fn execute_single_op(
         ActionOp::Upload { ref_id, file_path } => {
             let p = std::path::Path::new(file_path);
             if !p.exists() {
-                return Err(format!("File does not exist: {file_path}"));
+                return Err("file missing. use: see".into());
             }
-            let canonical = p.canonicalize().map_err(|e| format!("Cannot resolve path: {e}"))?;
+            let canonical = p.canonicalize().map_err(|_| "file path unavailable. use: see")?;
             let path_str = canonical.to_string_lossy();
             if path_str.contains("/.ssh") || path_str.contains("/.gnupg") || path_str.starts_with("/etc") {
-                return Err("Upload of sensitive system files is blocked by policy".into());
+                return Err("upload blocked. use: see".into());
             }
 
             let (cx, cy) = resolve_ref_coords(ref_id, tab_id, state_lock)?;
@@ -617,13 +617,11 @@ fn resolve_ref_coords(
     tab_id: &str,
     state_lock: &std::sync::Arc<std::sync::Mutex<super::plugin::AgentState>>,
 ) -> Result<(i32, i32), String> {
-    let guard = state_lock.lock().map_err(|_| "State lock error")?;
+    let guard = state_lock.lock().map_err(|_| "state unavailable. use: status")?;
     let registry = guard.registries.get(tab_id).ok_or_else(|| {
-        format!("No index for tab '{tab_id}'. Run 'see' first.")
+        "index missing. use: see"
     })?;
-    let el = registry.resolve_ref(ref_id).ok_or_else(|| {
-        format!("stale {ref_id} (g{})", registry.generation)
-    })?;
+    let el = registry.resolve_ref(ref_id).ok_or("stale ref. use: see")?;
     Ok(el.center)
 }
 
@@ -633,9 +631,9 @@ fn resolve_semantic_coords(
     tab_id: &str,
     state_lock: &std::sync::Arc<std::sync::Mutex<super::plugin::AgentState>>,
 ) -> Result<(i32, i32, String), String> {
-    let guard = state_lock.lock().map_err(|_| "State lock error")?;
+    let guard = state_lock.lock().map_err(|_| "state unavailable. use: status")?;
     let registry = guard.registries.get(tab_id).ok_or_else(|| {
-        format!("No index for tab '{tab_id}'. Run 'see' first.")
+        "index missing. use: see"
     })?;
 
     let label_lower = label.to_lowercase();
@@ -644,7 +642,7 @@ fn resolve_semantic_coords(
             return Ok((el.center.0, el.center.1, el.id.clone()));
         }
     }
-    Err(format!("semantic ref '{kind}:\"{label}\"' not found"))
+    Err("ref missing. use: see".into())
 }
 
 fn check_occlusion(
@@ -652,7 +650,7 @@ fn check_occlusion(
     tab_id: &str,
     x: i32,
     y: i32,
-    ref_id: &str,
+    _ref_id: &str,
 ) -> Result<(), String> {
     let script = format!(
         "(function() {{ \
@@ -666,7 +664,7 @@ fn check_occlusion(
     let eval_rx = app.engine.evaluate(tab_id, &script);
     if let Ok(Ok(res)) = futures_lite::future::block_on(async { eval_rx.recv().await }) {
         if res == "!banner" {
-            return Err(format!("{ref_id} not interactable (covered by !banner)"));
+            return Err("ref covered by !banner. use: see".into());
         }
     }
     Ok(())
@@ -697,6 +695,15 @@ fn parse_chord_modifiers<'a>(chord: &'a str, mods: &mut gpui_kit::Modifiers) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parser_errors_give_next_commands() {
+        for input in ["key", "go", "drag b1", "tab invalid", "bogus", "@missing"] {
+            let error = parse_dsl(input).err().unwrap_or_default();
+            assert!(error.contains("use:") || error.contains("retry"), "{input}: {error}");
+            assert!(error.len() <= 86, "{input}: {error}");
+        }
+    }
 
     #[test]
     fn test_dsl_parser_variety() {

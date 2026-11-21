@@ -86,7 +86,7 @@ pub fn start_server(
     let _ = remove_file(&socket_path);
 
     let listener = UnixListener::bind(&socket_path)
-        .map_err(|e| format!("Failed to bind agent socket at {}: {e}", socket_path.display()))?;
+        .map_err(|_| "socket unavailable. use: status")?;
 
     let _ = set_permissions(&socket_path, Permissions::from_mode(0o600));
 
@@ -127,9 +127,9 @@ pub fn start_server(
                 }
             }
         });
-    if let Err(e) = server {
+    if server.is_err() {
         stop_server();
-        return Err(format!("Failed to spawn server thread: {e}"));
+        return Err("server unavailable. use: status".into());
     }
 
     Ok(socket_path)
@@ -166,17 +166,20 @@ fn handle_connection(
             continue;
         }
 
-        let response = wait_for_tab(parse_client_command(trimmed), Duration::from_secs(3), |request| {
+        let response = match parse_client_command(trimmed) {
+            Ok(request) => wait_for_tab(request, Duration::from_secs(3), |request| {
             let (resp_tx, resp_rx) = async_channel::bounded(1);
             if handler_tx.try_send((request, resp_tx)).is_err() {
-                return AgentResponse::err("Agent handler busy or unavailable");
+                return AgentResponse::err("agent busy. use: status");
             }
-            resp_rx.recv_blocking().unwrap_or_else(|_| AgentResponse::err("Agent processing dropped"))
-        });
+            resp_rx.recv_blocking().unwrap_or_else(|_| AgentResponse::err("agent disconnected. use: status"))
+            }),
+            Err(message) => AgentResponse::err(message),
+        };
 
         let json = match serde_json::to_string(&response) {
             Ok(s) => s,
-            Err(e) => format!("{{\"ok\":false,\"error\":\"{e}\"}}"),
+            Err(_) => r#"{"ok":false,"error":"invalid reply. use: status"}"#.into(),
         };
         if writeln!(stream, "{json}").is_err() {
             break;
@@ -205,16 +208,16 @@ fn wait_for_tab(
     response
 }
 
-pub fn parse_client_command(input: &str) -> AgentRequest {
+pub fn parse_client_command(input: &str) -> Result<AgentRequest, &'static str> {
     if let Ok(req) = serde_json::from_str::<AgentRequest>(input) {
-        return req;
+        return Ok(req);
     }
 
     // Support plain CLI command strings like "see view", "read page text", "find search", "tabs"
     let parts: Vec<&str> = input.split_whitespace().collect();
     let cmd = parts.get(0).copied().unwrap_or("");
 
-    match cmd {
+    Ok(match cmd {
         "see" => {
             let scope = parts.get(1).map(|s| s.to_string());
             AgentRequest::See { tab_id: None, scope }
@@ -232,8 +235,8 @@ pub fn parse_client_command(input: &str) -> AgentRequest {
         "pause" => AgentRequest::Pause,
         "resume" => AgentRequest::Resume,
         "status" => AgentRequest::Status,
-        _ => AgentRequest::See { tab_id: None, scope: None },
-    }
+        _ => return Err("unknown command. use: tabs"),
+    })
 }
 
 #[cfg(test)]
@@ -275,12 +278,13 @@ mod tests {
 
     #[test]
     fn test_parse_client_command_json_and_plain() {
+        assert_eq!(parse_client_command("bogus").err(), Some("unknown command. use: tabs"));
         let json = r#"{"cmd":"see","scope":"all"}"#;
         let req = parse_client_command(json);
-        assert!(matches!(req, AgentRequest::See { scope: Some(scope), .. } if scope == "all"));
+        assert!(matches!(req, Ok(AgentRequest::See { scope: Some(scope), .. }) if scope == "all"));
 
         let plain = "find submit button";
         let req2 = parse_client_command(plain);
-        assert!(matches!(req2, AgentRequest::Find { query, .. } if query == "submit button"));
+        assert!(matches!(req2, Ok(AgentRequest::Find { query, .. }) if query == "submit button"));
     }
 }

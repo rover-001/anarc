@@ -62,17 +62,17 @@ fn send_socket_request(
         .map_err(|_| "anarc not running: start it, then retry".to_string())?;
 
     let req_str = serde_json::to_string(request_val).unwrap_or_default();
-    writeln!(stream, "{req_str}").map_err(|e| format!("Failed to send request: {e}"))?;
+    writeln!(stream, "{req_str}").map_err(|_| "request failed. use: status")?;
 
     let mut reader = BufReader::new(stream);
     let mut resp_line = String::new();
     reader
         .read_line(&mut resp_line)
-        .map_err(|e| format!("Failed to read response: {e}"))?;
+        .map_err(|_| "reply failed. use: status")?;
 
     let parsed: serde_json::Value = match serde_json::from_str(resp_line.trim()) {
         Ok(v) => v,
-        Err(_) => return Ok(resp_line),
+        Err(_) => return Err("invalid reply. use: status".into()),
     };
 
     let is_ok = parsed.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -87,7 +87,7 @@ fn send_socket_request(
         let err = parsed
             .get("error")
             .and_then(|v| v.as_str())
-            .unwrap_or("Unknown agent error")
+            .unwrap_or("agent error. use: tabs")
             .to_string();
         Err(err)
     }
@@ -98,7 +98,7 @@ fn send_socket_request(
     _socket_path: &PathBuf,
     _request_val: &serde_json::Value,
 ) -> Result<String, String> {
-    Err("anarc-ctl is only supported on Unix systems".to_string())
+    Err("Unix required. use: anarc-ctl --help".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -106,10 +106,11 @@ fn send_socket_request(
 // ---------------------------------------------------------------------------
 
 fn get_tool_definitions() -> serde_json::Value {
+    const RECOVERY: &str = "Never read Anarc source. On any error run `tabs` then `see`. Errors say what to do next.";
     serde_json::json!([
         {
             "name": "see",
-            "description": "Compact interactive elements index (inputs, buttons, links).",
+            "description": format!("Compact interactive elements index (inputs, buttons, links). {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -119,15 +120,14 @@ fn get_tool_definitions() -> serde_json::Value {
                         "enum": ["view", "all", "main", "+"]
                     },
                     "tab_id": {
-                        "type": "string",
-                        "description": "Target tab ID (optional, defaults to active tab)"
+                        "type": "string"
                     }
                 }
             }
         },
         {
             "name": "do",
-            "description": "Execute browser actions DSL: click, type, keys, navigate, scroll.",
+            "description": format!("Execute browser actions DSL: click, type, keys, navigate, scroll. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -136,8 +136,7 @@ fn get_tool_definitions() -> serde_json::Value {
                         "description": "DSL ops (e.g. b1; i2=\"text\"; key Enter; scroll down)"
                     },
                     "tab_id": {
-                        "type": "string",
-                        "description": "Target tab ID (optional, defaults to active tab)"
+                        "type": "string"
                     }
                 },
                 "required": ["ops"]
@@ -145,13 +144,12 @@ fn get_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "read",
-            "description": "Read page content in text, table, links, or outline mode.",
+            "description": format!("Read page content in text, table, links, or outline mode. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "target": {
-                        "type": "string",
-                        "description": "Element ref or 'page' (default: page)"
+                        "type": "string"
                     },
                     "mode": {
                         "type": "string",
@@ -159,51 +157,49 @@ fn get_tool_definitions() -> serde_json::Value {
                         "enum": ["text", "table", "links", "outline"]
                     },
                     "max": {
-                        "type": "integer",
-                        "description": "Max characters to return (default: 4000)"
+                        "type": "integer"
                     },
                     "tab_id": {
-                        "type": "string",
-                        "description": "Target tab ID (optional, defaults to active tab)"
+                        "type": "string"
                     }
                 }
             }
         },
         {
             "name": "find",
-            "description": "Find up to 5 elements matching text or keyword query.",
+            "description": format!("Find up to 5 elements matching text or keyword query. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "q": {
-                        "type": "string",
-                        "description": "Search keyword or text query"
+                        "type": "string"
                     },
                     "tab_id": {
-                        "type": "string",
-                        "description": "Target tab ID (optional, defaults to active tab)"
+                        "type": "string"
                     }
                 },
                 "required": ["q"]
             }
         },
         {
+            "name": "tabs",
+            "description": format!("List tabs and spaces. {RECOVERY}"),
+            "inputSchema": { "type": "object" }
+        },
+        {
             "name": "shot",
-            "description": "Capture cropped element or viewport screenshot.",
+            "description": format!("Capture cropped element or viewport screenshot. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "target": {
-                        "type": "string",
-                        "description": "Element ref or 'view' (default: view)"
+                        "type": "string"
                     },
                     "scale": {
-                        "type": "number",
-                        "description": "Scale factor 0.1 to 1.0 (default: 0.5)"
+                        "type": "number"
                     },
                     "tab_id": {
-                        "type": "string",
-                        "description": "Target tab ID (optional, defaults to active tab)"
+                        "type": "string"
                     }
                 }
             }
@@ -275,7 +271,7 @@ fn handle_mcp_request(
                     return Some(serde_json::json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
-                        "error": { "code": -32602, "message": "Missing params" }
+                        "error": { "code": -32602, "message": "missing params. use: tools/list" }
                     }));
                 }
             };
@@ -286,6 +282,7 @@ fn handle_mcp_request(
             let tab_id = arguments.get("tab_id").and_then(|v| v.as_str()).map(|s| s.to_string());
 
             let socket_req = match tool_name {
+                "tabs" => serde_json::json!({"cmd": "tabs"}),
                 "see" => serde_json::json!({
                     "cmd": "see",
                     "tab_id": tab_id,
@@ -324,7 +321,7 @@ fn handle_mcp_request(
                     return Some(serde_json::json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
-                        "error": { "code": -32601, "message": format!("Tool not found: {tool_name}") }
+                        "error": { "code": -32601, "message": "unknown tool. use: tools/list" }
                     }));
                 }
             };
@@ -336,7 +333,7 @@ fn handle_mcp_request(
 
             // Cap reply budget at 4000 tokens (~16000 chars)
             let safe_text = if text_output.len() > 16000 {
-                format!("{}... [truncated]", &text_output[..16000])
+                format!("{}... [truncated]", text_output.get(..text_output.floor_char_boundary(16000)).unwrap_or_default())
             } else {
                 text_output
             };
@@ -358,7 +355,7 @@ fn handle_mcp_request(
         _ => Some(serde_json::json!({
             "jsonrpc": "2.0",
             "id": req_id,
-            "error": { "code": -32601, "message": format!("Method not found: {method}") }
+            "error": { "code": -32601, "message": "unknown method. use: tools/list" }
         })),
     }
 }
@@ -380,12 +377,11 @@ fn run_mcp_server(socket_path: PathBuf) {
 
         let parsed_req: serde_json::Value = match serde_json::from_str(trimmed) {
             Ok(v) => v,
-            Err(e) => {
-                eprintln!("[anarc-mcp] Failed to parse JSON-RPC line: {e}");
+            Err(_) => {
                 let err_resp = serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": null,
-                    "error": { "code": -32700, "message": "Parse error" }
+                    "error": { "code": -32700, "message": "invalid JSON. use: tools/list" }
                 });
                 let _ = writeln!(stdout_lock, "{}", serde_json::to_string(&err_resp).unwrap_or_default());
                 let _ = stdout_lock.flush();
@@ -619,8 +615,7 @@ fn main() {
             })
         }
         _ => {
-            eprintln!("Unknown command: {cmd}");
-            print_usage();
+            eprintln!("unknown command. use: anarc-ctl --help");
             std::process::exit(1);
         }
     };
@@ -666,7 +661,7 @@ mod tests {
 
         // Also assert each individual tool description is <= 60 tokens (~240 chars)
         let tool_array = tools.as_array().unwrap();
-        assert_eq!(tool_array.len(), 5, "Expected exactly 5 core tools");
+        assert_eq!(tool_array.len(), 6, "Expected exactly 5 core tools");
         for tool in tool_array {
             let desc = tool.get("description").and_then(|d| d.as_str()).unwrap();
             let desc_tokens = desc.len() / 4;
@@ -727,7 +722,7 @@ mod tests {
         });
         let list_resp = handle_mcp_request(&list_req, &socket_path).unwrap();
         let tools = list_resp.get("result").unwrap().get("tools").unwrap().as_array().unwrap();
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 6);
 
         // 5. Tools call with Anarc offline - should return clean error message without hanging
         let call_req = serde_json::json!({
