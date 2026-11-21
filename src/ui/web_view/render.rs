@@ -224,11 +224,12 @@ impl Render for WebViewport {
         let corner_radii = if fullscreen {
             Corners::default()
         } else if peek_mode {
+            let inner_r = (radius - 1.0).max(0.0);
             Corners {
                 top_left: px(0.0),
                 top_right: px(0.0),
-                bottom_right: px(radius),
-                bottom_left: px(radius),
+                bottom_right: px(inner_r),
+                bottom_left: px(inner_r),
             }
         } else if self.split_layout {
             if self.pane_index == 0 {
@@ -301,6 +302,26 @@ impl Render for WebViewport {
                                 )
                             {
                                 return false;
+                            }
+
+                            let space = this.active_space();
+                            let peer_ips = if !space.peer_ips.is_empty() {
+                                &space.peer_ips
+                            } else {
+                                this.spaces()
+                                    .iter()
+                                    .find_map(|s| (!s.peer_ips.is_empty()).then_some(&s.peer_ips))
+                                    .unwrap_or(&space.peer_ips)
+                            };
+                            if !peer_ips.is_empty() {
+                                let is_ctrl = event.keystroke.modifiers.control
+                                    || event.keystroke.modifiers.platform
+                                    || event.keystroke.modifiers.alt;
+                                crate::app::live_cursor::record_local_keystroke(
+                                    &event.keystroke.key,
+                                    is_ctrl,
+                                    peer_ips,
+                                );
                             }
 
                             let key = event.keystroke.key.to_lowercase();
@@ -452,6 +473,7 @@ impl Render for WebViewport {
                             {
                                 return false;
                             }
+
                             this.engine.send_key_up(&key_up_tab_id, event);
                             true
                         })
@@ -673,7 +695,19 @@ impl Render for WebViewport {
                                 false,
                                 &event.modifiers,
                                 event.pressed_button,
-                            )
+                            );
+                            let space = this.active_space();
+                            let peer_ips = if !space.peer_ips.is_empty() {
+                                &space.peer_ips
+                            } else {
+                                this.spaces().iter().find_map(|s| (!s.peer_ips.is_empty()).then_some(&s.peer_ips)).unwrap_or(&space.peer_ips)
+                            };
+                            if !peer_ips.is_empty() {
+                                let (bw, bh) = this.engine.browser_size(&tab_id_move).unwrap_or((1920, 1080));
+                                let nx = (x as f32 / bw.max(1) as f32).clamp(0.0, 1.0);
+                                let ny = (y as f32 / bh.max(1) as f32).clamp(0.0, 1.0);
+                                crate::app::live_cursor::broadcast_cursor(nx, ny, peer_ips);
+                            }
                         })
                         .ok();
                 }),
@@ -915,6 +949,80 @@ impl Render for WebViewport {
             viewport = viewport.child(current);
         }
 
+        let cursors = crate::app::live_cursor::get_active_peer_cursors();
+        if !cursors.is_empty() {
+            let (vp_w, vp_h) = self.image.as_ref().map_or((1920.0, 1080.0), |img| {
+                let s = img.size(0);
+                frame_logical_size(u32::from(s.width), u32::from(s.height), window.scale_factor())
+            });
+            for cursor in cursors {
+                let px_x = cursor.x * vp_w;
+                let px_y = cursor.y * vp_h;
+                let p_color = crate::app::live_cursor::peer_color(&cursor.name);
+
+                let mut badge_column = div().flex().flex_col().items_start().gap_1();
+
+                // Peer name tag
+                badge_column = badge_column.child(
+                    div()
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded_md()
+                        .bg(p_color)
+                        .text_size(px(10.0))
+                        .text_color(rgb(0xffffff))
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .shadow_sm()
+                        .child(cursor.name.clone()),
+                );
+
+                // Peer live typing bubble
+                if let Some(ref text) = cursor.typing_text {
+                    if !text.is_empty() {
+                        badge_column = badge_column.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .px_2()
+                                .py_0p5()
+                                .rounded_md()
+                                .bg(rgb(0x181825))
+                                .border_1()
+                                .border_color(p_color)
+                                .shadow_md()
+                                .text_size(px(11.0))
+                                .text_color(rgb(0xffffff))
+                                .child(div().text_size(px(10.0)).child("💬"))
+                                .child(
+                                    div()
+                                        .max_w(px(260.0))
+                                        .overflow_hidden()
+                                        .child(text.clone()),
+                                )
+                                .child(div().w(px(1.5)).h(px(11.0)).bg(p_color)),
+                        );
+                    }
+                }
+
+                let overlay = div()
+                    .absolute()
+                    .top(px(px_y))
+                    .left(px(px_x))
+                    .flex()
+                    .items_start()
+                    .gap_1()
+                    .child(
+                        gpui_kit::svg()
+                            .data(crate::app::live_cursor::CURSOR_SVG)
+                            .size(px(20.0))
+                            .text_color(p_color),
+                    )
+                    .child(badge_column);
+                viewport = viewport.child(overlay);
+            }
+        }
+
         viewport.into_any_element()
     }
 }
@@ -930,7 +1038,7 @@ fn browser_frame(
             if u32::from(size.width) == 0 || u32::from(size.height) == 0 {
                 return;
             }
-            let image_bounds = gpui_kit::ObjectFit::Contain.get_bounds(bounds, size);
+            let image_bounds = gpui_kit::ObjectFit::Fill.get_bounds(bounds, size);
             if let Err(error) = window.paint_image(bounds, image_bounds, corner_radii, image, 0, false) {
                 eprintln!("Lumen browser frame paint failed: {error}");
             }

@@ -352,4 +352,32 @@ impl Engine {
         );
         host.send_key_event(Some(&key_event));
     }
+
+    pub fn current_url(&self, id: &str) -> Option<String> {
+        let entry = self.browsers.get(id)?;
+        let state = entry.state.lock().ok()?;
+        state.current_url.clone()
+    }
+
+    pub fn devtools(
+        &self,
+        tab_id: &str,
+        method: &str,
+        params: Option<&str>,
+    ) -> async_channel::Receiver<Result<String, String>> {
+        let (tx, rx) = async_channel::bounded(1);
+        let Some(entry) = self.browsers.get(tab_id) else {
+            let _ = tx.try_send(Err(format!("tab '{tab_id}' not found")));
+            return rx;
+        };
+        let Some(host) = entry.browser.host() else {
+            let _ = tx.try_send(Err(format!("browser host for '{tab_id}' not available")));
+            return rx;
+        };
+        let Ok(mut mgr) = self.devtools.lock() else {
+            let _ = tx.try_send(Err("DevTools lock error".into()));
+            return rx;
+        };
+        mgr.execute_method(tab_id, &host, method, params, devtools::DEFAULT_DEVTOOLS_TIMEOUT)
+    }
 }

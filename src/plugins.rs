@@ -214,6 +214,11 @@ pub(crate) fn split_view_enabled() -> bool {
     SPLIT_VIEW_ENABLED.load(Ordering::Relaxed)
 }
 
+#[cfg(test)]
+pub(crate) fn set_split_view_enabled_for_test(enabled: bool) {
+    SPLIT_VIEW_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
 pub(crate) fn downloads_enabled() -> bool {
     DOWNLOADS_ENABLED.load(Ordering::Relaxed)
 }

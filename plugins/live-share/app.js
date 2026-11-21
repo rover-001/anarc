@@ -71,12 +71,13 @@ async function refreshTailscale() {
 
 function renderPeers(peers) {
   const list = $("peers-list");
-  if (!peers.length) {
-    list.innerHTML = `<p class="empty-peers">No Tailscale peers discovered. Enter an IP or hostname below.</p>`;
+  const activePeers = (peers || []).filter((p) => p.online && p.has_browser === true);
+  if (!activePeers.length) {
+    list.innerHTML = `<p class="empty-peers">No active Anarc browser peers found on your Tailnet. Start sharing on the other machine, or connect by IP below.</p>`;
     return;
   }
   list.innerHTML = "";
-  for (const peer of peers) {
+  for (const peer of activePeers) {
     const card = document.createElement("div");
     card.className = "peer-card";
 
@@ -92,8 +93,8 @@ function renderPeers(peers) {
 
     const badge = document.createElement("span");
     badge.className = "peer-badge";
-    badge.dataset.online = String(peer.online);
-    badge.textContent = peer.online ? "Online" : "Offline";
+    badge.dataset.online = "true";
+    badge.textContent = "Browser Ready";
 
     info.append(name, ip, badge);
 
@@ -182,26 +183,6 @@ async function disconnect() {
   setFeedback("Session ended.");
 }
 
-async function launchTab(event) {
-  event.preventDefault();
-  const input = $("launch-input");
-  const query = input.value.trim();
-  if (!query) return;
-  const url = query.startsWith("http://") || query.startsWith("https://")
-    ? query
-    : "https://www.google.com/search?q=" + encodeURIComponent(query);
-  
-  const res = await apiFetch("/api/action", {
-    method: "POST",
-    body: JSON.stringify({ action: "open_tab", url, title: query }),
-  });
-  input.value = "";
-  if (res?.success) {
-    setFeedback("Tab opened in shared space!");
-    await refreshStatus();
-  }
-}
-
 async function refreshStatus() {
   const status = await apiFetch("/api/status");
   if (!status) return;
@@ -217,7 +198,7 @@ async function refreshStatus() {
 
   if (isConnected) {
     $("session-name").textContent = status.shared_space_name
-      ? `[Shared] ${status.shared_space_name}`
+      ? (status.is_host ? status.shared_space_name : `[Shared] ${status.shared_space_name}`)
       : "Shared space";
     
     const count = status.tabs?.length || 0;
@@ -226,6 +207,19 @@ async function refreshStatus() {
       ? `with ${status.peers.map((p) => p.address).join(", ")}`
       : "(Hosting on Tailscale)";
     $("session-peer-info").textContent = `${count} web ${noun} ${peerText}`;
+
+    const banner = document.querySelector(".shared-banner");
+    if (banner) {
+      if (status.is_host) {
+        banner.querySelector("strong").textContent = "You are hosting this space live!";
+        banner.querySelector("p").textContent = "All peer tab operations and cursor movements will sync live in this space.";
+        $("switch-space-btn").hidden = true;
+      } else {
+        banner.querySelector("strong").textContent = "This space is now live in your sidebar!";
+        banner.querySelector("p").textContent = "Switch to it using the globe icon at the bottom of your sidebar to browse tabs in the main window. All tab actions are synchronized live.";
+        $("switch-space-btn").hidden = false;
+      }
+    }
   }
 }
 
@@ -298,9 +292,9 @@ $("paste-address")?.addEventListener("click", async () => {
 
 $("disconnect").addEventListener("click", disconnect);
 $("switch-space-btn").addEventListener("click", () => {
-  window.location.href = switchSpaceUrl;
+  const targetId = currentStatus?.is_host ? (currentStatus.shared_space_id || "personal") : "shared-space";
+  window.location.href = `anarc-plugin://com.anarc.live-share/__anarc_switch_to_space?id=${encodeURIComponent(targetId)}`;
 });
-$("launch-form").addEventListener("submit", launchTab);
 
 // Initialize
 fetch("anarc-plugin://com.anarc.live-share/__anarc_start_service").catch(() => {});

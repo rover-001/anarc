@@ -97,13 +97,13 @@ class TestLiveShare(unittest.TestCase):
         # Verify Node B synchronized Node A's space and tabs
         with urllib.request.urlopen("http://127.0.0.1:17434/api/status") as resp:
             status_b = json.loads(resp.read().decode("utf-8"))
-        self.assertEqual(status_b["shared_space_id"], "personal")
+        self.assertEqual(status_b["shared_space_id"], "shared-space")
         self.assertEqual(len(status_b["tabs"]), 2)
         self.assertEqual(status_b["tabs"][0]["title"], "LeetCode")
 
         # Verify Node B's spaces_b.json received the shared space
         b_spaces_data = json.loads(self.spaces_b.read_text(encoding="utf-8"))
-        shared_space_in_b = next((s for s in b_spaces_data["spaces"] if s["id"] == "personal"), None)
+        shared_space_in_b = next((s for s in b_spaces_data["spaces"] if s["id"] == "shared-space"), None)
         self.assertIsNotNone(shared_space_in_b)
         self.assertEqual(len(shared_space_in_b["tabs"]), 2)
 

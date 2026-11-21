@@ -227,6 +227,21 @@ impl Lumen {
                     let text = this.address.read(cx).value().to_string();
                     this.update_suggestions(&text);
                     this.selected_suggestion = None;
+                    let space = this.active_space();
+                    let peer_ips = if !space.peer_ips.is_empty() {
+                        &space.peer_ips
+                    } else {
+                        this.spaces()
+                            .iter()
+                            .find_map(|s| (!s.peer_ips.is_empty()).then_some(&s.peer_ips))
+                            .unwrap_or(&space.peer_ips)
+                    };
+                    if !peer_ips.is_empty() {
+                        crate::app::live_cursor::set_local_typing_text(
+                            if text.is_empty() { None } else { Some(text) },
+                            peer_ips,
+                        );
+                    }
                     cx.notify();
                 }
                 _ => {}
@@ -242,6 +257,7 @@ impl Lumen {
         let mut engine = crate::engine::Engine::new();
         engine.set_panel_registry(panel_registry.clone());
         engine.set_ad_blocker_enabled(preferences.ad_blocker_enabled);
+        crate::app::live_cursor::init_live_cursors(engine.ui_update_wake());
         if let Some(url) = initial_http_first
             && let Some(tab_id) = spaces
                 .iter()
@@ -251,7 +267,7 @@ impl Lumen {
             engine.navigate_http_first(tab_id, &url);
         }
 
-        let app = Self {
+        let mut app = Self {
             spaces,
             active_space,
             sidebar_collapsed,
@@ -330,6 +346,9 @@ impl Lumen {
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0),
             ),
+            last_shared_cookies_mtime: std::sync::atomic::AtomicU64::new(0),
+            last_cookie_sync: std::time::Instant::now(),
+            pending_auth_recovery: std::collections::HashMap::new(),
             preferences,
             plugins,
             panel_registry,
@@ -346,6 +365,7 @@ impl Lumen {
         let initial_theme = crate::ui::visual::theme_for_space(app.active_space());
         crate::ui::visual::update_theme_caret(initial_theme, cx);
         ensure_live_share_daemon_running();
+        app.focus_browser(window, cx);
         app
     }
     pub(crate) fn close_app_page(&mut self) {
@@ -507,14 +527,31 @@ impl Lumen {
             ));
         }
     }
-    pub(in crate::app) fn active_tab_id(&self) -> &str {
+    pub(crate) fn active_tab_id(&self) -> &str {
         self.active_space().active.as_deref().unwrap_or_default()
     }
     pub(in crate::app) fn save_state(&self) {
         #[cfg(not(test))]
         {
+            let mut spaces_to_save = self.spaces.clone();
+            if let Some(loaded) = persist::load_state() {
+                for s in &mut spaces_to_save {
+                    if let Some(ext) = loaded.spaces.iter().find(|e| e.id == s.id) {
+                        if s.peer_ips.is_empty() && !ext.peer_ips.is_empty() {
+                            s.peer_ips = ext.peer_ips.clone();
+                        }
+                    }
+                }
+                for ext in loaded.spaces {
+                    if (ext.name.starts_with("[Shared]") || ext.id.starts_with("shared-"))
+                        && !spaces_to_save.iter().any(|s| s.id == ext.id)
+                    {
+                        spaces_to_save.push(ext);
+                    }
+                }
+            }
             persist::save_state(
-                &self.spaces,
+                &spaces_to_save,
                 &self.active_space,
                 self.sidebar_width
                     .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),

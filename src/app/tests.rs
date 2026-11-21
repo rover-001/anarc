@@ -3,6 +3,7 @@ use super::*;
 use gpui_kit::{Focusable, WindowOptions};
 
 fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
+    crate::plugins::set_split_view_enabled_for_test(true);
     let address = cx.new(|cx| InputState::new(window, cx));
     address.update(cx, |input, cx| input.focus(window, cx));
     let address_subscription =
@@ -111,6 +112,9 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         dismissed_download_toast_id: None,
         settings_section: SettingsSection::default(),
         last_spaces_mtime: std::sync::atomic::AtomicU64::new(0),
+        last_shared_cookies_mtime: std::sync::atomic::AtomicU64::new(0),
+        last_cookie_sync: std::time::Instant::now(),
+        pending_auth_recovery: std::collections::HashMap::new(),
         preferences: Default::default(),
         plugins: {
             let mut plugins = crate::plugin::PluginHost::new(Default::default());
@@ -531,6 +535,34 @@ fn closing_an_empty_tab_does_not_trigger_closing_ghost_animation(cx: &mut gpui::
             app.closing_tab.is_some(),
             "closing a real tab must record closing_tab"
         );
+    });
+}
+
+#[gpui::test]
+fn closing_last_regular_tab_activates_favorite_without_spawning_new_tab(cx: &mut gpui::TestAppContext) {
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        let space = app.active_space_mut();
+        space.tabs.clear();
+        let mut fav = Tab::new("fav-1", "Google", "https://google.com");
+        fav.favorite = true;
+        space.tabs.push(fav);
+        let reg = Tab::new("reg-1", "New tab", "about:blank");
+        space.tabs.push(reg);
+        space.active = Some("reg-1".to_string());
+
+        app.close_active_tab();
+
+        let active_space = app.active_space();
+        assert_eq!(active_space.tabs.len(), 1);
+        assert_eq!(active_space.tabs[0].id, "fav-1");
+        assert_eq!(active_space.active.as_deref(), Some("fav-1"));
     });
 }
 
