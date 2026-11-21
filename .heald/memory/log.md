@@ -478,3 +478,15 @@ Opened WhatsApp Web in Anarc and sent message 'hello' to contact Peble, verified
 ## Session 2026-11-21T12:58:25.275945575+00:00
 
 Implemented all 6 Anarc Agent Control architectural enhancements across act.rs, indexer.js, observe.rs, refs.rs, plugin.rs, server.rs, callbacks.rs, and anarc_ctl.rs. Enabled systemd user socket activation and verified live against active ChatGPT tab.
+
+## Session 2026-11-21T14:00:43.038306454+00:00
+
+Implemented tab controls (pin, unpin, fav, close), removed headless fallback by connecting MCP to live GUI anarc-ctl, opened YouTube and pinned it in Anarc, retrieved user leads from Acquisition CRM, committed and pushed to feat/agent-control.
+
+## Session 2026-11-21T14:06:12.535997981+00:00
+
+Opened YouTube in Anarc browser, pinned tab to pinned tabs, and fetched homepage recommendations.
+
+## Session 2026-11-21T14:16:07.260634232+00:00
+
+Renamed lumen to anarc across MCP configs, git worktrees (anarc-landing-page), plugin SDK (anarc-plugin-sdk), filters, install scripts, and removed legacy lumen tools and symlinks.
