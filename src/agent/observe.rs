@@ -165,16 +165,17 @@ pub fn build_indexer_injection_script() -> &'static str {
 
 pub fn build_see_call_script(scope: &str) -> String {
     format!(
-        "try {{ if (typeof window.__anarc_index !== 'function') {{ {} }} window.__anarc_index('{}'); }} catch (e) {{ JSON.stringify({{ error: String(e) }}); }}",
-        INDEXER_JS, scope
+        "if (typeof window.__anarc_index !== 'function') {{ {INDEXER_JS} }} window.__anarc_index({});",
+        serde_json::json!(scope)
     )
 }
 
 pub fn build_read_call_script(mode: &str, max: usize) -> String {
-    format!(
-        "try {{ {} window.__anarc_read('{}', {}); }} catch (e) {{ String(e); }}",
-        INDEXER_JS, mode, max
-    )
+    format!("{INDEXER_JS} window.__anarc_read({}, {max});", serde_json::json!(mode))
+}
+
+pub fn build_stable_call_script(ms: u64) -> String {
+    format!("{} window.__anarc_wait_stable({ms});", build_indexer_injection_script())
 }
 
 #[cfg(test)]

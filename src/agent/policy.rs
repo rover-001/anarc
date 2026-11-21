@@ -1,6 +1,4 @@
 use std::collections::HashSet;
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,7 +70,7 @@ impl PolicyConfig {
 pub enum NavigationCheck {
     Allowed,
     CrossSiteWarning(String),
-    RequiresConfirmation(String),
+    RequiresConfirmation,
 }
 
 /// Extract host/domain from a URL string
@@ -132,7 +130,7 @@ pub fn check_navigation_policy(
 
     let detail = format!("{current_host} -> {target_host}");
     match mode {
-        NavigationMode::Ask => NavigationCheck::RequiresConfirmation(detail),
+        NavigationMode::Ask => NavigationCheck::RequiresConfirmation,
         NavigationMode::SameSite => NavigationCheck::CrossSiteWarning(detail),
         NavigationMode::Free => NavigationCheck::Allowed,
     }
@@ -177,12 +175,14 @@ pub const ACTION_CONTEXT: &str = r#"target => {
     const context = panel?.innerText || '';
     const fields = Array.from(panel?.querySelectorAll('input, [role=textbox]') || [])
         .filter(el => el.checkVisibility());
-    const fieldName = field => ['autocomplete', 'name', 'aria-label', 'placeholder']
-        .map(attr => field.getAttribute(attr) || '').join(' ');
+    const fieldName = field => [
+        ...['autocomplete', 'name', 'aria-label', 'placeholder'].map(attr => field.getAttribute(attr) || ''),
+        ...Array.from(field.labels || [], label => label.innerText)
+    ].join(' ');
     const card = fields.some(field => /cc-(number|exp|csc)|card[ _-]?number|\bcvv\b|\bcvc\b/i.test(fieldName(field)));
     const amount = fields.some(field => /\b(amount|currency|total|payment)\b/i.test(fieldName(field)));
     const currency = /(?:[$€£]\s*\d|\d\s*(?:USD|EUR|GBP)\b)/i.test(context);
-    const submit = action.type === 'submit' || (target === action && !!form && target.matches('input'));
+    const submit = !!form && (action.type === 'submit' || (target === action && target.matches('input')));
     let intent = '';
     if (dialog && /\b(delete|remove|erase|destroy)\b/i.test(name)
         && /\b(confirm|are you sure|permanent(?:ly)?|cannot be undone)\b/i.test(context)) {
@@ -274,6 +274,7 @@ pub fn resolve_secret(secret_name: &str) -> Option<String> {
 }
 
 /// Redact secret values and passwords from audit logs and output strings
+#[cfg(test)]
 pub fn redact_secrets(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut i = 0;
@@ -299,38 +300,6 @@ pub fn redact_secrets(input: &str) -> String {
         i = i.saturating_add(1);
     }
     out
-}
-
-/// Audit log: append sanitized JSONL event to `$ANARC_DATA_DIR/agent/log.jsonl`
-pub fn log_audit_event(op: &str, origin: &str, outcome: &str) {
-    let log_path = if let Ok(data_dir) = std::env::var("ANARC_DATA_DIR") {
-        PathBuf::from(data_dir).join("agent").join("log.jsonl")
-    } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".local").join("share").join("anarc").join("agent").join("log.jsonl")
-    } else {
-        PathBuf::from("/tmp/anarc-agent-audit.jsonl")
-    };
-
-    if let Some(parent) = log_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
-    let sanitized_op = redact_secrets(op);
-    let log_entry = serde_json::json!({
-        "timestamp": timestamp,
-        "origin": origin,
-        "op": sanitized_op,
-        "outcome": outcome
-    });
-
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
-        let _ = writeln!(file, "{}", serde_json::to_string(&log_entry).unwrap_or_default());
-    }
 }
 
 #[cfg(test)]

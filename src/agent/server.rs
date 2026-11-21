@@ -166,17 +166,21 @@ fn handle_connection(
             continue;
         }
 
-        let response = match parse_client_command(trimmed) {
+        let parsed = parse_client_command(trimmed);
+        let op = parsed.as_ref().map_or("unknown", AgentRequest::op);
+        let response = match parsed {
             Ok(request) => wait_for_tab(request, Duration::from_secs(3), |request| {
-            let (resp_tx, resp_rx) = async_channel::bounded(1);
-            if handler_tx.try_send((request, resp_tx)).is_err() {
-                return AgentResponse::err("agent busy. use: status");
-            }
-            resp_rx.recv_blocking().unwrap_or_else(|_| AgentResponse::err("agent disconnected. use: status"))
+                let (resp_tx, resp_rx) = async_channel::bounded(1);
+                if handler_tx.try_send((request, resp_tx)).is_err() {
+                    return AgentResponse::err("agent busy. use: status");
+                }
+                resp_rx.recv_blocking().unwrap_or_else(|_| AgentResponse::err("agent disconnected. use: status"))
             }),
             Err(message) => AgentResponse::err(message),
         };
 
+        let reply_bytes = response.result.as_ref().or(response.error.as_ref()).map_or(0, String::len);
+        log_call(op, response.ok, reply_bytes);
         let json = match serde_json::to_string(&response) {
             Ok(s) => s,
             Err(_) => r#"{"ok":false,"error":"invalid reply. use: status"}"#.into(),
@@ -184,6 +188,21 @@ fn handle_connection(
         if writeln!(stream, "{json}").is_err() {
             break;
         }
+    }
+}
+
+fn log_call(op: &str, ok: bool, reply_bytes: usize) {
+    use std::os::unix::fs::OpenOptionsExt;
+    let dir = crate::paths::data_dir().join("agent");
+    if create_dir_all(&dir).is_err() {
+        return;
+    }
+    if let Ok(mut log) = std::fs::OpenOptions::new().create(true).append(true).mode(0o600)
+        .open(dir.join("log.jsonl"))
+    {
+        let line = serde_json::json!({ "op": op, "ok": ok, "reply_bytes": reply_bytes,
+                                      "est_tokens": reply_bytes as f64 / 3.5 });
+        let _ = log.write_all(format!("{line}\n").as_bytes());
     }
 }
 
@@ -231,6 +250,7 @@ pub fn parse_client_command(input: &str) -> Result<AgentRequest, &'static str> {
             let query = parts.get(1..).map(|s| s.join(" ")).unwrap_or_default();
             AgentRequest::Find { tab_id: None, query }
         }
+        "wait" => AgentRequest::Do { tab_id: None, ops: input.to_string() },
         "tabs" => AgentRequest::Tabs,
         "pause" => AgentRequest::Pause,
         "resume" => AgentRequest::Resume,

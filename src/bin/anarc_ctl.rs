@@ -32,11 +32,13 @@ fn print_usage() {
          \n\
          Commands:\n\
            see [view|all|main|<ref>|+]  Compact index of interactable elements\n\
-           read [<ref>|page]            Read page content (modes: text, table, links, outline)\n\
+           read [<ref>|page|last]            Read page content (modes: text, table, links, outline)\n\
            find <query>                 Find elements matching query (<= 5 refs)\n\
            tabs                         List open tabs and spaces\n\
            do <ops>                     Execute action DSL (click, type, key, wait)\n\
-           shot [ref|view]              Capture screenshot (PNG base64 or path)\n\
+           shot [ref|view]              Save a PNG and print its path\n\
+           wait stable [ms]             Wait for the latest text to stop growing\n\
+           stats                        Show agent call and token statistics\n\
            status                       Show agent server status\n\
            pause                        Pause agent actions\n\
            resume                       Resume agent actions\n\
@@ -49,6 +51,7 @@ fn print_usage() {
            --mode <mode>                Read mode (text, table, links, outline)\n\
            --max <n>                    Max output characters/budget\n\
            --harness <harness>          For install: claude | codex | antigravity | print\n\
+           --shot-as path               Return a PNG path from MCP shot\n\
            --help                       Show this help message"
     );
 }
@@ -127,7 +130,7 @@ fn get_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "do",
-            "description": format!("Execute browser actions DSL: click, type, keys, navigate, scroll. {RECOVERY}"),
+            "description": format!("Browser actions: click, type, key, submit, navigate, scroll, wait stable. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -144,7 +147,7 @@ fn get_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "read",
-            "description": format!("Read page content in text, table, links, or outline mode. {RECOVERY}"),
+            "description": format!("Read page content. Target last reads the latest message. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -210,6 +213,7 @@ fn get_tool_definitions() -> serde_json::Value {
 fn handle_mcp_request(
     req: &serde_json::Value,
     socket_path: &PathBuf,
+    shot_as_path: bool,
 ) -> Option<serde_json::Value> {
     let method = req.get("method").and_then(|m| m.as_str())?;
     let id = req.get("id");
@@ -326,30 +330,36 @@ fn handle_mcp_request(
                 }
             };
 
-            let (text_output, is_error) = match send_socket_request(socket_path, &socket_req) {
-                Ok(res) => (res, false),
-                Err(e) => (e, true),
-            };
-
-            // Cap reply budget at 4000 tokens (~16000 chars)
-            let safe_text = if text_output.len() > 16000 {
-                format!("{}... [truncated]", text_output.get(..text_output.floor_char_boundary(16000)).unwrap_or_default())
+            let result = send_socket_request(socket_path, &socket_req);
+            let content = if tool_name == "shot" {
+                result.and_then(|reply| {
+                    if shot_as_path {
+                        save_screenshot(&reply).map(|text| serde_json::json!({"type": "text", "text": text}))
+                    } else {
+                        let image = screenshot_data(&reply)?;
+                        Ok(serde_json::json!({"type": "image", "data": image, "mimeType": "image/png"}))
+                    }
+                })
             } else {
-                text_output
+                result.map(|text| {
+                    let end = text.floor_char_boundary(16000);
+                    let text = if text.len() > end {
+                        format!("{}... [truncated]", text.get(..end).unwrap_or_default())
+                    } else {
+                        text
+                    };
+                    serde_json::json!({"type": "text", "text": text})
+                })
             };
 
+            let (block, is_error) = match content {
+                Ok(block) => (block, false),
+                Err(error) => (serde_json::json!({"type": "text", "text": error}), true),
+            };
             Some(serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": safe_text
-                        }
-                    ],
-                    "isError": is_error
-                }
+                "result": { "content": [block], "isError": is_error }
             }))
         }
         _ => Some(serde_json::json!({
@@ -360,7 +370,7 @@ fn handle_mcp_request(
     }
 }
 
-fn run_mcp_server(socket_path: PathBuf) {
+fn run_mcp_server(socket_path: PathBuf, shot_as_path: bool) {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut stdout_lock = stdout.lock();
@@ -389,7 +399,7 @@ fn run_mcp_server(socket_path: PathBuf) {
             }
         };
 
-        if let Some(resp) = handle_mcp_request(&parsed_req, &socket_path) {
+        if let Some(resp) = handle_mcp_request(&parsed_req, &socket_path, shot_as_path) {
             let resp_str = serde_json::to_string(&resp).unwrap_or_default();
             let _ = writeln!(stdout_lock, "{resp_str}");
             let _ = stdout_lock.flush();
@@ -472,6 +482,7 @@ fn main() {
     let mut explicit_mode: Option<String> = None;
     let mut explicit_max: Option<usize> = None;
     let mut explicit_harness: Option<String> = None;
+    let mut shot_as_path = false;
 
     // Extract global flags
     let mut filtered_args = Vec::new();
@@ -510,6 +521,14 @@ fn main() {
                     i += 1;
                 }
             }
+            "--shot-as" => {
+                if args.get(i + 1).is_none_or(|mode| mode != "path") {
+                    eprintln!("invalid screenshot mode. use: anarc-ctl mcp --shot-as path");
+                    std::process::exit(1);
+                }
+                shot_as_path = true;
+                i += 2;
+            }
             "--harness" => {
                 if i + 1 < args.len() {
                     explicit_harness = Some(args[i + 1].clone());
@@ -533,12 +552,23 @@ fn main() {
     let cmd = &filtered_args[0];
 
     if cmd == "mcp" {
-        run_mcp_server(socket_path);
+        run_mcp_server(socket_path, shot_as_path);
         return;
     }
 
     if cmd == "install" {
         handle_install(explicit_harness.as_deref());
+        return;
+    }
+
+    if cmd == "stats" {
+        match read_stats() {
+            Ok(stats) => println!("{stats}"),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
         return;
     }
 
@@ -591,6 +621,11 @@ fn main() {
                 "ops": ops
             })
         }
+        "wait" => serde_json::json!({
+            "cmd": "do",
+            "tab_id": explicit_tab,
+            "ops": filtered_args.join(" "),
+        }),
         "shot" => {
             let target = filtered_args.get(1).cloned();
             serde_json::json!({
@@ -620,7 +655,13 @@ fn main() {
         }
     };
 
-    match send_socket_request(&socket_path, &request_val) {
+    let result = send_socket_request(&socket_path, &request_val);
+    let result = if cmd == "shot" {
+        result.and_then(|reply| save_screenshot(&reply))
+    } else {
+        result
+    };
+    match result {
         Ok(res) => {
             if !res.is_empty() {
                 println!("{res}");
@@ -633,9 +674,123 @@ fn main() {
     }
 }
 
+fn screenshot_data(reply: &str) -> Result<&str, String> {
+    reply.strip_prefix("data:image/png;base64,")
+        .filter(|data| data.starts_with("iVBORw0KGgo"))
+        .ok_or_else(|| "screenshot invalid. use: see".into())
+}
+
+fn decode_screenshot(data: &str) -> Option<Vec<u8>> {
+    let bytes = data.trim_end_matches('=').as_bytes();
+    if data.len() % 4 != 0 || data.len() - bytes.len() > 2 || bytes.len() % 4 == 1 {
+        return None;
+    }
+    let mut png = Vec::with_capacity(bytes.len().saturating_mul(3) / 4);
+    let mut accumulator = 0u32;
+    let mut bits = 0u32;
+    for &byte in bytes {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        accumulator = (accumulator << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            png.push((accumulator >> bits) as u8);
+        }
+    }
+    Some(png)
+}
+
+fn png_dimensions(png: &[u8]) -> Option<(u32, u32)> {
+    if !png.starts_with(b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR") {
+        return None;
+    }
+    let width = u32::from_be_bytes(png.get(16..20)?.try_into().ok()?);
+    let height = u32::from_be_bytes(png.get(20..24)?.try_into().ok()?);
+    (width != 0 && height != 0).then_some((width, height))
+}
+
+fn save_screenshot(reply: &str) -> Result<String, String> {
+    let invalid = "screenshot invalid. use: see";
+    let png = decode_screenshot(screenshot_data(reply)?).ok_or(invalid)?;
+    let (width, height) = png_dimensions(&png).ok_or(invalid)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos()).unwrap_or_default();
+    let path = std::env::temp_dir().join(format!("anarc-{}-{now}.png", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(target_family = "unix")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(&path).and_then(|mut file| file.write_all(&png))
+        .map_err(|_| "PNG write failed. use: see")?;
+    Ok(format!("saved {} {width}x{height} (image file: do not read_file/cat it)", path.display()))
+}
+
+fn read_stats() -> Result<String, String> {
+    let dir = std::env::var_os("ANARC_DATA_DIR").map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+            .map(|home| PathBuf::from(home).join(".local/share/anarc")))
+        .unwrap_or_else(|| std::env::temp_dir().join(".local/share/anarc"));
+    let log = match std::fs::File::open(dir.join("agent/log.jsonl")) {
+        Ok(log) => log,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok("no calls recorded".into()),
+        Err(_) => return Err("stats unavailable. use: status".into()),
+    };
+    let mut groups = std::collections::BTreeMap::<String, (Vec<f64>, usize)>::new();
+    for line in BufReader::new(log).lines() {
+        let line = line.map_err(|_| "stats unreadable. use: status")?;
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        let (Some(op), Some(ok), Some(tokens)) = (
+            record.get("op").and_then(|value| value.as_str()),
+            record.get("ok").and_then(|value| value.as_bool()),
+            record.get("est_tokens").and_then(|value| value.as_f64()),
+        ) else { continue };
+        let (samples, errors) = groups.entry(op.to_string()).or_default();
+        samples.push(tokens);
+        *errors += usize::from(!ok);
+    }
+    if groups.is_empty() {
+        return Ok("no calls recorded".into());
+    }
+    let mut lines = vec!["op count p50_est_tokens p95_est_tokens error_rate".to_string()];
+    for (op, (mut samples, errors)) in groups {
+        samples.sort_by(f64::total_cmp);
+        let count = samples.len();
+        let quantile = |percent: usize| {
+            samples.get((count * percent).div_ceil(100).saturating_sub(1)).copied().unwrap_or(0.0)
+        };
+        let error_rate = 100.0 * errors as f64 / count as f64;
+        lines.push(format!("{op} {count} {:.1} {:.1} {error_rate:.1}%", quantile(50), quantile(95)));
+    }
+    Ok(lines.join("\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screenshot_path_contains_only_dimensions_and_file() -> Result<(), String> {
+        let reply = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRhkAAAAASUVORK5CYII=";
+        let line = save_screenshot(reply)?;
+        assert!(!line.contains("base64") && !line.contains("iVBOR"));
+        assert!(line.ends_with("1x1 (image file: do not read_file/cat it)"));
+        let path = line.strip_prefix("saved ").and_then(|line| line.split_once(" 1x1"))
+            .map(|(path, _)| path).ok_or("missing test PNG path")?;
+        let png = std::fs::read(path).map_err(|error| error.to_string())?;
+        std::fs::remove_file(path).map_err(|error| error.to_string())?;
+        assert_eq!(png_dimensions(&png), Some((1, 1)));
+        Ok(())
+    }
 
     #[test]
     fn test_tools_schema_token_cost_under_700() {
@@ -661,7 +816,7 @@ mod tests {
 
         // Also assert each individual tool description is <= 60 tokens (~240 chars)
         let tool_array = tools.as_array().unwrap();
-        assert_eq!(tool_array.len(), 6, "Expected exactly 5 core tools");
+        assert_eq!(tool_array.len(), 6, "Expected five core tools and tabs");
         for tool in tool_array {
             let desc = tool.get("description").and_then(|d| d.as_str()).unwrap();
             let desc_tokens = desc.len() / 4;
@@ -672,6 +827,22 @@ mod tests {
                 desc_tokens,
                 desc
             );
+        }
+    }
+
+    #[test]
+    fn mcp_protocol_errors_give_next_commands() {
+        let socket_path = PathBuf::from("/tmp/nonexistent-anarc-test.sock");
+        let requests = [
+            serde_json::json!({"id": 1, "method": "unknown"}),
+            serde_json::json!({"id": 2, "method": "tools/call"}),
+            serde_json::json!({"id": 3, "method": "tools/call", "params": {"name": "unknown"}}),
+        ];
+        for request in requests {
+            let reply = handle_mcp_request(&request, &socket_path, false);
+            let error = reply.as_ref().and_then(|reply| reply.pointer("/error/message"))
+                .and_then(serde_json::Value::as_str).unwrap_or_default();
+            assert!(error.ends_with("use: tools/list"), "{error}");
         }
     }
 
@@ -690,7 +861,7 @@ mod tests {
                 "clientInfo": { "name": "test-client", "version": "1.0" }
             }
         });
-        let init_resp = handle_mcp_request(&init_req, &socket_path).unwrap();
+        let init_resp = handle_mcp_request(&init_req, &socket_path, false).unwrap();
         assert_eq!(init_resp.get("id").unwrap().as_i64(), Some(1));
         let res = init_resp.get("result").unwrap();
         assert_eq!(res.get("protocolVersion").unwrap().as_str(), Some("2024-11-05"));
@@ -702,7 +873,7 @@ mod tests {
             "method": "notifications/initialized",
             "params": {}
         });
-        let notif_resp = handle_mcp_request(&notif_req, &socket_path);
+        let notif_resp = handle_mcp_request(&notif_req, &socket_path, false);
         assert!(notif_resp.is_none(), "Notifications must not receive a response");
 
         // 3. Ping
@@ -711,7 +882,7 @@ mod tests {
             "id": 2,
             "method": "ping"
         });
-        let ping_resp = handle_mcp_request(&ping_req, &socket_path).unwrap();
+        let ping_resp = handle_mcp_request(&ping_req, &socket_path, false).unwrap();
         assert_eq!(ping_resp.get("id").unwrap().as_i64(), Some(2));
 
         // 4. Tools list
@@ -720,7 +891,7 @@ mod tests {
             "id": 3,
             "method": "tools/list"
         });
-        let list_resp = handle_mcp_request(&list_req, &socket_path).unwrap();
+        let list_resp = handle_mcp_request(&list_req, &socket_path, false).unwrap();
         let tools = list_resp.get("result").unwrap().get("tools").unwrap().as_array().unwrap();
         assert_eq!(tools.len(), 6);
 
@@ -734,7 +905,7 @@ mod tests {
                 "arguments": { "scope": "view" }
             }
         });
-        let call_resp = handle_mcp_request(&call_req, &socket_path).unwrap();
+        let call_resp = handle_mcp_request(&call_req, &socket_path, false).unwrap();
         let call_res = call_resp.get("result").unwrap();
         assert_eq!(call_res.get("isError").unwrap().as_bool(), Some(true));
         let content = call_res.get("content").unwrap().as_array().unwrap();

@@ -25,6 +25,7 @@ Compact index of what can be acted on.
 - **Output format**:
   ```text
   g4 github.com/login "Sign in to GitHub" ↓0
+  tabs: 1* github.com, 2 about:blank
   i1 "Username or email"
   i2 "Password" secret
   c1 "Remember me" off
@@ -48,7 +49,8 @@ Execute batch actions using the `do` DSL.
   - `scroll down` | `scroll up` | `scroll top` | `scroll end`
   - `hover b1` | `focus i1` | `drag b1 b2` | `xy X Y` (canvas fallback)
   - `dialog ok` | `dialog cancel` | `tab new` | `tab N` | `tab close`
-  - `wait idle` | `wait 500` | `wait "Results"`
+  - `submit` : Press Enter or click the nearest send button
+  - `wait idle` | `wait 500` | `wait "Results"` | `wait stable [ms]` at the end of a batch
 - **Diff replies**:
   If generation didn't change, returns minimal diff:
   ```text
@@ -59,12 +61,12 @@ Execute batch actions using the `do` DSL.
 
 ### 3. `read`
 Extract page content in structured, budgeted modes.
-- **Args**: `target` (ref or `page`), `mode` (`text` | `table` | `links` | `outline`), `max` (character limit, default: 4000)
+- **Args**: `target` (ref, `page`, or `last`), `mode` (`text` | `table` | `links` | `outline`), `max` (character limit, default: 4000)
 
 ### 4. `find`
 Locate up to 5 elements matching text or keyword query.
 - **Args**: `q` (search query)
 
 ### 5. `shot`
-Capture cropped element or viewport screenshot.
+Capture a viewport screenshot. CLI prints a PNG path. MCP returns an image, with `mcp --shot-as path` available for path output.
 - **Args**: `target` (ref or `view`), `scale` (0.1 to 1.0)
