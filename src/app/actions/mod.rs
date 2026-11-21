@@ -530,6 +530,12 @@ impl Lumen {
     pub(crate) fn active_tab_id(&self) -> &str {
         self.active_space().active.as_deref().unwrap_or_default()
     }
+    pub(crate) fn process_agent_requests(&mut self) {
+        let requests = self.engine.take_agent_requests();
+        for (req, resp_tx) in requests {
+            crate::agent::plugin::handle_agent_request(self, req, resp_tx);
+        }
+    }
     pub(in crate::app) fn save_state(&self) {
         #[cfg(not(test))]
         {

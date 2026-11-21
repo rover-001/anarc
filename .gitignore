@@ -34,7 +34,7 @@ scratch/
 scroll.log
 .heald
 .junie
-agent
+/agent/
 .claude
 .playwright-mcp
 .wrangler/
