@@ -11,6 +11,7 @@ pub(crate) const ENGINE: ServiceKey<EngineService> = ServiceKey::new("engine");
 pub(crate) const COMMANDS: ServiceKey<CommandsService> = ServiceKey::new("commands");
 pub(crate) const KEYMAP: ServiceKey<KeymapService> = ServiceKey::new("keymap");
 pub(crate) const THEME: ServiceKey<ThemeService> = ServiceKey::new("theme");
+pub(crate) const AGENT: ServiceKey<AgentService> = ServiceKey::new("agent");
 
 #[derive(Clone, Copy)]
 pub(crate) struct HistoryService;
@@ -128,6 +129,78 @@ impl EngineService {
     pub(crate) fn set_zoom_level(&self, app: &crate::app::Lumen, tab_id: &str, level: f64) {
         app.engine.set_zoom_level(tab_id, level);
     }
+
+    pub(crate) fn evaluate(
+        &self,
+        app: &crate::app::Lumen,
+        tab_id: &str,
+        script: &str,
+    ) -> async_channel::Receiver<Result<String, String>> {
+        app.engine.evaluate(tab_id, script)
+    }
+
+    pub(crate) fn devtools(
+        &self,
+        app: &crate::app::Lumen,
+        tab_id: &str,
+        method: &str,
+        params: Option<&str>,
+    ) -> async_channel::Receiver<Result<String, String>> {
+        app.engine.devtools(tab_id, method, params)
+    }
+
+    pub(crate) fn input_click(
+        &self,
+        app: &mut crate::app::Lumen,
+        tab_id: &str,
+        x: i32,
+        y: i32,
+        button: Option<cef::MouseButtonType>,
+    ) {
+        app.engine.input_click(tab_id, x, y, button);
+    }
+
+    pub(crate) fn input_move(
+        &self,
+        app: &crate::app::Lumen,
+        tab_id: &str,
+        x: i32,
+        y: i32,
+    ) {
+        app.engine.input_move(tab_id, x, y);
+    }
+
+    pub(crate) fn input_type(
+        &self,
+        app: &crate::app::Lumen,
+        tab_id: &str,
+        text: &str,
+    ) -> async_channel::Receiver<Result<String, String>> {
+        app.engine.input_type(tab_id, text)
+    }
+
+    pub(crate) fn input_key(
+        &self,
+        app: &crate::app::Lumen,
+        tab_id: &str,
+        key: &str,
+        modifiers: &gpui_kit::Modifiers,
+        key_down: bool,
+    ) {
+        app.engine.input_key(tab_id, key, modifiers, key_down);
+    }
+
+    pub(crate) fn input_scroll(
+        &self,
+        app: &crate::app::Lumen,
+        tab_id: &str,
+        x: i32,
+        y: i32,
+        delta_x: f32,
+        delta_y: f32,
+    ) {
+        app.engine.input_scroll(tab_id, x, y, delta_x, delta_y);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -178,5 +251,14 @@ pub(crate) struct ThemeService;
 impl ThemeService {
     pub(crate) fn current(&self, app: &crate::app::Lumen) -> crate::ui::visual::SpaceTheme {
         crate::ui::visual::theme_for_space(app.theme_picker_space())
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct AgentService;
+
+impl AgentService {
+    pub(crate) fn is_running(&self) -> bool {
+        crate::agent::server::is_running()
     }
 }

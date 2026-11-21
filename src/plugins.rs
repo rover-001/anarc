@@ -184,6 +184,7 @@ pub(crate) fn register(host: &mut PluginHost) {
     ] {
         BuiltinPlugin::set_enabled(feature, !safe_mode && enabled_in_config(config, id));
     }
+    crate::agent::plugin::register(host);
 }
 
 /// The CLI import command runs before the app host is constructed, so consult

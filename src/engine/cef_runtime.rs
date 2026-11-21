@@ -7,6 +7,8 @@ impl Engine {
 
     pub fn new() -> Self {
         let (ui_update_wake, ui_update_receiver) = async_channel::bounded(1);
+        let (agent_tx, agent_receiver) = async_channel::bounded(32);
+        crate::agent::plugin::register_engine_agent_channel(agent_tx, ui_update_wake.clone());
         Self {
             browsers: HashMap::new(),
             resize_state: HashMap::new(),
@@ -33,6 +35,8 @@ impl Engine {
             panel_packages: crate::plugin::new_panel_registry(),
             popup_serial: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             devtools: Mutex::new(devtools::DevToolsManager::new()),
+            agent_state: Arc::new(Mutex::new(crate::agent::plugin::AgentState::default())),
+            agent_receiver,
         }
     }
 

@@ -5,15 +5,16 @@ impl Engine {
     /// popups, close requests, fullscreen changes, or created browsers).
     /// Used by the render loop to skip heavy event processing when idle.
     pub fn has_pending_events(&self) -> bool {
-        self.events.lock().is_ok_and(|events| {
-            !events.plugin_events.is_empty()
-                || !events.popups.is_empty()
-                || !events.close_requests.is_empty()
-                || events.live_share_space_request.is_some()
-                || events.live_share_switch_space.is_some()
-                || !events.fullscreen.is_empty()
-                || !events.created.is_empty()
-        })
+        !self.agent_receiver.is_empty()
+            || self.events.lock().is_ok_and(|events| {
+                !events.plugin_events.is_empty()
+                    || !events.popups.is_empty()
+                    || !events.close_requests.is_empty()
+                    || events.live_share_space_request.is_some()
+                    || events.live_share_switch_space.is_some()
+                    || !events.fullscreen.is_empty()
+                    || !events.created.is_empty()
+            })
     }
 
     pub fn take_plugin_events(&self) -> Vec<(String, String)> {
@@ -90,6 +91,11 @@ impl Engine {
                 .map(|state| state.is_loading)
                 .unwrap_or(false)
         })
+    }
+    pub fn current_url(&self, id: &str) -> Option<String> {
+        let entry = self.browsers.get(id)?;
+        let state = entry.state.lock().ok()?;
+        state.current_url.clone()
     }
     pub fn can_go_back(&self, tab_id: &str) -> bool {
         self.browsers.get(tab_id).is_some_and(|entry| {
@@ -353,10 +359,25 @@ impl Engine {
         host.send_key_event(Some(&key_event));
     }
 
-    pub fn current_url(&self, id: &str) -> Option<String> {
-        let entry = self.browsers.get(id)?;
-        let state = entry.state.lock().ok()?;
-        state.current_url.clone()
+    pub fn evaluate(
+        &self,
+        tab_id: &str,
+        script: &str,
+    ) -> async_channel::Receiver<Result<String, String>> {
+        let (tx, rx) = async_channel::bounded(1);
+        let Some(entry) = self.browsers.get(tab_id) else {
+            let _ = tx.try_send(Err(format!("tab '{tab_id}' not found")));
+            return rx;
+        };
+        let Some(host) = entry.browser.host() else {
+            let _ = tx.try_send(Err(format!("browser host for '{tab_id}' not available")));
+            return rx;
+        };
+        let Ok(mut mgr) = self.devtools.lock() else {
+            let _ = tx.try_send(Err("DevTools lock error".into()));
+            return rx;
+        };
+        mgr.evaluate(tab_id, &host, script, devtools::DEFAULT_DEVTOOLS_TIMEOUT)
     }
 
     pub fn devtools(
@@ -379,5 +400,73 @@ impl Engine {
             return rx;
         };
         mgr.execute_method(tab_id, &host, method, params, devtools::DEFAULT_DEVTOOLS_TIMEOUT)
+    }
+
+    pub fn input_click(
+        &mut self,
+        tab_id: &str,
+        x: i32,
+        y: i32,
+        button: Option<cef::MouseButtonType>,
+    ) {
+        let btn = button.unwrap_or(cef::MouseButtonType::LEFT);
+        let mods = gpui_kit::Modifiers::default();
+        self.send_mouse_move(tab_id, x, y, false, &mods, None);
+        self.send_mouse_click(tab_id, x, y, btn, false, 1, &mods);
+        self.send_mouse_click(tab_id, x, y, btn, true, 1, &mods);
+    }
+
+    pub fn input_move(&self, tab_id: &str, x: i32, y: i32) {
+        let mods = gpui_kit::Modifiers::default();
+        self.send_mouse_move(tab_id, x, y, false, &mods, None);
+    }
+
+    pub fn input_type(&self, tab_id: &str, text: &str) -> async_channel::Receiver<Result<String, String>> {
+        let params = serde_json::json!({ "text": text });
+        let p_str = serde_json::to_string(&params).unwrap_or_default();
+        self.devtools(tab_id, "Input.insertText", Some(&p_str))
+    }
+
+    pub fn input_key(&self, tab_id: &str, key: &str, modifiers: &gpui_kit::Modifiers, key_down: bool) {
+        if let Some(entry) = self.browsers.get(tab_id) && let Some(host) = entry.browser.host() {
+            let focus_on_editable_field = entry.state.lock().map(|s| s.focus_on_editable_field).unwrap_or(false);
+            let char_val = if key.len() == 1 {
+                key.chars().next().map(|c| c as u16).unwrap_or(0)
+            } else if key.eq_ignore_ascii_case("enter") || key.eq_ignore_ascii_case("return") {
+                13
+            } else {
+                0
+            };
+            if key_down {
+                let down_ev = cef_key_event(key, modifiers, KeyEventType::RAWKEYDOWN, char_val, focus_on_editable_field);
+                host.send_key_event(Some(&down_ev));
+                if char_val != 0 && !modifiers.control && !modifiers.platform {
+                    let char_ev = cef_key_event(key, modifiers, KeyEventType::CHAR, char_val, focus_on_editable_field);
+                    host.send_key_event(Some(&char_ev));
+                }
+            } else {
+                let up_ev = cef_key_event(key, modifiers, KeyEventType::KEYUP, 0, focus_on_editable_field);
+                host.send_key_event(Some(&up_ev));
+            }
+        }
+    }
+
+    pub fn input_scroll(&self, tab_id: &str, x: i32, y: i32, delta_x: f32, delta_y: f32) {
+        let mods = gpui_kit::Modifiers::default();
+        self.send_mouse_wheel(tab_id, x, y, delta_x as i32, delta_y as i32, &mods, false);
+    }
+
+    pub fn take_agent_requests(
+        &self,
+    ) -> Vec<(crate::agent::protocol::AgentRequest, async_channel::Sender<crate::agent::protocol::AgentResponse>)> {
+        let mut requests = Vec::new();
+        while let Ok(item) = self.agent_receiver.try_recv() {
+            requests.push(item);
+        }
+        requests
+    }
+
+    pub fn agent_state(&self) -> Arc<Mutex<crate::agent::plugin::AgentState>> {
+        self.agent_state.clone()
     }
 }
