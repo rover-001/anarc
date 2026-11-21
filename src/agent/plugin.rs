@@ -7,8 +7,28 @@ use crate::plugin::{
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub static AGENT_PLUGIN_ID: &str = "anarc.agent";
+
+const WINDOW_NOT_READY: &str =
+    "anarc window not ready (no frame painted). use: focus the Anarc window, then retry";
+static WINDOW_PAINTED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn note_window_painted() {
+    WINDOW_PAINTED.store(true, Ordering::Release);
+}
+
+fn doctor_header(painted: bool, initialized: bool, browsers: usize) -> String {
+    let yes_no = |value| if value { "yes" } else { "no" };
+    format!(
+        "server version: {}\ninstance/profile: {:?}\nwindow painted: {}\nCEF initialized: {}\nbrowser-map keys: {browsers}",
+        env!("CARGO_PKG_VERSION"),
+        crate::paths::cef_root_dir(),
+        yes_no(painted),
+        yes_no(initialized),
+    )
+}
 
 static ENGINE_REQUEST_CHANNEL: Mutex<
     Option<(
@@ -21,6 +41,7 @@ pub(crate) fn register_engine_agent_channel(
     req_tx: async_channel::Sender<(AgentRequest, async_channel::Sender<AgentResponse>)>,
     wake_tx: async_channel::Sender<()>,
 ) {
+    WINDOW_PAINTED.store(false, Ordering::Release);
     if let Ok(mut guard) = ENGINE_REQUEST_CHANNEL.lock() {
         *guard = Some((req_tx, wake_tx));
     }
@@ -30,6 +51,18 @@ pub(crate) fn forward_request_to_engine(
     req: AgentRequest,
     resp_tx: async_channel::Sender<AgentResponse>,
 ) {
+    if !WINDOW_PAINTED.load(Ordering::Acquire) {
+        let reply = match req {
+            AgentRequest::Doctor => AgentResponse::success(format!(
+                "{}\ntabs: unavailable before first paint", doctor_header(false, false, 0)
+            )),
+            AgentRequest::Tabs | AgentRequest::See { .. } | AgentRequest::Do { .. } =>
+                AgentResponse::err(WINDOW_NOT_READY),
+            _ => AgentResponse::err("anarc window starting. use: anarc-ctl doctor"),
+        };
+        let _ = resp_tx.try_send(reply);
+        return;
+    }
     if let Ok(guard) = ENGINE_REQUEST_CHANNEL.lock() {
         if let Some((ref r_tx, ref w_tx)) = *guard {
             if let Err(error) = r_tx.try_send((req, resp_tx)) {
@@ -119,7 +152,7 @@ pub(crate) fn handle_agent_request(
     let agent_state = app.engine.agent_state();
     let is_paused = agent_state.lock().map(|s| s.is_paused).unwrap_or(false);
 
-    if is_paused && !matches!(req, AgentRequest::Resume | AgentRequest::Status) {
+    if is_paused && !matches!(req, AgentRequest::Resume | AgentRequest::Status | AgentRequest::Doctor | AgentRequest::Tabs) {
         let _ = resp_tx.try_send(AgentResponse::err("agent paused. use: resume"));
         return;
     }
@@ -139,6 +172,9 @@ pub(crate) fn handle_agent_request(
         && parsed_ops.iter().all(|op| matches!(op, super::act::ActionOp::Tab { .. }));
     if !tab_only && let Some(tab_id) = req.target_tab_mut() {
         let target = tab_id.clone().unwrap_or_else(|| app.active_tab_id().to_string());
+        if !app.engine.has_browser(&target) {
+            app.engine.log_agent_browser_miss(&target);
+        }
         let Some((space_id, url)) = app.spaces().iter().find_map(|space| {
             space.tabs.iter().find(|tab| tab.id == target)
                 .map(|tab| (space.id.clone(), tab.url.clone()))
@@ -147,11 +183,19 @@ pub(crate) fn handle_agent_request(
             return;
         };
         if !app.engine.has_browser(&target) {
-            // Blank tabs show native new-tab chrome, so rendering never starts CEF for them.
-            if url == "about:blank" || url.is_empty() {
-                let _ = app.engine.ensure_browser(&space_id, &target, "about:blank", 768, 512, 0, 0.0);
+            if !app.engine.is_initialized() {
+                let _ = resp_tx.try_send(AgentResponse::err("CEF unavailable. use: anarc-ctl doctor"));
+                return;
             }
-            let mut response = AgentResponse::err("tab not ready, retry in 1s");
+            if !app.engine.agent_browser_pending(&target) {
+                let url = if url.is_empty() || url == "lumen://welcome" { "about:blank" } else { &url };
+                if let Err(error) = app.engine.ensure_browser(&space_id, &target, url, 768, 512, 0, 0.0) {
+                    eprintln!("anarc-agent: wake {target:?} failed: {error}");
+                    let _ = resp_tx.try_send(AgentResponse::err("tab wake failed. use: anarc-ctl doctor"));
+                    return;
+                }
+            }
+            let mut response = AgentResponse::err("tab still loading. use: anarc-ctl doctor");
             response.pending_tab = Some(target);
             let _ = resp_tx.try_send(response);
             return;
@@ -160,6 +204,14 @@ pub(crate) fn handle_agent_request(
     }
 
     match req {
+        AgentRequest::Doctor => {
+            let app = &*app;
+            let tabs = app.spaces().iter().flat_map(|space| {
+                space.tabs.iter().map(move |tab| format!("{:?} {}", tab.id, browser_state(app, &tab.id)))
+            }).collect::<Vec<_>>().join(", ");
+            let header = doctor_header(true, app.engine.is_initialized(), app.engine.browser_key_count());
+            let _ = resp_tx.try_send(AgentResponse::success(format!("{header}\ntabs: {tabs}")));
+        }
         AgentRequest::Pause => {
             if let Ok(mut state) = agent_state.lock() {
                 state.is_paused = true;
@@ -189,7 +241,7 @@ pub(crate) fn handle_agent_request(
                 lines.push(format!("Space: {} ({})", space.name, space.id));
                 for tab in &space.tabs {
                     let active_mark = if space.active.as_deref() == Some(&tab.id) { "*" } else { " " };
-                    lines.push(format!("  [{active_mark}] {} \"{}\" -> {}", tab.id, tab.title, tab.url));
+                    lines.push(format!("  [{active_mark}] {} \"{}\" -> {} ({})", tab.id, tab.title, tab.url, browser_state(app, &tab.id)));
                 }
             }
             let _ = resp_tx.try_send(AgentResponse::success(lines.join("\n")));
@@ -337,6 +389,16 @@ pub(crate) fn handle_agent_request(
             };
             let _ = resp_tx.try_send(AgentResponse::success(notice));
         }
+    }
+}
+
+fn browser_state(app: &crate::app::Lumen, id: &str) -> &'static str {
+    if app.engine.has_browser(id) {
+        "live"
+    } else if app.engine.agent_browser_pending(id) {
+        "loading"
+    } else {
+        "asleep"
     }
 }
 

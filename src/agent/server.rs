@@ -169,7 +169,7 @@ fn handle_connection(
         let parsed = parse_client_command(trimmed);
         let op = parsed.as_ref().map_or("unknown", AgentRequest::op);
         let response = match parsed {
-            Ok(request) => wait_for_tab(request, Duration::from_secs(3), |request| {
+            Ok(request) => wait_for_tab(request, Duration::from_secs(5), |request| {
                 let (resp_tx, resp_rx) = async_channel::bounded(1);
                 if handler_tx.try_send((request, resp_tx)).is_err() {
                     return AgentResponse::err("agent busy. use: status");
@@ -252,6 +252,7 @@ pub fn parse_client_command(input: &str) -> Result<AgentRequest, &'static str> {
         }
         "wait" => AgentRequest::Do { tab_id: None, ops: input.to_string() },
         "tabs" => AgentRequest::Tabs,
+        "doctor" => AgentRequest::Doctor,
         "pause" => AgentRequest::Pause,
         "resume" => AgentRequest::Resume,
         "status" => AgentRequest::Status,
