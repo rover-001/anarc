@@ -539,7 +539,7 @@ fn closing_an_empty_tab_does_not_trigger_closing_ghost_animation(cx: &mut gpui::
 }
 
 #[gpui::test]
-fn closing_last_regular_tab_activates_favorite_without_spawning_new_tab(cx: &mut gpui::TestAppContext) {
+fn closing_last_regular_tab_keeps_favorite_unloaded_and_spawns_new_tab(cx: &mut gpui::TestAppContext) {
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -560,9 +560,11 @@ fn closing_last_regular_tab_activates_favorite_without_spawning_new_tab(cx: &mut
         app.close_active_tab();
 
         let active_space = app.active_space();
-        assert_eq!(active_space.tabs.len(), 1);
+        assert_eq!(active_space.tabs.len(), 2);
         assert_eq!(active_space.tabs[0].id, "fav-1");
-        assert_eq!(active_space.active.as_deref(), Some("fav-1"));
+        assert_ne!(active_space.active.as_deref(), Some("fav-1"));
+        assert!(!active_space.tabs[1].favorite);
+        assert_eq!(active_space.tabs[1].url, "about:blank");
     });
 }
 
