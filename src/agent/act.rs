@@ -35,6 +35,7 @@ pub enum ActionOp {
     TypeSecret { ref_id: String, secret_name: String },
     SemanticType { kind: char, label: String, text: String },
     Key { chord: String },
+    Submit,
     Go { url: String },
     Back,
     Fwd,
@@ -103,6 +104,9 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         return Ok(ActionOp::Go { url });
     }
 
+    if s == "submit" {
+        return Ok(ActionOp::Submit);
+    }
     if s == "back" {
         return Ok(ActionOp::Back);
     }
@@ -280,16 +284,23 @@ pub fn execute_dsl(
     let agent_state = app.engine.agent_state();
     let mut op_count: usize = 0;
     let policy_config = PolicyConfig::default();
+    let mut submissions = Vec::new();
 
     for (index, op) in ops.iter().enumerate() {
         let op_num = index.saturating_add(1);
-        let res = execute_single_op(app, tab_id, op, &agent_state, &policy_config);
+        let res = execute_single_op(app, tab_id, op, &agent_state, &policy_config, &mut submissions);
         if let Err(e) = res {
             log_audit_event(&format!("op{op_num}: {op:?}"), tab_id, &format!("fail: {e}"));
             return AgentResponse::err(format!("fail op{op_num}: {e}"));
         }
         op_count = op_count.saturating_add(1);
     }
+
+    let summary = if submissions.is_empty() {
+        format!("ok {op_count}")
+    } else {
+        format!("ok {op_count} · {}", submissions.join(" · "))
+    };
 
     // Settle wait and post-action observation
     std::thread::sleep(std::time::Duration::from_millis(150));
@@ -302,7 +313,7 @@ pub fn execute_dsl(
         Ok(Ok(s)) => s,
         _ => {
             log_audit_event("batch", tab_id, &format!("ok {op_count}"));
-            return AgentResponse::success(format!("ok {op_count}"));
+            return AgentResponse::success(summary);
         }
     };
 
@@ -310,28 +321,28 @@ pub fn execute_dsl(
         Ok(idx) => idx,
         _ => {
             log_audit_event("batch", tab_id, &format!("ok {op_count}"));
-            return AgentResponse::success(format!("ok {op_count}"));
+            return AgentResponse::success(summary);
         }
     };
 
     let mut guard = match agent_state.lock() {
         Ok(g) => g,
-        Err(_) => return AgentResponse::success(format!("ok {op_count}")),
+        Err(_) => return AgentResponse::success(summary),
     };
 
     let registry = guard.registries.entry(tab_id.to_string()).or_default();
     let (header, elements, diff, gen_changed) = registry.update_from_raw(raw_index);
 
-    log_audit_event("batch", tab_id, &format!("ok {op_count} · g{}", header.generation));
+    log_audit_event("batch", tab_id, &format!("{summary} · g{}", header.generation));
 
     if gen_changed {
         let see_output = format_see_output(&header, &elements, Some(&super::plugin::compact_tabs(app)));
-        AgentResponse::success(format!("ok {op_count} · g{}\n{see_output}", header.generation))
+        AgentResponse::success(format!("{summary} · g{}\n{see_output}", header.generation))
     } else if !diff.is_empty() {
         let diff_str = diff.format_diff();
-        AgentResponse::success(format!("ok {op_count} · g{}\n{diff_str}", header.generation))
+        AgentResponse::success(format!("{summary} · g{}\n{diff_str}", header.generation))
     } else {
-        AgentResponse::success(format!("ok {op_count} · g{}", header.generation))
+        AgentResponse::success(format!("{summary} · g{}", header.generation))
     }
 }
 
@@ -341,6 +352,7 @@ fn execute_single_op(
     op: &ActionOp,
     state_lock: &std::sync::Arc<std::sync::Mutex<super::plugin::AgentState>>,
     policy_config: &PolicyConfig,
+    submissions: &mut Vec<&'static str>,
 ) -> Result<(), String> {
     match op {
         ActionOp::Click { ref_id } => {
@@ -357,81 +369,25 @@ fn execute_single_op(
 
             let (cx, cy) = resolve_ref_coords(ref_id, tab_id, state_lock)?;
             check_occlusion(app, tab_id, cx, cy, ref_id)?;
-            app.engine.input_move(tab_id, cx, cy);
-            app.engine.input_click(tab_id, cx, cy, None);
+            click_at(app, tab_id, cx, cy)?;
             super::playbook::record_action(ref_id);
             Ok(())
         }
-        ActionOp::ClearAndType { ref_id, text } => {
-            let (cx, cy) = resolve_ref_coords(ref_id, tab_id, state_lock)?;
-            check_occlusion(app, tab_id, cx, cy, ref_id)?;
-            app.engine.input_move(tab_id, cx, cy);
-            app.engine.input_click(tab_id, cx, cy, None);
-            let focus_script = format!(
-                "const el = document.elementFromPoint({cx}, {cy}); \
-                 if (el) {{ \
-                     el.focus(); \
-                     const ce = el.closest ? (el.closest('[contenteditable=\"true\"], rich-textarea, [role=\"textbox\"]') || el) : el; \
-                     if (ce && ce.focus) ce.focus(); \
-                     if ('value' in el) {{ el.value = ''; }} \
-                     else if (el.isContentEditable) {{ el.innerText = ''; }} \
-                 }}"
-            );
-            app.engine.execute_script(tab_id, &focus_script);
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            let type_rx = app.engine.input_type(tab_id, text);
-            let _ = futures_lite::future::block_on(async { type_rx.recv().await });
-            let rich_fallback = format!(
-                "const el = document.activeElement; \
-                 if (el) {{ \
-                     const target = (el.isContentEditable || (el.closest && el.closest('[contenteditable=\"true\"], rich-textarea, [role=\"textbox\"]'))) ? el : null; \
-                     if (target && (!target.innerText || target.innerText.trim().length === 0)) {{ \
-                         document.execCommand('insertText', false, '{}'); \
-                         target.dispatchEvent(new Event('input', {{ bubbles: true }})); \
-                     }} \
-                 }}",
-                text.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\n")
-            );
-            app.engine.execute_script(tab_id, &rich_fallback);
-            super::playbook::record_action(&format!("{ref_id}=\"{text}\""));
-            Ok(())
-        }
-        ActionOp::AppendText { ref_id, text } => {
-            let (cx, cy) = resolve_ref_coords(ref_id, tab_id, state_lock)?;
-            app.engine.input_move(tab_id, cx, cy);
-            app.engine.input_click(tab_id, cx, cy, None);
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            let type_rx = app.engine.input_type(tab_id, text);
-            let _ = futures_lite::future::block_on(async { type_rx.recv().await });
-            let rich_fallback = format!(
-                "const el = document.activeElement; \
-                 if (el) {{ \
-                     const target = (el.isContentEditable || (el.closest && el.closest('[contenteditable=\"true\"], rich-textarea, [role=\"textbox\"]'))) ? el : null; \
-                     if (target && (!target.innerText || !target.innerText.includes('{}'))) {{ \
-                         document.execCommand('insertText', false, '{}'); \
-                         target.dispatchEvent(new Event('input', {{ bubbles: true }})); \
-                     }} \
-                 }}",
-                text.replace('\\', "\\\\").replace('\'', "\\'"),
-                text.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\n")
-            );
-            app.engine.execute_script(tab_id, &rich_fallback);
-            super::playbook::record_action(&format!("{ref_id}+\"{text}\""));
+        ActionOp::ClearAndType { ref_id, text } | ActionOp::AppendText { ref_id, text } => {
+            let (x, y) = resolve_ref_coords(ref_id, tab_id, state_lock)?;
+            check_occlusion(app, tab_id, x, y, ref_id)?;
+            let replace = matches!(op, ActionOp::ClearAndType { .. });
+            type_at(app, tab_id, x, y, text, replace)?;
+            let operator = if replace { "=" } else { "+" };
+            super::playbook::record_action(&format!("{ref_id}{operator}\"{text}\""));
             Ok(())
         }
         ActionOp::TypeSecret { ref_id, secret_name } => {
-            let (cx, cy) = resolve_ref_coords(ref_id, tab_id, state_lock)?;
-            app.engine.input_move(tab_id, cx, cy);
-            app.engine.input_click(tab_id, cx, cy, None);
-            let clear_script = "if (document.activeElement) { document.activeElement.value = ''; }";
-            app.engine.execute_script(tab_id, clear_script);
-            let secret_val = resolve_secret(secret_name).unwrap_or_default();
-            if secret_val.is_empty() {
-                return Err("secret missing. use: see".into());
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            let type_rx = app.engine.input_type(tab_id, &secret_val);
-            let _ = futures_lite::future::block_on(async { type_rx.recv().await });
+            let secret = resolve_secret(secret_name).filter(|secret| !secret.is_empty())
+                .ok_or("secret missing. use: see")?;
+            let (x, y) = resolve_ref_coords(ref_id, tab_id, state_lock)?;
+            check_occlusion(app, tab_id, x, y, ref_id)?;
+            type_at(app, tab_id, x, y, &secret, true)?;
             super::playbook::record_action(&format!("{ref_id}=@secret:{secret_name}"));
             Ok(())
         }
@@ -441,35 +397,29 @@ fn execute_single_op(
             }
             let (cx, cy, id) = resolve_semantic_coords(*kind, label, tab_id, state_lock)?;
             check_occlusion(app, tab_id, cx, cy, &id)?;
-            app.engine.input_click(tab_id, cx, cy, None);
+            click_at(app, tab_id, cx, cy)?;
             super::playbook::record_action(&format!("{kind}:\"{label}\""));
             Ok(())
         }
         ActionOp::SemanticType { kind, label, text } => {
-            let (cx, cy, id) = resolve_semantic_coords(*kind, label, tab_id, state_lock)?;
-            check_occlusion(app, tab_id, cx, cy, &id)?;
-            app.engine.input_click(tab_id, cx, cy, None);
-            let clear_script = "if (document.activeElement) { document.activeElement.value = ''; }";
-            app.engine.execute_script(tab_id, clear_script);
-            let type_rx = app.engine.input_type(tab_id, text);
-            let _ = futures_lite::future::block_on(async { type_rx.recv().await });
+            let (x, y, id) = resolve_semantic_coords(*kind, label, tab_id, state_lock)?;
+            check_occlusion(app, tab_id, x, y, &id)?;
+            type_at(app, tab_id, x, y, text, true)?;
             super::playbook::record_action(&format!("{kind}:\"{label}\"=\"{text}\""));
             Ok(())
         }
         ActionOp::Key { chord } => {
             let mut mods = gpui_kit::Modifiers::default();
             let key = parse_chord_modifiers(chord, &mut mods);
-            app.engine.input_key(tab_id, key, &mods, true);
-            app.engine.input_key(tab_id, key, &mods, false);
-            if key.eq_ignore_ascii_case("enter") || key.eq_ignore_ascii_case("return") {
-                let enter_js = "if (document.activeElement) { \
-                    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true })); \
-                    document.activeElement.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true })); \
-                    document.activeElement.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true })); \
-                }";
-                app.engine.execute_script(tab_id, enter_js);
+            if crate::engine::windows_key_code_for_key(key) == 0 {
+                return Err("unknown key. use: do \"key Enter\"".into());
             }
+            press_key(app, tab_id, key, &mods);
             super::playbook::record_action(&format!("key {chord}"));
+            Ok(())
+        }
+        ActionOp::Submit => {
+            submissions.push(submit(app, tab_id)?);
             Ok(())
         }
         ActionOp::Go { url } => {
@@ -492,8 +442,7 @@ fn execute_single_op(
                 }
             }
 
-            let script = format!("location.href = '{}';", url.replace('\'', "\\'"));
-            app.engine.execute_script(tab_id, &script);
+            app.engine.navigate(tab_id, url);
             super::playbook::record_action(&format!("go {url}"));
             Ok(())
         }
@@ -530,8 +479,7 @@ fn execute_single_op(
         }
         ActionOp::Focus { ref_id } => {
             let (cx, cy) = resolve_ref_coords(ref_id, tab_id, state_lock)?;
-            app.engine.input_move(tab_id, cx, cy);
-            app.engine.input_click(tab_id, cx, cy, None);
+            click_at(app, tab_id, cx, cy)?;
             let focus_script = format!(
                 "const el = document.elementFromPoint({cx}, {cy}); \
                  if (el) {{ \
@@ -551,17 +499,14 @@ fn execute_single_op(
             // Intermediate drag steps
             let steps = 5;
             for i in 1..=steps {
-                let cur_x = x1.saturating_add(((x2.saturating_sub(x1)) * i) / steps);
-                let cur_y = y1.saturating_add(((y2.saturating_sub(y1)) * i) / steps);
+                let cur_x = x1.saturating_add(x2.saturating_sub(x1).saturating_mul(i) / steps);
+                let cur_y = y1.saturating_add(y2.saturating_sub(y1).saturating_mul(i) / steps);
                 app.engine.send_mouse_move(tab_id, cur_x, cur_y, false, &mods, Some(gpui_kit::MouseButton::Left));
             }
             app.engine.send_mouse_click(tab_id, x2, y2, cef::MouseButtonType::LEFT, true, 1, &mods);
             Ok(())
         }
-        ActionOp::XY { x, y } => {
-            app.engine.input_click(tab_id, *x, *y, None);
-            Ok(())
-        }
+        ActionOp::XY { x, y } => click_at(app, tab_id, *x, *y),
         ActionOp::Upload { ref_id, file_path } => {
             let p = std::path::Path::new(file_path);
             if !p.exists() {
@@ -610,6 +555,123 @@ fn execute_single_op(
             Ok(())
         }
     }
+}
+
+fn click_at(app: &crate::app::Lumen, tab: &str, x: i32, y: i32) -> Result<(), String> {
+    app.engine.set_focus(tab, true);
+    for kind in ["mousePressed", "mouseReleased"] {
+        let params = serde_json::json!({
+            "type": kind, "x": x, "y": y, "button": "left", "clickCount": 1,
+        });
+        let result = app.engine.devtools(tab, "Input.dispatchMouseEvent", Some(&params.to_string()));
+        result.recv_blocking().ok().and_then(Result::ok)
+            .ok_or("click failed. use: see")?;
+    }
+    Ok(())
+}
+
+fn press_key(app: &crate::app::Lumen, tab: &str, key: &str, mods: &gpui_kit::Modifiers) {
+    app.engine.set_focus(tab, true);
+    app.engine.input_key(tab, key, mods, true);
+    app.engine.input_key(tab, key, mods, false);
+}
+
+fn type_at(
+    app: &crate::app::Lumen, tab: &str, x: i32, y: i32, text: &str, replace: bool,
+) -> Result<(), String> {
+    click_at(app, tab, x, y)?;
+    let script = format!(r#"(() => {{
+        const target = document.elementFromPoint({x}, {y})
+            ?.closest('input, textarea, select, [contenteditable], [role=textbox]');
+        if (!target) return 'missing';
+        target.focus();
+        if (target instanceof HTMLSelectElement) {{
+            target.value = {text};
+            target.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            target.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            return 'select';
+        }}
+        return 'editable';
+    }})()"#, text = serde_json::json!(text));
+    match evaluate_action(app, tab, &script)?.as_str() {
+        "select" => return Ok(()),
+        "editable" => {}
+        _ => return Err("field unavailable. use: see".into()),
+    }
+    let control = gpui_kit::Modifiers { control: true, ..Default::default() };
+    if replace {
+        press_key(app, tab, "a", &control);
+        if text.is_empty() {
+            press_key(app, tab, "Backspace", &gpui_kit::Modifiers::default());
+            return Ok(());
+        }
+    } else {
+        press_key(app, tab, "End", &control);
+    }
+    app.engine.input_type(tab, text).recv_blocking().ok().and_then(Result::ok)
+        .ok_or("typing failed. use: see")?;
+    Ok(())
+}
+
+fn evaluate_action(app: &crate::app::Lumen, tab: &str, script: &str) -> Result<String, String> {
+    app.engine.evaluate(tab, script).recv_blocking().ok().and_then(Result::ok)
+        .ok_or_else(|| "page unavailable. use: see".into())
+}
+
+fn submit(app: &crate::app::Lumen, tab: &str) -> Result<&'static str, String> {
+    let focus = r#"(() => {
+        const selector = 'input:not([type=hidden]):not([type=submit]):not([type=button]), textarea, [contenteditable]:not([contenteditable=false]), [role=textbox]';
+        const active = document.activeElement;
+        const field = active?.closest(selector) || Array.from(document.querySelectorAll('form'))
+            .flatMap(form => Array.from(form.querySelectorAll(selector)))
+            .find(el => el.getClientRects().length && !el.disabled);
+        if (field) field.focus();
+        return field ? 'field' : 'none';
+    })()"#;
+    // Ignore a line break in a contenteditable when detecting a submitted reply.
+    let fingerprint = r#"(() => {
+        const active = document.activeElement;
+        const text = (document.querySelector('main,[role=main]') || document.body).innerText;
+        const editor = active?.isContentEditable ? active.innerText.trim() : '';
+        const reply = (editor ? text.replace(editor, '') : text).replace(/\s+/g, ' ').trim();
+        return JSON.stringify([location.href, reply, active?.value ?? editor]);
+    })()"#;
+    if evaluate_action(app, tab, focus)? == "field" {
+        let before = evaluate_action(app, tab, fingerprint)?;
+        press_key(app, tab, "Enter", &gpui_kit::Modifiers::default());
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        match evaluate_action(app, tab, fingerprint) {
+            Ok(after) if before == after => {}
+            // Navigation can close the old execution context after Enter.
+            _ => return Ok("submit via Enter"),
+        }
+    }
+
+    let button = r#"(() => {
+        const field = document.activeElement;
+        const form = field?.form || field?.closest('form');
+        const rect = field?.getBoundingClientRect();
+        const candidates = Array.from(document.querySelectorAll('button, [role=button], input[type=submit], input[type=button]'))
+            .filter(el => /(send|submit|post|go)/i.test(
+                el.getAttribute('aria-label') || el.innerText || el.value || el.title || ''
+            ) && !el.disabled && el.getAttribute('aria-disabled') !== 'true' && el.checkVisibility());
+        const score = el => {
+            const r = el.getBoundingClientRect();
+            return (form && (el.form === form || form.contains(el)) ? 0 : 1e6)
+                + (rect ? Math.hypot(r.x - rect.x, r.y - rect.y) : 0);
+        };
+        const target = candidates.sort((a, b) => score(a) - score(b)).at(0);
+        if (!target) return null;
+        target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        const r = target.getBoundingClientRect();
+        const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2);
+        return target.contains(document.elementFromPoint(x, y)) ? [x, y] : null;
+    })()"#;
+    let coords = evaluate_action(app, tab, button)?;
+    let (x, y) = serde_json::from_str::<(i32, i32)>(&coords)
+        .map_err(|_| "submit button unavailable. use: see")?;
+    click_at(app, tab, x, y)?;
+    Ok("submit via button")
 }
 
 fn resolve_ref_coords(
