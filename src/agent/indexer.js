@@ -222,6 +222,55 @@
     }
   };
 
+  window.__anarc_wait_stream = async function(quiescentMs, maxTimeoutMs) {
+    quiescentMs = quiescentMs || 1000;
+    maxTimeoutMs = maxTimeoutMs || 30000;
+    const start = performance.now();
+    let lastChange = start;
+    let sawStreaming = false;
+
+    const isStreamingIndicatorPresent = () => {
+      const stopBtn = document.querySelector(
+        'button[aria-label*="Stop" i], button[data-testid*="stop-button" i], button[data-testid*="stop" i], [aria-label*="Stop generating" i], [aria-label*="Stop response" i], .result-streaming, [data-is-streaming="true"]'
+      );
+      return Boolean(stopBtn && isVisible(stopBtn));
+    };
+
+    const length = () => (lastMessage() || (document.querySelector('main,[role=main]') || document.body)?.innerText || '').length;
+    let previous = length();
+
+    while (true) {
+      const now = performance.now();
+      const current = length();
+      const streaming = isStreamingIndicatorPresent();
+
+      if (streaming) {
+        sawStreaming = true;
+      }
+
+      if (current !== previous) {
+        previous = current;
+        lastChange = now;
+      }
+
+      // If streaming was previously detected and now stop button is gone + quiescent
+      if (sawStreaming && !streaming && (now - lastChange >= Math.min(quiescentMs, 500))) {
+        return window.__anarc_index('view');
+      }
+
+      // If text hasn't changed for quiescentMs and no streaming indicator is active
+      if (!streaming && (now - lastChange >= quiescentMs) && current > 0) {
+        return window.__anarc_index('view');
+      }
+
+      if (now - start >= maxTimeoutMs) {
+        return streaming ? 'streaming' : window.__anarc_index('view');
+      }
+
+      await new Promise(resolve => setTimeout(resolve, Math.min(100, quiescentMs, maxTimeoutMs - (now - start))));
+    }
+  };
+
   window.__anarc_read = function(mode, maxChars) {
     mode = mode || 'text';
     maxChars = maxChars || 4000;

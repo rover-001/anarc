@@ -178,6 +178,13 @@ pub fn build_stable_call_script(ms: u64) -> String {
     format!("{} window.__anarc_wait_stable({ms});", build_indexer_injection_script())
 }
 
+pub fn build_stream_call_script(quiescent_ms: u64, max_timeout_ms: u64) -> String {
+    format!(
+        "{} window.__anarc_wait_stream({quiescent_ms}, {max_timeout_ms});",
+        build_indexer_injection_script()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

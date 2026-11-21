@@ -2881,5 +2881,58 @@
     "symbols": [],
     "guidance": "Fixed windows crate SendMessageW signature to pass Some(WPARAM) and Some(LPARAM) in vendor/gpui-pre-windows/src/window.rs; relaxed build.rs to log warning instead of panicking on resource compilation; verified clippy and test suite, pushed to main.",
     "updated_at": "2026-11-20T05:33:40.455761847+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/agent/act.rs",
+      "src/agent/mod.rs",
+      "src/agent/observe.rs",
+      "src/agent/playbook.rs",
+      "src/agent/plugin.rs",
+      "src/agent/policy.rs",
+      "src/agent/protocol.rs",
+      "src/agent/refs.rs",
+      "src/agent/server.rs",
+      "src/app/actions/mod.rs",
+      "src/app/render.rs",
+      "src/bin/anarc_ctl.rs",
+      "src/engine/cef_runtime.rs",
+      "src/engine/mod.rs",
+      "src/engine/navigation.rs",
+      "src/main.rs",
+      "src/plugin/services.rs",
+      "src/plugins.rs",
+      "tools/agent-bench/bench.py",
+      "tools/agent-bench/run_email_task.py"
+    ],
+    "symbols": [],
+    "guidance": "Pushed Live Share changes and plugin to origin/live-share, created new feat/agent-control branch with all agent control work and pushed to origin/feat/agent-control, keeping main completely untouched.",
+    "updated_at": "2026-11-21T02:46:41.850199059+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/app/actions/tabs.rs",
+      "src/app/tests.rs"
+    ],
+    "symbols": [],
+    "guidance": "Ran autonomous subagent in Anarc for cross-model essay generation and review; extracted complete telemetric analysis covering 63 tool calls, 2.46M tokens, 252s duration, and isolated root causes across lazy tab init, confirm policy on 'send', and binary image read_file crash.",
+    "updated_at": "2026-11-21T03:17:12.599248962+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/agent/act.rs",
+      "src/agent/observe.rs",
+      "src/agent/plugin.rs",
+      "src/agent/refs.rs",
+      "src/agent/server.rs",
+      "src/bin/anarc_ctl.rs",
+      "src/engine/callbacks.rs"
+    ],
+    "symbols": [],
+    "guidance": "Implemented all 6 Anarc Agent Control architectural enhancements across act.rs, indexer.js, observe.rs, refs.rs, plugin.rs, server.rs, callbacks.rs, and anarc_ctl.rs. Enabled systemd user socket activation and verified live against active ChatGPT tab.",
+    "updated_at": "2026-11-21T12:58:25.280422645+00:00"
   }
 ]

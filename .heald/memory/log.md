@@ -434,3 +434,47 @@ Embedded Windows application icon into executable via embed-resource, assets/ana
 ## Session 2026-11-20T05:33:40.451610203+00:00
 
 Fixed windows crate SendMessageW signature to pass Some(WPARAM) and Some(LPARAM) in vendor/gpui-pre-windows/src/window.rs; relaxed build.rs to log warning instead of panicking on resource compilation; verified clippy and test suite, pushed to main.
+
+## Session 2026-11-21T02:46:41.845716047+00:00
+
+Pushed Live Share changes and plugin to origin/live-share, created new feat/agent-control branch with all agent control work and pushed to origin/feat/agent-control, keeping main completely untouched.
+
+## Session 2026-11-21T03:17:12.593631668+00:00
+
+Ran autonomous subagent in Anarc for cross-model essay generation and review; extracted complete telemetric analysis covering 63 tool calls, 2.46M tokens, 252s duration, and isolated root causes across lazy tab init, confirm policy on 'send', and binary image read_file crash.
+
+## Session 2026-11-21T11:23:46.090720014+00:00
+
+Executed cross-model interaction pipeline between ChatGPT (Tab 2) and Google Gemini (Tab 5) using Anarc Agent Control MCP tools. Generated 3-paragraph essay on AI agent ethics and captured comprehensive critique from Gemini.
+
+## Session 2026-11-21T11:24:38.539991215+00:00
+
+Opened Anarc browser, dispatched autonomous subagent to prompt ChatGPT for an essay on AI agent ethics and transfer it to Google Gemini for review, and captured complete telemetry including tool calls, token usage, error analysis, and duration.
+
+## Session 2026-11-21T11:28:11.622472890+00:00
+
+Audited subagent performance and executed an optimized Checkmate workflow reducing execution time to 96s and token consumption to 209k tokens with zero runtime errors.
+
+## Session 2026-11-21T12:00:04.006815019+00:00
+
+Evaluated further optimization pathways across 5 benchmark runs, identifying the physical latency floor, DSL syntax invariants, and architectural improvements.
+
+## Session 2026-11-21T12:03:04.864968974+00:00
+
+Extracted and summarized the first 5 inbox emails from live Gmail session in Anarc.
+
+## Session 2026-11-21T12:08:38.816388450+00:00
+
+Sent email saying hello to pappikapapu@gmail.com via Gmail in Anarc browser, verified transmission in Sent folder.
+
+## Session 2026-11-21T12:11:36.303642323+00:00
+
+Sent email asking about food delivery to ichiragmahajan@gmail.com via Gmail in Anarc, verified transmission in Sent folder.
+
+## Session 2026-11-21T12:14:16.185824571+00:00
+
+Opened WhatsApp Web in Anarc and sent message 'hello' to contact Peble, verified delivery in chat history.
+
+## Session 2026-11-21T12:58:25.275945575+00:00
+
+Implemented all 6 Anarc Agent Control architectural enhancements across act.rs, indexer.js, observe.rs, refs.rs, plugin.rs, server.rs, callbacks.rs, and anarc_ctl.rs. Enabled systemd user socket activation and verified live against active ChatGPT tab.

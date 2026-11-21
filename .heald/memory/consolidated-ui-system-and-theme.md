@@ -1,7 +1,7 @@
 ---
 type: decision
 title: "Consolidated: UI System & Theme"
-timestamp: 2026-11-19T03:55:55.137928865+00:00
+timestamp: 2026-11-21T03:17:08.086414955+00:00
 tags: [consolidated, "ui-system-&-theme"]
 ---
 
@@ -11,6 +11,7 @@ Consolidated architectural decisions, system invariants, and implementation patt
 
 ## Core System Decisions & Invariants
 
+- **Anarc Agent Control subagent telemetry, policy confirm gate on Send, and CEF lazy tab handling**: Audited subagent browser automation in Anarc. Discovered: 1) Tabs created in Anarc are initialized lazily by CEF only when activated/rendered in GPUI, causing 'tab not found' if queried before UI render. 2) PolicyConfig hardcodes 'send' in confirm_intents, triggering 'needs_confirm' on chat apps with a 'Send' button. 3) LLM subagent crashed on step 145 when calling read_file on binary PNG screenshot causing API code 400. 4) Successfully captured full execution telemetry (63 tool calls, 2,463,527 total tokens, 252s elapsed time).
 - **Eliminate OSR scrolling judder with dirty rect reuse, zero wake latency, and 1:1 input fidelity**: 1. Implemented persistent cached_buffer in LumenRenderHandler with copy_dirty_rects, eliminating full 8.3MB frame reallocations per paint. 2. Removed cx.on_next_frame deferral from the UI update loop, triggering immediate repaint without 2-frame latency. 3. Retained 2-frame depth window in retired_images before dropping to prevent WGPU atlas churn. 4. Scaled wheel lines by 100px * device scale factor, set WHEEL_SCROLL_SCALE to 1.0, dispatched precision touch deltas directly for zero input lag, and added smooth momentum fling on release. 5. Driven send_external_begin_frame from Lumen::render aligned with GPUI vsync at 144Hz.
 - **Web view container enforces size_full layout and suppresses trailing pinch moves**: Root cause of the floating 50% card shrinkage on trackpad pinch-in and release: WebViewport render set explicit dimensions w(width * pinch_factor).h(height * pinch_factor) and top(pinch_offset.1).left(pinch_offset.0) on the inner container with CARD_RADIUS. When returning to natural scale (or unzoomed), any factor <= 1.0 or trailing TouchPhase::Moved event recreated the preview with factor < 1.0, shrinking the viewport into a 50% floating card with rounded corners exposing window background. Fix: 1) Made current container strictly size_full() whenever pinch_factor <= 1.0, and clamped offsets with min(0.0) so content never pulls away from viewport edges; 2) Added pinch_active tracking to ignore trailing TouchPhase::Moved events that arrive after Ended/Cancelled; 3) Made transition and crossfade containers size_full().
 - **Pinch preview enforces floor factor of 1.0 to prevent card shrinkage**: Render for WebViewport previously calculated factor = scale / base_scale, which produced factor < 1.0 (e.g. 0.5) when pinching in or returning from high zoom levels. This caused GPUI to shrink the container to width*factor and height*factor, rendering a small floating card inside the viewport and exposing window background. Clamped factor to 1.0 (pinch_factor = 1.0, pinch_offset = (0,0) whenever factor <= 1.0 + 1e-4) so the webpage container can never shrink below full viewport size.
@@ -35,8 +36,9 @@ Consolidated architectural decisions, system invariants, and implementation patt
 - `src/main.rs`
 - `src/ui/motion.rs`
 
-## Consolidated Evolution History (16 items archived)
+## Consolidated Evolution History (17 items archived)
 
+- 2026-11-21 — Anarc Agent Control subagent telemetry, policy confirm gate on Send, and CEF lazy tab handling (`anarc-agent-control-subagent-telemetry-policy-confirm-gate-on-send-and-cef-lazy-tab-handling.md`)
 - 2026-11-19 — Eliminate OSR scrolling judder with dirty rect reuse, zero wake latency, and 1:1 input fidelity (`eliminate-osr-scrolling-judder-with-dirty-rect-reuse-zero-wake-latency-and-11-input-fidelity.md`)
 - 2026-11-14 — Web view container enforces size_full layout and suppresses trailing pinch moves (`web-view-container-enforces-sizefull-layout-and-suppresses-trailing-pinch-moves.md`)
 - 2026-11-14 — Pinch preview enforces floor factor of 1.0 to prevent card shrinkage (`pinch-preview-enforces-floor-factor-of-10-to-prevent-card-shrinkage.md`)

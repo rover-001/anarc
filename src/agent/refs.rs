@@ -206,6 +206,41 @@ impl RefRegistry {
     pub fn resolve_ref(&self, ref_id: &str) -> Option<&ElementRef> {
         self.current_elements.get(ref_id)
     }
+
+    pub fn resolve_ref_with_fallback(&self, ref_id: &str) -> Option<&ElementRef> {
+        // 1. Exact match in current elements
+        if let Some(el) = self.current_elements.get(ref_id) {
+            return Some(el);
+        }
+
+        // 2. Fallback: match by prior element metadata across generation shift
+        if let Some(prev) = self.previous_elements.get(ref_id) {
+            // 2a. Match by persistent fingerprint
+            if let Some(new_id) = self.ref_by_fingerprint.get(&prev.fingerprint) {
+                if let Some(cur) = self.current_elements.get(new_id) {
+                    return Some(cur);
+                }
+            }
+            // 2b. Match by kind and identical name
+            let prev_name_lower = prev.name.to_lowercase();
+            for cur in self.current_elements.values() {
+                if cur.kind == prev.kind && cur.name.to_lowercase() == prev_name_lower {
+                    return Some(cur);
+                }
+            }
+            // 2c. Substring match if name is distinctive
+            if prev.name.len() >= 3 {
+                let candidates: Vec<&ElementRef> = self.current_elements.values()
+                    .filter(|cur| cur.kind == prev.kind && cur.name.to_lowercase().contains(&prev_name_lower))
+                    .collect();
+                if candidates.len() == 1 {
+                    return Some(candidates[0]);
+                }
+            }
+        }
+
+        None
+    }
 }
 
 pub fn strip_url_scheme(url: &str) -> String {
