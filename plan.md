@@ -415,3 +415,8 @@ Each phase ships alone. Do not start N+1 until N's acceptance passes.
 - `671f21b` Use trusted browser input for editors and report whether `submit` used Enter or clicked a button.
 - `750511a` Classify confirmation by form and dialog context. Scope approvals to one origin and intent per session. Configure defaults with `confirm` and exceptions with `confirm_allow` in `plugins.toml`. The approval UI still needs a mock.
 - `e508dd4` Return PNG paths to the CLI and image blocks to MCP. Use `read last` and opt into `wait stable` for streams. Log only operation names, outcomes, and reply sizes.
+
+## Lessons from test 2
+
+- **A · `6ebbf7f`** — The installed Anarc process used an older executable that sent the tab ID straight to CEF evaluation before browser registration and therefore never ran test 1's retry. The live CLI reproduced the old error for both `personal-tab-7` and `personal-tab-4`. Compare the running executable with the checkout build, then run `anarc-ctl doctor` first. The live engine reports browser registration, wakes asleep tabs on demand, and logs the exact key and live, pending, and canceled map keys on a miss.
+- **B · `0bca018`** — Scrubbing `XDG_RUNTIME_DIR` made MCP select `/tmp/anarc-agent-1000.sock` while the running instance listened at `/run/user/1000/anarc-agent.sock`. CLI and MCP share socket discovery and error handling. Install snippets pin the selected socket through `ANARC_CTL_SOCKET`, and MCP resolves and retries connections for each tool call.
