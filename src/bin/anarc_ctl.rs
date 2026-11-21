@@ -3,27 +3,29 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
-#[cfg(target_family = "unix")]
-fn default_socket_path() -> PathBuf {
-    if let Ok(path) = std::env::var("ANARC_SOCKET_PATH") {
-        return PathBuf::from(path);
-    }
-    if let Ok(data_dir) = std::env::var("ANARC_DATA_DIR") {
-        return PathBuf::from(data_dir).join("agent").join("ctl.sock");
-    }
-    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        return PathBuf::from(runtime_dir).join("anarc-agent.sock");
-    }
-    unsafe extern "C" {
-        fn getuid() -> u32;
-    }
-    let uid = unsafe { getuid() };
-    PathBuf::from(format!("/tmp/anarc-agent-{uid}.sock"))
+#[cfg(unix)]
+#[allow(dead_code)]
+#[path = "../paths.rs"]
+mod paths;
+
+#[derive(Default)]
+struct SocketTarget {
+    explicit: Option<PathBuf>,
+    instance: Option<u32>,
 }
 
-#[cfg(not(target_family = "unix"))]
-fn default_socket_path() -> PathBuf {
-    PathBuf::from("anarc-agent.sock")
+impl SocketTarget {
+    #[cfg(unix)]
+    fn resolve(&self) -> paths::agent_socket::Discovery {
+        paths::agent_socket::resolve_socket(self.explicit.as_deref(), self.instance)
+    }
+
+    fn path(&self) -> PathBuf {
+        #[cfg(unix)]
+        { self.resolve().resolved }
+        #[cfg(not(unix))]
+        { self.explicit.clone().unwrap_or_else(|| PathBuf::from("anarc-agent.sock")) }
+    }
 }
 
 fn print_usage() {
@@ -48,6 +50,7 @@ fn print_usage() {
          \n\
          Options:\n\
            --tab <id>                   Target tab ID (defaults to active tab)\n\
+           --instance <slot>            Target Anarc instance (1–9)\n\
            --socket <path>              Override agent socket path\n\
            --mode <mode>                Read mode (text, table, links, outline)\n\
            --max <n>                    Max output characters/budget\n\
@@ -57,22 +60,81 @@ fn print_usage() {
     );
 }
 
+#[cfg(unix)]
+fn connect_socket(target: &SocketTarget, mcp: bool, doctor: bool) -> Result<(UnixStream, PathBuf), String> {
+    use std::io::ErrorKind;
+    use std::time::Duration;
+
+    let tries = if mcp { 3 } else { 1 };
+    for attempt in 1..=tries {
+        let discovery = target.resolve();
+        let path = discovery.resolved;
+        let result = UnixStream::connect(&path);
+        if mcp {
+            eprintln!("[anarc-mcp] connect {attempt}/{tries} path={path:?} instance={:?} env={:?} result={:?}",
+                target.instance, discovery.environment, result.as_ref().map(|_| ()));
+        }
+        let error = match result {
+            Ok(stream) => return Ok((stream, path)),
+            Err(error) => error,
+        };
+        let kind = error.kind();
+        if matches!(kind, ErrorKind::NotFound | ErrorKind::ConnectionRefused | ErrorKind::TimedOut | ErrorKind::WouldBlock)
+            && attempt < tries
+        {
+            std::thread::sleep(Duration::from_millis(300));
+            continue;
+        }
+
+        let message = match kind {
+            ErrorKind::NotFound => "anarc not running: start it. use: anarc-ctl doctor",
+            ErrorKind::ConnectionRefused => {
+                use paths::agent_socket::{lock_owner, remove_dead_socket};
+                if lock_owner(&path, false).is_ok_and(|owner| remove_dead_socket(&path, &owner)) {
+                    "stale socket removed, retry. use: start Anarc and run anarc-ctl doctor"
+                } else {
+                    "connection refused. use: check the Anarc instance and run anarc-ctl doctor"
+                }
+            }
+            ErrorKind::PermissionDenied => "connection rejected: socket permission denied. use: run Anarc and the harness as the same user",
+            ErrorKind::TimedOut | ErrorKind::WouldBlock => "connection timed out. use: anarc-ctl doctor",
+            _ => "connection failed. use: anarc-ctl doctor",
+        };
+        return Err(if doctor { format!("socket: {path:?}\n{message}") } else { message.into() });
+    }
+    Err("connection failed. use: anarc-ctl doctor".into())
+}
+
 #[cfg(target_family = "unix")]
 fn send_socket_request(
-    socket_path: &PathBuf,
+    target: &SocketTarget,
     request_val: &serde_json::Value,
+    mcp: bool,
 ) -> Result<String, String> {
-    let mut stream = UnixStream::connect(socket_path)
-        .map_err(|_| "anarc not running: start it, then retry".to_string())?;
+    use std::io::ErrorKind;
+    use std::time::Duration;
 
-    let req_str = serde_json::to_string(request_val).unwrap_or_default();
-    writeln!(stream, "{req_str}").map_err(|_| "request failed. use: status")?;
+    let doctor = request_val.get("cmd").and_then(|cmd| cmd.as_str()) == Some("doctor");
+    let (mut stream, socket_path) = connect_socket(target, mcp, doctor)?;
+    let timeout = Some(Duration::from_secs(28));
+    stream.set_read_timeout(timeout).and_then(|()| stream.set_write_timeout(timeout))
+        .map_err(|_| "socket timeout configuration failed. use: anarc-ctl doctor")?;
+    let req_str = serde_json::to_string(request_val).map_err(|_| "invalid request. use: anarc-ctl doctor")?;
+    let write_result = writeln!(stream, "{req_str}");
 
     let mut reader = BufReader::new(stream);
     let mut resp_line = String::new();
-    reader
-        .read_line(&mut resp_line)
-        .map_err(|_| "reply failed. use: status")?;
+    let bytes = reader.read_line(&mut resp_line).map_err(|error| match error.kind() {
+        ErrorKind::TimedOut | ErrorKind::WouldBlock => "connection timed out waiting for Anarc. use: anarc-ctl doctor",
+        _ => "reply failed. use: anarc-ctl doctor",
+    })?;
+    if bytes == 0 {
+        return Err(if write_result.is_err() {
+            "request failed. use: anarc-ctl doctor"
+        } else {
+            "connection closed before reply. use: anarc-ctl doctor"
+        }.into());
+    }
 
     let parsed: serde_json::Value = match serde_json::from_str(resp_line.trim()) {
         Ok(v) => v,
@@ -86,7 +148,7 @@ fn send_socket_request(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        if request_val.get("cmd").and_then(|cmd| cmd.as_str()) == Some("doctor") {
+        if doctor {
             Ok(format!("socket: {socket_path:?}\n{res}"))
         } else {
             Ok(res)
@@ -103,8 +165,9 @@ fn send_socket_request(
 
 #[cfg(not(target_family = "unix"))]
 fn send_socket_request(
-    _socket_path: &PathBuf,
+    _target: &SocketTarget,
     _request_val: &serde_json::Value,
+    _mcp: bool,
 ) -> Result<String, String> {
     Err("Unix required. use: anarc-ctl --help".to_string())
 }
@@ -222,7 +285,7 @@ fn get_tool_definitions() -> serde_json::Value {
 
 fn handle_mcp_request(
     req: &serde_json::Value,
-    socket_path: &PathBuf,
+    socket: &SocketTarget,
     shot_as_path: bool,
 ) -> Option<serde_json::Value> {
     let method = req.get("method").and_then(|m| m.as_str())?;
@@ -340,7 +403,7 @@ fn handle_mcp_request(
                 }
             };
 
-            let result = send_socket_request(socket_path, &socket_req);
+            let result = send_socket_request(socket, &socket_req, true);
             let content = if tool_name == "shot" {
                 result.and_then(|reply| {
                     if shot_as_path {
@@ -380,7 +443,7 @@ fn handle_mcp_request(
     }
 }
 
-fn run_mcp_server(socket_path: PathBuf, shot_as_path: bool) {
+fn run_mcp_server(socket: SocketTarget, shot_as_path: bool) {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut stdout_lock = stdout.lock();
@@ -409,7 +472,7 @@ fn run_mcp_server(socket_path: PathBuf, shot_as_path: bool) {
             }
         };
 
-        if let Some(resp) = handle_mcp_request(&parsed_req, &socket_path, shot_as_path) {
+        if let Some(resp) = handle_mcp_request(&parsed_req, &socket, shot_as_path) {
             let resp_str = serde_json::to_string(&resp).unwrap_or_default();
             let _ = writeln!(stdout_lock, "{resp_str}");
             let _ = stdout_lock.flush();
@@ -417,66 +480,36 @@ fn run_mcp_server(socket_path: PathBuf, shot_as_path: bool) {
     }
 }
 
-fn handle_install(harness: Option<&str>) {
-    let mode = harness.unwrap_or("print");
-    match mode {
-        "claude" => {
-            println!("# Claude Code MCP Setup\n");
-            println!("Run this command in your terminal:\n");
-            println!("  claude mcp add anarc -- anarc-ctl mcp\n");
-            println!("Or add this to your project's .mcp.json:\n");
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "mcpServers": {
-                        "anarc": {
-                            "command": "anarc-ctl",
-                            "args": ["mcp"]
-                        }
-                    }
-                }))
-                .unwrap_or_default()
-            );
+fn handle_install(harness: Option<&str>, socket: &SocketTarget) {
+    let path = socket.path();
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir().map_or(path.clone(), |dir| dir.join(path))
+    };
+    let Some(path) = path.to_str() else {
+        eprintln!("socket path is not UTF-8. use: --socket with a UTF-8 path");
+        std::process::exit(1);
+    };
+    let json = serde_json::json!({
+        "mcpServers": {
+            "anarc": {
+                "command": "anarc-ctl",
+                "args": ["mcp"],
+                "env": {"ANARC_CTL_SOCKET": path}
+            }
         }
-        "codex" => {
-            println!("# OpenAI Codex CLI Setup\n");
-            println!("Add the following to ~/.codex/config.toml:\n");
-            println!(
-                "[mcp_servers.anarc]\n\
-                 command = \"anarc-ctl\"\n\
-                 args = [\"mcp\"]"
-            );
-        }
-        "antigravity" => {
-            println!("# Google Antigravity MCP Setup\n");
-            println!("Add the following to ~/.gemini/config/mcp_config.json (or .agents/mcp_config.json):\n");
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "mcpServers": {
-                        "anarc": {
-                            "command": "anarc-ctl",
-                            "args": ["mcp"]
-                        }
-                    }
-                }))
-                .unwrap_or_default()
-            );
-        }
-        _ => {
-            println!("# Anarc Agent Control MCP Configuration Guide\n");
-            println!("`anarc-ctl` operates as both a stdio MCP server and a fast CLI.\n");
-            println!("## 1. Claude Code");
-            println!("  claude mcp add anarc -- anarc-ctl mcp\n");
-            println!("## 2. Google Antigravity");
-            println!("Add to ~/.gemini/config/mcp_config.json:");
-            println!("  {{\"mcpServers\": {{\"anarc\": {{\"command\": \"anarc-ctl\", \"args\": [\"mcp\"]}}}}}}\n");
-            println!("## 3. OpenAI Codex CLI");
-            println!("Add to ~/.codex/config.toml:");
-            println!("  [mcp_servers.anarc]\n  command = \"anarc-ctl\"\n  args = [\"mcp\"]\n");
-            println!("## 4. Plain Bash / Scripts");
-            println!("Use CLI directly: anarc-ctl see, anarc-ctl do 'b1', anarc-ctl read");
-        }
+    });
+    let codex = format!(
+        "[mcp_servers.anarc]\ncommand = \"anarc-ctl\"\nargs = [\"mcp\"]\n\n[mcp_servers.anarc.env]\nANARC_CTL_SOCKET = {}",
+        toml::Value::String(path.into())
+    );
+    let json = serde_json::to_string_pretty(&json).unwrap_or_default();
+    match harness.unwrap_or("print") {
+        "claude" => println!("# Claude Code\nAdd to .mcp.json\n\n{json}"),
+        "antigravity" => println!("# Antigravity\nAdd to ~/.gemini/config/mcp_config.json or .agents/mcp_config.json\n\n{json}"),
+        "codex" => println!("# Codex CLI\nAdd to ~/.codex/config.toml\n\n{codex}"),
+        _ => println!("# Claude Code and Antigravity (JSON)\n\n{json}\n\n# Codex CLI (TOML)\n\n{codex}"),
     }
 }
 
@@ -487,7 +520,7 @@ fn main() {
         return;
     }
 
-    let mut socket_path = default_socket_path();
+    let mut socket = SocketTarget::default();
     let mut explicit_tab: Option<String> = None;
     let mut explicit_mode: Option<String> = None;
     let mut explicit_max: Option<usize> = None;
@@ -501,11 +534,20 @@ fn main() {
         match args[i].as_str() {
             "--socket" => {
                 if i + 1 < args.len() {
-                    socket_path = PathBuf::from(&args[i + 1]);
+                    socket.explicit = Some(PathBuf::from(&args[i + 1]));
                     i += 2;
                 } else {
                     i += 1;
                 }
+            }
+            "--instance" => {
+                socket.instance = args.get(i + 1).and_then(|value| value.parse().ok())
+                    .filter(|slot| (1..=9).contains(slot));
+                if socket.instance.is_none() {
+                    eprintln!("invalid instance. use: --instance <1–9>");
+                    std::process::exit(1);
+                }
+                i += 2;
             }
             "--tab" => {
                 if i + 1 < args.len() {
@@ -562,12 +604,12 @@ fn main() {
     let cmd = &filtered_args[0];
 
     if cmd == "mcp" {
-        run_mcp_server(socket_path, shot_as_path);
+        run_mcp_server(socket, shot_as_path);
         return;
     }
 
     if cmd == "install" {
-        handle_install(explicit_harness.as_deref());
+        handle_install(explicit_harness.as_deref(), &socket);
         return;
     }
 
@@ -665,7 +707,7 @@ fn main() {
         }
     };
 
-    let result = send_socket_request(&socket_path, &request_val);
+    let result = send_socket_request(&socket, &request_val, false);
     let result = if cmd == "shot" {
         result.and_then(|reply| save_screenshot(&reply))
     } else {
@@ -842,7 +884,7 @@ mod tests {
 
     #[test]
     fn mcp_protocol_errors_give_next_commands() {
-        let socket_path = PathBuf::from("/tmp/nonexistent-anarc-test.sock");
+        let socket_path = SocketTarget { explicit: Some("/tmp/nonexistent-anarc-test.sock".into()), instance: None };
         let requests = [
             serde_json::json!({"id": 1, "method": "unknown"}),
             serde_json::json!({"id": 2, "method": "tools/call"}),
@@ -858,7 +900,7 @@ mod tests {
 
     #[test]
     fn test_mcp_mock_lifecycle_and_protocol_negotiation() {
-        let socket_path = PathBuf::from("/tmp/nonexistent-anarc-test.sock");
+        let socket_path = SocketTarget { explicit: Some("/tmp/nonexistent-anarc-test.sock".into()), instance: None };
 
         // 1. Initialize
         let init_req = serde_json::json!({
