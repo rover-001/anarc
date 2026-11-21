@@ -7,12 +7,17 @@ pub const HARD_TOKEN_BUDGET: usize = 4000;
 pub fn format_see_output(
     header: &SnapshotHeader,
     elements: &[ElementRef],
+    tabs: Option<&str>,
 ) -> String {
     let mut lines = Vec::new();
     lines.push(format!(
         "g{} {} \"{}\" ↓{}",
         header.generation, header.display_url, header.title, header.scroll_remaining
     ));
+
+    if let Some(tabs) = tabs {
+        lines.push(format!("tabs: {tabs}"));
+    }
 
     // Split into alerts/dialogs/banners first, then regular items
     let mut alerts = Vec::new();
@@ -233,7 +238,7 @@ mod tests {
         };
 
         let (header, els, _, _) = reg.update_from_raw(raw);
-        let output = format_see_output(&header, &els);
+        let output = format_see_output(&header, &els, None);
 
         // Header check
         assert!(output.starts_with("g1 github.com/login \"Sign in to GitHub\" ↓0"));

@@ -282,7 +282,7 @@ mod tests {
         let config = PolicyConfig::default();
         let res = check_sensitive_intent("Complete Purchase and Pay $50", &config);
         assert!(res.is_some());
-        let msg = res.unwrap();
+        let msg = res.unwrap_or_default();
         assert!(msg.contains("needs_confirm"));
 
         let safe = check_sensitive_intent("Search repository documentation", &config);
@@ -293,11 +293,11 @@ mod tests {
     fn test_human_handoff_detection() {
         let res = check_human_handoff("Security Verification", "https://example.com/captcha", "Please solve this recaptcha");
         assert!(res.is_some());
-        assert!(res.unwrap().contains("needs_human"));
+        assert!(res.unwrap_or_default().contains("needs_human"));
 
         let res2 = check_human_handoff("Two-factor authentication", "https://example.com/2fa", "Enter your 6-digit sms code");
         assert!(res2.is_some());
-        assert!(res2.unwrap().contains("needs_human"));
+        assert!(res2.unwrap_or_default().contains("needs_human"));
 
         let res3 = check_human_handoff("Dashboard", "https://example.com/dash", "Welcome back Rover");
         assert!(res3.is_none());

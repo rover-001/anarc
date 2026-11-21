@@ -310,7 +310,7 @@ mod tests {
 
         // Diff shows added i2
         assert_eq!(diff.added.len(), 1);
-        assert!(diff.added.get(0).unwrap().contains("i2"));
+        assert!(diff.added.first().is_some_and(|line| line.contains("i2")));
         assert!(diff.removed.is_empty());
     }
 }
