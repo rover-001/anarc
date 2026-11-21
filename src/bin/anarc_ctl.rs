@@ -81,10 +81,6 @@ fn connect_socket(target: &SocketTarget, mcp: bool, doctor: bool) -> Result<(Uni
         };
         let kind = error.kind();
         if target.explicit.is_none() && matches!(kind, ErrorKind::NotFound | ErrorKind::ConnectionRefused) && attempt == 1 {
-            // Attempt launch and focus
-            let _ = std::process::Command::new("omarchy-launch-or-focus")
-                .args(["anarc", "/home/rover/.local/bin/anarc"])
-                .status();
             let _ = std::process::Command::new("systemctl")
                 .args(["--user", "start", "anarc.socket"])
                 .status();
@@ -509,9 +505,6 @@ fn handle_mcp_request(
 }
 
 fn run_mcp_server(socket: SocketTarget, shot_as_path: bool) {
-    let _ = std::process::Command::new("omarchy-launch-or-focus")
-        .args(["anarc", "/home/rover/.local/bin/anarc"])
-        .status();
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut stdout_lock = stdout.lock();
