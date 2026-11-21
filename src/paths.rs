@@ -22,11 +22,23 @@ pub fn plugin_config_path() -> PathBuf {
 /// it. The launcher claims a slot per window; slot 1 keeps the default profile
 /// and every later slot gets its own root, so the rest of the user data
 /// (settings, spaces, history) stays shared like a second browser window.
+fn normalize_path_separators(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = path.to_string_lossy().replace('/', "\\");
+        PathBuf::from(s)
+    }
+    #[cfg(not(windows))]
+    {
+        path
+    }
+}
+
 pub fn cef_root_dir() -> PathBuf {
-    instance_cef_root(
+    normalize_path_separators(instance_cef_root(
         cef_root_from_data_dir(data_dir()),
         resolve_instance_slot(std::env::var_os("ANARC_INSTANCE_SLOT")),
-    )
+    ))
 }
 
 const MAX_INSTANCE_SLOTS: u32 = 9;
@@ -59,7 +71,7 @@ fn profile_from_cef_root(cef_root: PathBuf, space_id: &str) -> PathBuf {
             _ => format!("%{byte:02X}"),
         })
         .collect::<String>();
-    cef_root.join(format!("space-{sanitized_id}"))
+    normalize_path_separators(cef_root.join(format!("space-{sanitized_id}")))
 }
 
 /// General Lumen cache location, reserved for non-profile caches.
@@ -102,11 +114,14 @@ fn resolve_override_or_home(
     home: Option<std::ffi::OsString>,
     suffix: &str,
 ) -> PathBuf {
-    override_value.map(PathBuf::from).unwrap_or_else(|| {
-        home.map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir)
-            .join(suffix)
-    })
+    let path = override_value.map(PathBuf::from).unwrap_or_else(|| {
+        let mut base = home.map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        for part in suffix.split('/') {
+            base.push(part);
+        }
+        base
+    });
+    normalize_path_separators(path)
 }
 
 #[cfg(test)]

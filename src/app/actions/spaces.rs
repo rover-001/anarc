@@ -1,6 +1,10 @@
 use super::super::*;
 
 impl Lumen {
+    pub(crate) fn spaces(&self) -> &[Space] {
+        &self.spaces
+    }
+
     pub(crate) fn theme_picker_space(&self) -> &Space {
         if self.theme_editor.as_ref().is_some_and(|e| e.target_modal)
             && let Some(modal) = &self.space_modal
@@ -205,6 +209,9 @@ impl Lumen {
     }
     pub(in crate::app) fn activate_space_immediate(&mut self, id: &str, cx: &mut Context<Self>) {
         if !self.spaces.iter().any(|space| space.id == id) {
+            self.sync_external_spaces(cx);
+        }
+        if !self.spaces.iter().any(|space| space.id == id) {
             return;
         }
         self.web_viewport.update(cx, |viewport, cx| {
@@ -220,6 +227,11 @@ impl Lumen {
         self.close_app_page();
         self.plugins_menu_open = false;
         self.active_space = id.to_owned();
+        if let Some(space) = self.spaces.iter_mut().find(|s| s.id == id) {
+            if space.active.as_ref().map_or(true, |act| !space.tabs.iter().any(|t| t.id == *act)) {
+                space.active = space.tabs.first().map(|t| t.id.clone());
+            }
+        }
         let target_theme = crate::ui::visual::theme_for_space(self.active_space());
         crate::ui::visual::update_theme_caret(target_theme, cx);
         if previous_space != id {
@@ -382,6 +394,7 @@ impl Lumen {
         };
         let mut changed = false;
         let mut activate_id = None;
+        let mut sync_cookies = false;
 
         // Prune any shared spaces that are no longer in loaded.spaces (e.g. session ended or space deleted)
         let before_len = self.spaces.len();
@@ -400,18 +413,114 @@ impl Lumen {
         }
 
         for mut external_space in loaded.spaces {
+            for ext_tab in &mut external_space.tabs {
+                if (ext_tab.favorite || ext_tab.pinned)
+                    && let Some(pinned) = &ext_tab.pinned_url
+                {
+                    if !pinned.is_empty() {
+                        let p_lower = pinned.to_ascii_lowercase();
+                        if !p_lower.contains("workspace.google.") && !p_lower.contains("/signin") {
+                            ext_tab.url = pinned.clone();
+                        }
+                    }
+                }
+            }
             if let Some(local_space) = self.spaces.iter_mut().find(|s| s.id == external_space.id) {
+                if local_space.color != external_space.color
+                    || local_space.theme_colors != external_space.theme_colors
+                    || local_space.theme_appearance != external_space.theme_appearance
+                    || (local_space.theme_intensity - external_space.theme_intensity).abs() > 0.001
+                    || (local_space.theme_grain - external_space.theme_grain).abs() > 0.001
+                {
+                    local_space.color = external_space.color;
+                    local_space.theme_colors = external_space.theme_colors.clone();
+                    local_space.theme_appearance = external_space.theme_appearance;
+                    local_space.theme_intensity = external_space.theme_intensity;
+                    local_space.theme_grain = external_space.theme_grain;
+                    changed = true;
+                }
+                if local_space.peer_ips != external_space.peer_ips {
+                    local_space.peer_ips = external_space.peer_ips.clone();
+                    changed = true;
+                    if !local_space.peer_ips.is_empty() && local_space.id != "shared-space" {
+                        sync_cookies = true;
+                    }
+                }
                 if local_space.tabs.len() != external_space.tabs.len()
                     || local_space.tabs.iter().zip(&external_space.tabs).any(|(a, b)| {
-                        a.id != b.id || a.url != b.url || a.title != b.title
+                        a.id != b.id
+                            || a.url != b.url
+                            || a.title != b.title
+                            || a.favorite != b.favorite
+                            || a.pinned != b.pinned
+                            || a.folder != b.folder
                     })
                 {
+                    for ext_tab in &external_space.tabs {
+                        if let Some(loc_tab) = local_space.tabs.iter().find(|t| t.id == ext_tab.id) {
+                            if loc_tab.url != ext_tab.url
+                                && !ext_tab.url.is_empty()
+                                && ext_tab.url != "about:blank"
+                            {
+                                let ext_lower = ext_tab.url.to_ascii_lowercase();
+                                let is_landing_or_auth = ext_lower.contains("workspace.google.com")
+                                    || ext_lower.contains("google.com/gmail/about")
+                                    || ext_lower.contains("google.com/intl/")
+                                    || ext_lower.contains("accounts.google.")
+                                    || ext_lower.contains("login.microsoft")
+                                    || ext_lower.contains("login.live.com")
+                                    || ext_lower.contains("appleid.apple.com")
+                                    || ext_lower.contains("/signin/")
+                                    || ext_lower.contains("/v3/signin/")
+                                    || ext_lower.contains("/signin")
+                                    || ext_lower.contains("/login")
+                                    || ext_lower.contains("/logout")
+                                    || ext_lower.contains("/accountchooser")
+                                    || ext_lower.contains("/oauth2/")
+                                    || ext_lower.contains("/oauth/")
+                                    || ext_lower.contains("auth0.com")
+                                    || ext_lower.contains("okta.com");
+                                if !is_landing_or_auth {
+                                    self.engine.navigate(&ext_tab.id, &ext_tab.url);
+                                }
+                            }
+                        }
+                    }
                     local_space.tabs = external_space.tabs;
+                    if local_space.active.as_ref().map_or(true, |act| !local_space.tabs.iter().any(|t| t.id == *act)) {
+                        local_space.active = local_space.tabs.first().map(|t| t.id.clone());
+                    }
+                    if local_space.id == "shared-space" {
+                        let cookies_file = crate::paths::config_dir().join("shared-cookies.json");
+                        if cookies_file.is_file() {
+                            if let Ok(content) = std::fs::read_to_string(&cookies_file) {
+                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                                    let arr_opt = if val.is_array() {
+                                        Some(val)
+                                    } else {
+                                        val.get("cookies").cloned()
+                                    };
+                                    if let Some(arr) = arr_opt && let Some(c_arr) = arr.as_array() && !c_arr.is_empty() {
+                                        let cleaned: Vec<_> = c_arr.iter().filter_map(crate::engine::devtools::sanitize_cookie_for_cdp).collect();
+                                        if !cleaned.is_empty() {
+                                            let params = serde_json::json!({ "cookies": cleaned }).to_string();
+                                            for tab in &local_space.tabs {
+                                                let _ = self.engine.devtools(&tab.id, "Network.setCookies", Some(&params));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     changed = true;
                 }
             } else {
                 if !crate::app::SPACE_ICONS.contains(&external_space.icon.as_str()) {
                     external_space.icon = "globe".to_string();
+                }
+                if external_space.active.is_none() && !external_space.tabs.is_empty() {
+                    external_space.active = Some(external_space.tabs[0].id.clone());
                 }
                 let is_shared = external_space.name.starts_with("[Shared]")
                     || external_space.id.starts_with("shared-");
@@ -428,6 +537,134 @@ impl Lumen {
                 self.activate_space_immediate(&id, cx);
             }
             cx.notify();
+        }
+
+        if sync_cookies {
+            self.sync_host_cookies_if_needed();
+        }
+    }
+
+    pub(crate) fn sync_host_cookies_if_needed(&self) {
+        for space in &self.spaces {
+            if space.id != "shared-space" && !space.peer_ips.is_empty() {
+                let tab_to_query = space
+                    .tabs
+                    .iter()
+                    .find(|t| self.engine.has_browser(&t.id))
+                    .map(|t| t.id.clone())
+                    .or_else(|| {
+                        space
+                            .active
+                            .as_ref()
+                            .filter(|id| self.engine.has_browser(id))
+                            .cloned()
+                    });
+                if let Some(tab_id) = tab_to_query {
+                    let mut urls: Vec<String> = Vec::new();
+                    for t in &space.tabs {
+                        if !t.url.is_empty() && !t.url.starts_with("about:") {
+                            urls.push(t.url.clone());
+                            if t.url.contains("google.com") {
+                                urls.push("https://accounts.google.com/".into());
+                                urls.push("https://mail.google.com/".into());
+                                urls.push("https://google.com/".into());
+                            }
+                        }
+                    }
+                    urls.sort();
+                    urls.dedup();
+                    let params = if urls.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::json!({ "urls": urls }).to_string())
+                    };
+                    let rx = self.engine.devtools(&tab_id, "Network.getCookies", params.as_deref());
+                    std::thread::spawn(move || {
+                        if let Ok(Ok(raw_json)) = rx.recv_blocking() {
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw_json) {
+                                if let Some(cookies) = parsed.get("cookies").and_then(|c| c.as_array()) {
+                                    if !cookies.is_empty() {
+                                        let payload = serde_json::json!({ "cookies": cookies }).to_string();
+                                        let _ = std::net::TcpStream::connect("127.0.0.1:7433").and_then(|mut stream| {
+                                            use std::io::Write;
+                                            let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(500)));
+                                            let req = format!(
+                                                "POST /api/cookies HTTP/1.0\r\nHost: 127.0.0.1:7433\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                                payload.len(),
+                                                payload
+                                            );
+                                            stream.write_all(req.as_bytes())
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    pub(crate) fn inject_shared_cookies_into_all_tabs(&mut self) {
+        let cookies_file = crate::paths::config_dir().join("shared-cookies.json");
+        if !cookies_file.is_file() {
+            return;
+        }
+        let Ok(content) = std::fs::read_to_string(&cookies_file) else {
+            return;
+        };
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return;
+        };
+        let arr_opt = if val.is_array() {
+            Some(val)
+        } else {
+            val.get("cookies").cloned()
+        };
+        let Some(arr) = arr_opt else { return; };
+        let Some(c_arr) = arr.as_array() else { return; };
+        if c_arr.is_empty() {
+            return;
+        }
+        let cleaned: Vec<_> = c_arr
+            .iter()
+            .filter_map(crate::engine::devtools::sanitize_cookie_for_cdp)
+            .collect();
+        if cleaned.is_empty() {
+            return;
+        }
+        let params = serde_json::json!({ "cookies": cleaned }).to_string();
+
+        let shared_space_opt = self.spaces.iter().find(|s| s.id == "shared-space");
+        let Some(shared_space) = shared_space_opt else { return; };
+
+        let mut to_recover: Vec<(String, String)> = Vec::new();
+        for tab in &shared_space.tabs {
+            if self.engine.has_browser(&tab.id) {
+                let _ = self.engine.devtools(&tab.id, "Network.setCookies", Some(&params));
+                let target_url = tab
+                    .pinned_url
+                    .as_deref()
+                    .unwrap_or(tab.url.as_str());
+                if !target_url.is_empty() && !target_url.starts_with("about:") {
+                    let cur_url = self
+                        .engine
+                        .current_url(&tab.id)
+                        .unwrap_or_else(|| tab.url.clone())
+                        .to_ascii_lowercase();
+                    let is_landing = cur_url.contains("workspace.google.com")
+                        || cur_url.contains("google.com/gmail/about")
+                        || cur_url.contains("accounts.google.")
+                        || cur_url.contains("/signin")
+                        || cur_url.contains("/login");
+                    if is_landing {
+                        to_recover.push((tab.id.clone(), target_url.to_string()));
+                    }
+                }
+            }
+        }
+        for (tab_id, target_url) in to_recover {
+            self.engine.navigate(&tab_id, &target_url);
         }
     }
 }

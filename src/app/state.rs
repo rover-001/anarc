@@ -187,6 +187,9 @@ pub(crate) struct Lumen {
     pub(crate) settings_section: SettingsSection,
     #[allow(dead_code)]
     pub(crate) last_spaces_mtime: std::sync::atomic::AtomicU64,
+    pub(crate) last_shared_cookies_mtime: std::sync::atomic::AtomicU64,
+    pub(crate) last_cookie_sync: std::time::Instant,
+    pub(crate) pending_auth_recovery: std::collections::HashMap<String, (String, std::time::Instant)>,
     pub(super) preferences: crate::settings::BrowserPreferences,
     pub(super) plugins: crate::plugin::PluginHost,
     pub(super) panel_registry: crate::plugin::PanelRegistryHandle,

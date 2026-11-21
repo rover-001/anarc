@@ -27,6 +27,9 @@ pub struct Space {
     /// Sidebar folders that group tabs below the pinned section.
     #[serde(default)]
     pub folders: Vec<Folder>,
+    /// Remote peer IPs for live cursor and tab sync.
+    #[serde(default)]
+    pub peer_ips: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +77,7 @@ impl Space {
             active: None,
             split: None,
             folders: Vec::new(),
+            peer_ips: Vec::new(),
         }
     }
 }

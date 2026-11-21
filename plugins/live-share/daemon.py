@@ -11,6 +11,7 @@ import json
 import os
 import re
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -18,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -50,8 +52,15 @@ def get_tailscale_ip() -> str:
     except Exception:
         return "127.0.0.1"
 
+def check_browser(ip: str) -> bool:
+    try:
+        with socket.create_connection((ip, DEFAULT_PORT), timeout=0.35):
+            return True
+    except Exception:
+        return False
+
 def get_tailscale_peers() -> Dict[str, Any]:
-    """Discovers self machine and peers via tailscale status --json."""
+    """Discovers self machine and peers via tailscale status --json, filtering for online browser peers."""
     try:
         res = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=3, creationflags=WIN_NO_WINDOW)
         if res.returncode != 0:
@@ -66,8 +75,10 @@ def get_tailscale_peers() -> Dict[str, Any]:
             "dns_name": self_node.get("DNSName", "").rstrip("."),
         }
 
-        peers = []
+        raw_peers = []
         for p in (data.get("Peer") or {}).values():
+            if not p.get("Online", False):
+                continue
             hostname = p.get("HostName", "")
             dns = p.get("DNSName", "").rstrip(".")
             if not dns and not p.get("OS"):
@@ -75,20 +86,80 @@ def get_tailscale_peers() -> Dict[str, Any]:
                 continue
             ips = p.get("TailscaleIPs", [])
             ipv4 = next((ip for ip in ips if "." in ip), "")
-            if not ipv4:
+            if not ipv4 or ipv4 == self_ip:
                 continue
             display_name = dns.split(".")[0] if dns else hostname
-            peers.append({
+            raw_peers.append({
                 "hostname": display_name,
                 "dns_name": dns,
                 "ip": ipv4,
-                "online": bool(p.get("Online", False)),
+                "online": True,
                 "os": p.get("OS", ""),
             })
-        peers.sort(key=lambda x: (not x["online"], x["hostname"]))
+
+        # Only include online peers that have Anarc Live Share running
+        peers = []
+        if raw_peers:
+            with ThreadPoolExecutor(max_workers=min(len(raw_peers), 8)) as ex:
+                checks = {ex.submit(check_browser, rp["ip"]): rp for rp in raw_peers}
+                for fut in checks:
+                    rp = checks[fut]
+                    try:
+                        if fut.result():
+                            rp["has_browser"] = True
+                            peers.append(rp)
+                    except Exception:
+                        pass
+
+        peers.sort(key=lambda x: x["hostname"])
         return {"self": self_info, "peers": peers}
     except Exception as e:
         return {"error": str(e), "self": None, "peers": []}
+
+AUTH_PATTERNS = [
+    "accounts.google.",
+    "accounts.youtube.",
+    "workspace.google.com",
+    "google.com/gmail/about",
+    "google.com/intl/",
+    "login.microsoftonline.com",
+    "login.live.com",
+    "appleid.apple.com",
+    "/oauth2/",
+    "/oauth/",
+    "/signin/v2/",
+    "/v3/signin/",
+    "/signin",
+    "/login",
+    "/logout",
+    "/accountchooser",
+    "auth0.com",
+    "okta.com",
+    "github.com/login",
+    "github.com/session",
+]
+
+def is_auth_url(url: str) -> bool:
+    if not url:
+        return False
+    u = url.lower()
+    return any(domain in u for domain in AUTH_PATTERNS)
+
+def canonical_url(url: str, pinned_url: Optional[str] = None) -> str:
+    """Returns a clean canonical URL for shared space tabs, avoiding transient auth/landing redirects."""
+    if pinned_url and not is_auth_url(pinned_url):
+        return pinned_url
+    if not is_auth_url(url):
+        return url
+    u = url.lower()
+    if "gmail" in u or "mail.google" in u or "workspace.google.com" in u:
+        return "https://mail.google.com/"
+    if "google.com" in u:
+        return "https://www.google.com/"
+    if "login.microsoft" in u or "live.com" in u:
+        return "https://outlook.live.com/"
+    return url
+
 
 class LiveShareState:
     def __init__(self, spaces_file: Path = SPACES_FILE, port: int = DEFAULT_PORT, host_override: Optional[str] = None):
@@ -101,6 +172,14 @@ class LiveShareState:
         self.is_host: bool = False
         self.connected_peers: Dict[str, Dict[str, Any]] = {}  # peer_addr -> {last_seen, status}
         self.tabs: List[Dict[str, Any]] = []
+        self.theme: Optional[Dict[str, Any]] = None
+        self.cookies: List[Dict[str, Any]] = []
+        cookies_file = CONFIG_DIR / "shared-cookies.json"
+        if cookies_file.is_file():
+            try:
+                self.cookies = json.loads(cookies_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
         self.activity: List[Dict[str, Any]] = []
         self.sse_subscribers: Set[Any] = set()
         self.last_spaces_mtime: float = 0.0
@@ -138,6 +217,8 @@ class LiveShareState:
                     for addr, info in self.connected_peers.items()
                 ],
                 "tabs": copy.deepcopy(self.tabs),
+                "theme": copy.deepcopy(self.theme),
+                "cookies": copy.deepcopy(self.cookies),
                 "activity": copy.deepcopy(self.activity),
             }
 
@@ -148,10 +229,11 @@ class LiveShareState:
         with self.lock:
             self.shared_space_id = space_id
             self.is_host = True
-            # Load tabs from spaces.json
-            tabs, name = self._read_space_tabs(space_id)
+            # Load tabs and theme from spaces.json
+            tabs, name, theme = self._read_space_tabs(space_id)
             self.shared_space_name = name or space_id
             self.tabs = tabs
+            self.theme = theme
             self.log_activity("Local", f"Started sharing space '{self.shared_space_name}' ({len(tabs)} tabs)")
 
         # Broadcast update to peers
@@ -159,23 +241,29 @@ class LiveShareState:
             "space_id": self.shared_space_id,
             "space_name": self.shared_space_name,
             "tabs": self.tabs,
+            "theme": self.theme,
+            "cookies": self.cookies,
         })
         self.notify_sse()
         return True
 
     def disconnect_session(self) -> bool:
         peers_to_notify = []
+        is_host = False
         with self.lock:
+            is_host = self.is_host
             self.shared_space_id = None
             self.shared_space_name = None
             self.tabs.clear()
-            self.is_host = False
+            self.theme = None
             peers_to_notify = list(self.connected_peers.keys())
             self.connected_peers.clear()
+            self.is_host = False
             self.log_activity("Local", "Ended Live Share session")
 
+        event = "session_ended" if is_host else "peer_left"
         for peer in peers_to_notify:
-            self.send_to_peer(peer, "session_ended", {"peer_address": f"{self.tailscale_ip}:{self.port}"})
+            self.send_to_peer(peer, event, {"peer_address": f"{self.tailscale_ip}:{self.port}"})
 
         self._remove_shared_space_from_file()
         self.notify_sse()
@@ -206,26 +294,47 @@ class LiveShareState:
             with self.lock:
                 self.suppress_local_watch = False
 
-    def _read_space_tabs(self, space_id: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    def _read_space_tabs(self, space_id: str) -> Tuple[List[Dict[str, Any]], Optional[str], Optional[Dict[str, Any]]]:
         if not self.spaces_file.is_file():
-            return [], None
+            return [], None, None
         try:
             data = json.loads(self.spaces_file.read_text(encoding="utf-8"))
             for sp in data.get("spaces", []):
                 if sp.get("id") == space_id:
+                    color = sp.get("color", 10135039)
+                    theme = {
+                        "color": color,
+                        "theme_colors": sp.get("theme_colors", [color]),
+                        "theme_appearance": sp.get("theme_appearance", 0),
+                        "theme_intensity": sp.get("theme_intensity", 0.5),
+                        "theme_grain": sp.get("theme_grain", 0.0),
+                    }
                     tabs = []
                     for t in sp.get("tabs", []):
+                        raw_url = t.get("url", "").strip()
+                        if raw_url.startswith("anarc-plugin://") or raw_url.startswith("anarc-internal://"):
+                            continue
+                        pinned_url = t.get("pinned_url")
+                        is_fav = bool(t.get("favorite", False))
+                        is_pin = bool(t.get("pinned", False))
+                        safe_url = canonical_url(raw_url, pinned_url)
+                        effective_pinned_url = pinned_url or (safe_url if (is_fav or is_pin) else None)
+                        effective_title = t.get("pinned_title") or t.get("title", "")
                         tabs.append({
                             "id": t.get("id"),
-                            "title": t.get("title", ""),
-                            "url": t.get("url", ""),
-                            "pinned": t.get("pinned", False),
+                            "title": effective_title,
+                            "url": safe_url,
+                            "pinned": is_pin,
+                            "favorite": is_fav,
+                            "pinned_url": effective_pinned_url,
+                            "pinned_title": effective_title if (is_fav or is_pin) else t.get("pinned_title"),
+                            "folder": t.get("folder"),
                             "shared_by": "You",
                         })
-                    return tabs, sp.get("name")
+                    return tabs, sp.get("name"), theme
         except Exception as e:
             print(f"[Error reading spaces.json] {e}", file=sys.stderr)
-        return [], None
+        return [], None, None
 
     def connect_to_peer(self, peer_address: str) -> Tuple[bool, Optional[str]]:
         peer_address = peer_address.strip()
@@ -279,17 +388,80 @@ class LiveShareState:
                 self.shared_space_name = data.get("space_name") or "Shared Space"
                 self.is_host = False
                 self.tabs = data.get("tabs", [])
+                self.theme = data.get("theme")
+                if data.get("cookies"):
+                    self.cookies = data.get("cookies")
+                    try:
+                        (CONFIG_DIR / "shared-cookies.json").write_text(json.dumps(self.cookies, indent=2), encoding="utf-8")
+                    except Exception:
+                        pass
                 self.log_activity(peer_address, f"Connected to peer's space '{self.shared_space_name}'")
 
             # Merge into local spaces.json
             self._merge_into_spaces_file()
             self.notify_sse()
 
+            # Start client poller to continuously sync host updates in real time
+            self._start_client_poller(peer_address)
+
             # Notify the remote peer that we connected
             self.send_to_peer(peer_address, "peer_joined", {"peer_address": f"{self.tailscale_ip}:{self.port}"})
             return True, None
         except Exception as e:
             return False, f"Connection failed: {e}"
+
+    def _start_client_poller(self, host_address: str):
+        def loop():
+            while True:
+                time.sleep(0.35)
+                with self.lock:
+                    if self.is_host or not self.connected_peers or host_address not in self.connected_peers:
+                        break
+                try:
+                    url = f"http://{host_address}/api/peer/sync"
+                    req = urllib.request.Request(url, headers={"User-Agent": "LumenLiveShare/1.0"})
+                    with urllib.request.urlopen(req, timeout=1.5) as resp:
+                        if resp.status == 200:
+                            data = json.loads(resp.read().decode("utf-8"))
+                            new_tabs = data.get("tabs", [])
+                            space_name = data.get("space_name")
+                            new_theme = data.get("theme")
+                            new_cookies = data.get("cookies")
+                            diff = False
+                            with self.lock:
+                                if len(new_tabs) != len(self.tabs):
+                                    diff = True
+                                else:
+                                    for nt, ot in zip(new_tabs, self.tabs):
+                                        if (nt.get("id") != ot.get("id")
+                                            or nt.get("url") != ot.get("url")
+                                            or nt.get("title") != ot.get("title")
+                                            or bool(nt.get("favorite")) != bool(ot.get("favorite"))
+                                            or bool(nt.get("pinned")) != bool(ot.get("pinned"))
+                                            or nt.get("folder") != ot.get("folder")):
+                                            diff = True
+                                            break
+                                if new_theme and new_theme != self.theme:
+                                    diff = True
+                                    self.theme = new_theme
+                                if new_cookies and new_cookies != self.cookies:
+                                    diff = True
+                                    self.cookies = new_cookies
+                                    try:
+                                        (CONFIG_DIR / "shared-cookies.json").write_text(json.dumps(self.cookies, indent=2), encoding="utf-8")
+                                    except Exception:
+                                        pass
+                                if diff:
+                                    self.tabs = new_tabs
+                                    if space_name:
+                                        self.shared_space_name = space_name
+                            if diff:
+                                self._merge_into_spaces_file()
+                                self.notify_sse()
+                except Exception:
+                    pass
+        t = threading.Thread(target=loop, daemon=True)
+        t.start()
 
     def broadcast_to_peers(self, event_type: str, payload: Dict[str, Any]):
         threads = []
@@ -327,19 +499,60 @@ class LiveShareState:
 
         if event_type == "peer_joined":
             self.log_activity(peer_addr, f"Peer {peer_addr} joined the shared space")
+            # Update peer_ips in spaces.json
+            self._merge_into_spaces_file()
             # Reply with current full state
             self.send_to_peer(peer_addr, "sync_state", {
                 "space_id": self.shared_space_id,
                 "space_name": self.shared_space_name,
                 "tabs": self.tabs,
+                "theme": self.theme,
+                "cookies": self.cookies,
             })
 
-        elif event_type == "sync_state":
+        elif event_type == "cursor":
+            x = float(payload.get("x", 0.0))
+            y = float(payload.get("y", 0.0))
+            name = str(payload.get("name", "Peer"))
+            typing = str(payload.get("typing", ""))
+            try:
+                if typing:
+                    t_bytes = typing.encode("utf-8")[:65535]
+                    packet = b"AT" + struct.pack("<ffH", x, y, len(t_bytes)) + t_bytes + name.encode("utf-8")
+                else:
+                    packet = b"AC" + struct.pack("<ff", x, y) + name.encode("utf-8")
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.sendto(packet, ("127.0.0.1", 7434))
+                s.close()
+            except Exception:
+                pass
+
+        elif event_type == "sync_cookies":
+            cookies = payload.get("cookies", [])
             with self.lock:
-                if not self.is_host:
-                    self.shared_space_id = "shared-space"
+                self.cookies = cookies
+            try:
+                (CONFIG_DIR / "shared-cookies.json").write_text(json.dumps(cookies, indent=2), encoding="utf-8")
+            except Exception as e:
+                print(f"[Error saving shared-cookies.json] {e}", file=sys.stderr)
+            self.log_activity(origin, f"Synchronized {len(cookies)} session cookies")
+
+        elif event_type == "sync_state":
+            if self.is_host:
+                # Host is the master of the shared space; ignore sync_state from guest peers
+                return
+            with self.lock:
+                self.shared_space_id = "shared-space"
                 self.shared_space_name = payload.get("space_name") or self.shared_space_name
                 self.tabs = payload.get("tabs", [])
+                if payload.get("theme"):
+                    self.theme = payload.get("theme")
+                if payload.get("cookies"):
+                    self.cookies = payload.get("cookies")
+                    try:
+                        (CONFIG_DIR / "shared-cookies.json").write_text(json.dumps(self.cookies, indent=2), encoding="utf-8")
+                    except Exception:
+                        pass
                 self.log_activity(origin, f"Synchronized {len(self.tabs)} tabs from peer")
             self._merge_into_spaces_file()
 
@@ -362,7 +575,9 @@ class LiveShareState:
                     self.shared_space_id = None
                     self.shared_space_name = None
                     self.tabs.clear()
-            if not self.is_host and not self.connected_peers:
+            if self.is_host:
+                self._merge_into_spaces_file()
+            elif not self.connected_peers:
                 self._remove_shared_space_from_file()
             self.notify_sse()
 
@@ -376,27 +591,38 @@ class LiveShareState:
                     self.tabs.append(tab)
                     self.log_activity(origin, f"Opened tab '{tab.get('title') or tab.get('url')}'")
                 self._merge_into_spaces_file()
+                if self.is_host:
+                    self.broadcast_to_peers("tab_opened", {"tab": tab})
 
         elif event_type == "tab_closed":
             tab_id = payload.get("tab_id")
             if tab_id:
+                raw_id = tab_id.removeprefix("shared-")
                 with self.lock:
-                    self.tabs = [t for t in self.tabs if t.get("id") != tab_id]
+                    self.tabs = [t for t in self.tabs if t.get("id") not in (tab_id, raw_id, f"shared-{tab_id}")]
                     self.log_activity(origin, f"Closed tab ({tab_id})")
                 self._merge_into_spaces_file()
+                if self.is_host:
+                    self.broadcast_to_peers("tab_closed", {"tab_id": raw_id})
 
         elif event_type == "tab_navigated":
             tab_id = payload.get("tab_id")
             new_url = payload.get("url")
             new_title = payload.get("title", new_url)
             if tab_id and new_url:
+                if is_auth_url(new_url):
+                    return
+                raw_id = tab_id.removeprefix("shared-")
                 with self.lock:
                     for t in self.tabs:
-                        if t.get("id") == tab_id:
+                        if t.get("id") in (tab_id, raw_id, f"shared-{tab_id}"):
                             t["url"] = new_url
-                            t["title"] = new_title
+                            if not t.get("favorite") and not t.get("pinned"):
+                                t["title"] = new_title
                     self.log_activity(origin, f"Navigated to '{new_title}'")
                 self._merge_into_spaces_file()
+                if self.is_host:
+                    self.broadcast_to_peers("tab_navigated", {"tab_id": raw_id, "url": new_url, "title": new_title})
 
         self.notify_sse()
 
@@ -419,12 +645,13 @@ class LiveShareState:
         return {"success": True, "tab": tab}
 
     def local_action_close_tab(self, tab_id: str) -> Dict[str, Any]:
+        raw_id = tab_id.removeprefix("shared-")
         with self.lock:
-            self.tabs = [t for t in self.tabs if t.get("id") != tab_id]
+            self.tabs = [t for t in self.tabs if t.get("id") not in (tab_id, raw_id, f"shared-{tab_id}")]
             self.log_activity("You", f"Closed tab ({tab_id})")
 
         self._merge_into_spaces_file()
-        self.broadcast_to_peers("tab_closed", {"tab_id": tab_id})
+        self.broadcast_to_peers("tab_closed", {"tab_id": raw_id})
         self.notify_sse()
         return {"success": True}
 
@@ -459,40 +686,85 @@ class LiveShareState:
                 # Create a new shared space
                 space_id = "shared-space"
                 space_name = self.shared_space_name or "Shared Space"
+                default_color = self.theme.get("color", 10135039) if self.theme else 10135039
                 target_space = {
                     "id": space_id,
                     "name": f"[Shared] {space_name}",
                     "icon": "globe",
-                    "color": 10135039,  # #9AA6FF
-                    "theme_colors": [10135039, 4907263],
-                    "theme_appearance": 0,
-                    "theme_intensity": 0.5,
-                    "theme_grain": 0.0,
+                    "color": default_color,
+                    "theme_colors": self.theme.get("theme_colors", [default_color]) if self.theme else [10135039, 4907263],
+                    "theme_appearance": self.theme.get("theme_appearance", 0) if self.theme else 0,
+                    "theme_intensity": self.theme.get("theme_intensity", 0.5) if self.theme else 0.5,
+                    "theme_grain": self.theme.get("theme_grain", 0.0) if self.theme else 0.0,
                     "tabs": [],
                     "folders": [],
                 }
                 spaces.append(target_space)
 
+            # Update theme in target_space for guest
+            if self.theme and not self.is_host:
+                target_space["color"] = self.theme.get("color", target_space.get("color", 10135039))
+                target_space["theme_colors"] = self.theme.get("theme_colors", target_space.get("theme_colors", [target_space.get("color", 10135039)]))
+                target_space["theme_appearance"] = self.theme.get("theme_appearance", target_space.get("theme_appearance", 0))
+                target_space["theme_intensity"] = self.theme.get("theme_intensity", target_space.get("theme_intensity", 0.5))
+                target_space["theme_grain"] = self.theme.get("theme_grain", target_space.get("theme_grain", 0.0))
+
             # Update tabs in target_space
             existing_tabs = target_space.get("tabs", [])
             merged_tabs = []
             for st in self.tabs:
-                # Keep existing state if already there
-                match = next((et for et in existing_tabs if et.get("id") == st.get("id")), None)
+                st_url = st.get("url", "")
+                is_fav = bool(st.get("favorite", False))
+                is_pin = bool(st.get("pinned", False))
+                pinned_url = st.get("pinned_url") or (st_url if (is_fav or is_pin) else None)
+                pinned_title = st.get("pinned_title") or st.get("title")
+
+                st_id = st.get("id", "")
+                if not self.is_host and not st_id.startswith("shared-"):
+                    local_id = f"shared-{st_id}"
+                else:
+                    local_id = st_id
+
+                match = next((et for et in existing_tabs if et.get("id") in (local_id, st_id)), None)
                 if match:
-                    match["url"] = st.get("url")
-                    match["title"] = st.get("title", st.get("url"))
+                    match["id"] = local_id
+                    if not is_auth_url(st_url):
+                        match["url"] = st_url
+                        match["title"] = st.get("title", match.get("title", st_url))
+                    match["pinned"] = is_pin
+                    match["favorite"] = is_fav
+                    match["pinned_url"] = pinned_url
+                    if pinned_title:
+                        match["pinned_title"] = pinned_title
+                    if st.get("folder") is not None:
+                        match["folder"] = st.get("folder")
                     merged_tabs.append(match)
                 else:
                     merged_tabs.append({
-                        "id": st.get("id"),
+                        "id": local_id,
                         "title": st.get("title", ""),
-                        "url": st.get("url", ""),
-                        "pinned": st.get("pinned", False),
-                        "favorite": False,
+                        "url": st_url,
+                        "pinned_url": pinned_url,
+                        "pinned_title": pinned_title,
+                        "favicon_path": None,
+                        "pinned": is_pin,
+                        "favorite": is_fav,
+                        "folder": st.get("folder"),
+                        "last_active": 0,
+                        "scroll_y": 0.0,
                         "state": "Live",
                     })
+            # Preserve internal plugin tabs (e.g. Live Share panel) that exist locally
+            for et in existing_tabs:
+                u = et.get("url", "")
+                if u.startswith("anarc-plugin://") or u.startswith("anarc-internal://"):
+                    if not any(mt.get("id") == et.get("id") for mt in merged_tabs):
+                        merged_tabs.append(et)
             target_space["tabs"] = merged_tabs
+            if (not target_space.get("active") or not any(t.get("id") == target_space.get("active") for t in merged_tabs)) and merged_tabs:
+                target_space["active"] = merged_tabs[0]["id"]
+            with self.lock:
+                target_space["peer_ips"] = [p.split(":")[0] for p in self.connected_peers.keys()]
 
             # Write out atomically
             tmp = self.spaces_file.with_suffix(".tmp")
@@ -508,7 +780,7 @@ class LiveShareState:
     def watch_spaces_file(self):
         """Background thread watching for local changes made inside Lumen."""
         while True:
-            time.sleep(1.0)
+            time.sleep(0.25)
             if not self.spaces_file.is_file() or not self.shared_space_id:
                 continue
 
@@ -520,28 +792,72 @@ class LiveShareState:
                 mtime = self.spaces_file.stat().st_mtime
                 if mtime > self.last_spaces_mtime:
                     self.last_spaces_mtime = mtime
-                    # Read current tabs
-                    fresh_tabs, _ = self._read_space_tabs(self.shared_space_id)
-                    diff = False
-                    with self.lock:
-                        if len(fresh_tabs) != len(self.tabs):
-                            diff = True
-                        else:
-                            for ft, ot in zip(fresh_tabs, self.tabs):
-                                if ft.get("id") != ot.get("id") or ft.get("url") != ot.get("url"):
-                                    diff = True
-                                    break
-                        if diff:
-                            self.tabs = fresh_tabs
-                            self.log_activity("Lumen", f"Local space updated ({len(fresh_tabs)} tabs)")
+                    fresh_tabs, _, fresh_theme = self._read_space_tabs(self.shared_space_id)
+                    if self.is_host:
+                        diff = False
+                        with self.lock:
+                            if len(fresh_tabs) != len(self.tabs):
+                                diff = True
+                            else:
+                                for ft, ot in zip(fresh_tabs, self.tabs):
+                                    if (ft.get("id") != ot.get("id")
+                                        or ft.get("url") != ot.get("url")
+                                        or ft.get("pinned") != ot.get("pinned")
+                                        or ft.get("favorite") != ot.get("favorite")
+                                        or ft.get("folder") != ot.get("folder")):
+                                        diff = True
+                                        break
+                            if fresh_theme and fresh_theme != self.theme:
+                                diff = True
+                                self.theme = fresh_theme
+                            if diff:
+                                self.tabs = fresh_tabs
+                                self.log_activity("Lumen", f"Host space updated ({len(fresh_tabs)} tabs)")
 
-                    if diff:
-                        self.broadcast_to_peers("sync_state", {
-                            "space_id": self.shared_space_id,
-                            "space_name": self.shared_space_name,
-                            "tabs": self.tabs,
-                        })
-                        self.notify_sse()
+                        if diff:
+                            self.broadcast_to_peers("sync_state", {
+                                "space_id": self.shared_space_id,
+                                "space_name": self.shared_space_name,
+                                "tabs": self.tabs,
+                                "theme": self.theme,
+                                "cookies": self.cookies,
+                            })
+                            self.notify_sse()
+                    else:
+                        # Client: detect discrete actions without overwriting the host's canonical state
+                        # 1. New tabs opened locally by client
+                        for ft in fresh_tabs:
+                            ft_id = ft.get("id", "")
+                            raw_id = ft_id.removeprefix("shared-")
+                            if not any(ot.get("id") in (ft_id, raw_id) for ot in self.tabs):
+                                ft_copy = dict(ft)
+                                ft_copy["shared_by"] = f"{self.tailscale_ip}:{self.port}"
+                                with self.lock:
+                                    self.tabs.append(ft_copy)
+                                self.broadcast_to_peers("tab_opened", {"tab": ft_copy})
+                        # 2. Tabs closed locally by client
+                        for ot in list(self.tabs):
+                            ot_id = ot.get("id", "")
+                            shared_id = f"shared-{ot_id}"
+                            if not any(ft.get("id") in (ot_id, shared_id) for ft in fresh_tabs):
+                                with self.lock:
+                                    self.tabs = [t for t in self.tabs if t.get("id") != ot_id]
+                                self.broadcast_to_peers("tab_closed", {"tab_id": ot_id})
+                        # 3. Tabs navigated locally by client
+                        for ft in fresh_tabs:
+                            ft_id = ft.get("id", "")
+                            raw_id = ft_id.removeprefix("shared-")
+                            for ot in self.tabs:
+                                if ot.get("id") in (ft_id, raw_id):
+                                    if ft.get("url") != ot.get("url") and ft.get("url") != "about:blank":
+                                        if not is_auth_url(ft.get("url", "")):
+                                            ot["url"] = ft.get("url")
+                                            ot["title"] = ft.get("title", ot.get("title"))
+                                            self.broadcast_to_peers("tab_navigated", {
+                                                "tab_id": ot.get("id"),
+                                                "url": ft.get("url"),
+                                                "title": ft.get("title", ft.get("url")),
+                                            })
             except Exception:
                 pass
 
@@ -591,7 +907,13 @@ class LiveShareHandler(BaseHTTPRequestHandler):
                 "space_id": status["shared_space_id"],
                 "space_name": status["shared_space_name"],
                 "tabs": status["tabs"],
+                "theme": status.get("theme"),
+                "cookies": status.get("cookies", []),
             })
+
+        elif path == "/api/cookies":
+            with self.state.lock:
+                self.send_json({"cookies": copy.deepcopy(self.state.cookies)})
 
         elif path == "/api/stream":
             self.send_response(HTTPStatus.OK)
@@ -662,6 +984,18 @@ class LiveShareHandler(BaseHTTPRequestHandler):
             self.state.handle_peer_event(event_type, origin, payload)
             self.send_json({"success": True})
 
+        elif path == "/api/cookies":
+            cookies = body.get("cookies", [])
+            with self.state.lock:
+                self.state.cookies = cookies
+            try:
+                (CONFIG_DIR / "shared-cookies.json").write_text(json.dumps(cookies, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+            if self.state.is_host:
+                self.state.broadcast_to_peers("sync_cookies", {"cookies": cookies})
+            self.send_json({"success": True, "count": len(cookies)})
+
         else:
             self.send_response(HTTPStatus.NOT_FOUND)
             self.end_headers()
@@ -725,6 +1059,18 @@ def start_daemon(host: str = "0.0.0.0", port: int = DEFAULT_PORT, spaces_file: P
     # Start watcher
     watcher_thread = threading.Thread(target=state.watch_spaces_file, daemon=True)
     watcher_thread.start()
+
+    # Auto-resume peer connection if shared-space is in spaces.json
+    try:
+        if spaces_file.is_file():
+            s_data = json.loads(spaces_file.read_text(encoding="utf-8"))
+            for sp in s_data.get("spaces", []):
+                if sp.get("id") == "shared-space" and sp.get("peer_ips"):
+                    peer_ip = sp["peer_ips"][0]
+                    threading.Thread(target=lambda: state.connect_to_peer(peer_ip), daemon=True).start()
+                    break
+    except Exception:
+        pass
 
     print(f"[Lumen Live Share] Running on http://{host}:{port}")
     print(f"[Tailscale IP] {state.tailscale_ip}")
