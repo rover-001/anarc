@@ -79,14 +79,22 @@ impl Lumen {
             return Some("activate-tab-number".to_string());
         }
         let shortcut = format!("ctrl+{}{}", if shift { "shift+" } else { "" }, key);
-        self.plugins
+        let from_plugins = self
+            .plugins
             .contributions()
             .into_iter()
             .filter(|item| item.key == "keymap.binding")
             .find_map(|item| {
                 let (registered_key, action) = item.value.rsplit_once('=')?;
                 (registered_key == shortcut).then(|| action.to_string())
-            })
+            });
+        if from_plugins.is_some() {
+            return from_plugins;
+        }
+        crate::plugin::SHORTCUT_BINDINGS
+            .iter()
+            .find(|binding| binding.key == shortcut)
+            .map(|binding| binding.action.to_string())
     }
     pub(crate) fn handle_shortcut(&mut self, key: &str, control: bool, shift: bool) -> bool {
         let Some(action) = self.registered_shortcut_action(key, control, shift) else {

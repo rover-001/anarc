@@ -32,6 +32,7 @@ impl Engine {
             https_state: Arc::new(Mutex::new(HttpsFirstState::default())),
             panel_packages: crate::plugin::new_panel_registry(),
             popup_serial: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            devtools: Mutex::new(devtools::DevToolsManager::new()),
         }
     }
 
@@ -66,8 +67,15 @@ impl Engine {
         // 2. Directory in LD_LIBRARY_PATH (e.g. $PREFIX/anarc-cef)
         // 3. Directory in PATH (Windows DLLs/resources)
         // 4. Fallback to executable directory
+        let default_cef_dir = crate::paths::data_dir()
+            .parent()
+            .map(|p| p.join("anarc-cef"))
+            .filter(|p| p.join("resources.pak").exists());
+
         let cef_resources_dir = if exe_dir.join("resources.pak").exists() {
             exe_dir.to_path_buf()
+        } else if let Some(ref p) = default_cef_dir {
+            p.clone()
         } else if let Ok(ld_path) = std::env::var("LD_LIBRARY_PATH") {
             ld_path
                 .split(':')
@@ -188,8 +196,13 @@ impl Engine {
                 {
                     frame.load_url(Some(&CefString::from(url.as_str())));
                 }
+                let space_id = state
+                    .lock()
+                    .ok()
+                    .map(|guard| guard.space_id.clone())
+                    .unwrap_or_default();
                 self.browsers
-                    .insert(id.clone(), BrowserEntry { browser, state });
+                    .insert(id.clone(), BrowserEntry { browser, state, space_id });
                 self.lifecycle.opened(&id, Instant::now());
                 changed = true;
             }
@@ -198,6 +211,9 @@ impl Engine {
     }
     pub fn ui_update_receiver(&self) -> async_channel::Receiver<()> {
         self.ui_update_receiver.clone()
+    }
+    pub fn ui_update_wake(&self) -> async_channel::Sender<()> {
+        self.ui_update_wake.clone()
     }
     pub fn collect_browser_updates<'a>(
         &self,

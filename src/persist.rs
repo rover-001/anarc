@@ -30,8 +30,16 @@ pub fn spaces_mtime() -> Option<std::time::SystemTime> {
 
 pub fn load_state() -> Option<AppState> {
     let path = spaces_path();
-    let data = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&data).ok()
+    let data = fs::read_to_string(&path).ok()?;
+    match serde_json::from_str(&data) {
+        Ok(state) => Some(state),
+        Err(err) => {
+            eprintln!("[Persistence] Failed to parse {}: {}", path.display(), err);
+            let bak = path.with_extension("json.bak");
+            let _ = fs::write(bak, &data);
+            None
+        }
+    }
 }
 
 pub fn save_state(

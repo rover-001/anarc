@@ -1073,6 +1073,27 @@ cef::wrap_life_span_handler! {
             {
                 return 1;
             }
+
+            // If an auth URL is opened from a landing/marketing page (e.g. Google Workspace/Gmail
+            // or Microsoft landing pages), navigate the current tab directly instead of trapping
+            // the user in an orphaned peek overlay.
+            if is_auth_flow_url(trimmed) {
+                let current_url = _frame.as_ref().map(|f| CefString::from(&f.url()).to_string()).unwrap_or_default();
+                let c_lower = current_url.to_ascii_lowercase();
+                let is_landing_page = c_lower.contains("workspace.google.")
+                    || c_lower.contains("google.com/gmail")
+                    || c_lower.contains("google.com/intl")
+                    || c_lower.contains("google.com/about")
+                    || c_lower.contains("live.com")
+                    || c_lower.contains("apple.com");
+                if is_landing_page {
+                    if let Some(frame) = _frame {
+                        frame.load_url(target_url);
+                        return 1;
+                    }
+                }
+            }
+
             // Sign-in popups have to keep a live `window.opener`: identity
             // providers hand the result back through `postMessage` and finish
             // with `window.close()`. Letting CEF own those windows keeps that
@@ -1135,7 +1156,7 @@ fn start_popup_browser(
         .popup_serial
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tab_id = format!("{}-popup-{serial}", handler.space_id);
-    let shared = Arc::new(Mutex::new(new_shared_state(width, height, url, 1.0)));
+    let shared = Arc::new(Mutex::new(new_shared_state(&handler.space_id, width, height, url, 1.0)));
     let render_handler =
         LumenRenderHandler::new(shared.clone(), handler.paint_wake.clone(), tab_id.clone());
     let display_handler = LumenDisplayHandler::new(

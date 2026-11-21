@@ -15,8 +15,17 @@ impl Engine {
         if !self.initialized {
             return Ok(());
         }
+        if let Some(entry) = self.browsers.get(id) {
+            if entry.space_id != space_id {
+                if let Some(host) = entry.browser.host() {
+                    host.close_browser(1);
+                }
+                self.browsers.remove(id);
+            }
+        }
         if !self.browsers.contains_key(id) && !self.pending_browsers.contains_key(id) {
             let shared = Arc::new(Mutex::new(new_shared_state(
+                space_id,
                 width,
                 height,
                 url,
@@ -82,8 +91,10 @@ impl Engine {
             window_info.runtime_style = cef::RuntimeStyle::ALLOY;
             let start_url = CefString::from(url);
 
-            if !self.contexts.contains_key(space_id) {
-                let cache_dir = crate::paths::profile_dir(space_id);
+            let effective_space = space_id;
+
+            if !self.contexts.contains_key(effective_space) {
+                let cache_dir = crate::paths::profile_dir(effective_space);
                 let _ = std::fs::create_dir_all(&cache_dir);
 
                 let settings = RequestContextSettings {
@@ -94,11 +105,11 @@ impl Engine {
 
                 if let Some(ctx) = cef::request_context_create_context(Some(&settings), None) {
                     panel_scheme::register_panel_factory(&ctx, self.panel_packages.clone());
-                    self.contexts.insert(space_id.to_string(), ctx);
+                    self.contexts.insert(effective_space.to_string(), ctx);
                 }
             }
 
-            let request_ctx = self.contexts.get_mut(space_id);
+            let request_ctx = self.contexts.get_mut(effective_space);
 
             // CEF's OSR default is 30 fps, which makes scrolling and animations visibly choppy.
             let browser_settings = BrowserSettings {
@@ -196,10 +207,16 @@ impl Engine {
         self.pressed_mouse_buttons.remove(tab_id);
         self.visible.retain(|id| id != tab_id);
         self.lifecycle.closed(tab_id);
+        if let Ok(mut dt) = self.devtools.lock() {
+            dt.cleanup_tab(tab_id);
+        }
     }
     fn close_browser_entry(&mut self, tab_id: &str) {
         if self.pending_browsers.contains_key(tab_id) {
             self.canceled_browsers.insert(tab_id.to_owned());
+        }
+        if let Ok(mut dt) = self.devtools.lock() {
+            dt.cleanup_tab(tab_id);
         }
         if let Some(entry) = self.browsers.remove(tab_id) {
             if let Some(host) = entry.browser.host() {
