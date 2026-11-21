@@ -1,5 +1,5 @@
-use super::observe::{build_see_call_script, format_see_output};
-use super::policy::{check_navigation_policy, confirmation_message, ACTION_CONTEXT, log_audit_event, resolve_secret, NavigationCheck, PolicyConfig};
+use super::observe::{build_see_call_script, build_stable_call_script, format_see_output};
+use super::policy::{check_navigation_policy, confirmation_message, ACTION_CONTEXT, resolve_secret, NavigationCheck, PolicyConfig};
 use super::protocol::AgentResponse;
 use super::refs::RawIndex;
 
@@ -22,6 +22,7 @@ pub enum TabAction {
 #[derive(Clone, Debug, PartialEq)]
 pub enum WaitCondition {
     Idle,
+    Stable(u64),
     Millis(u64),
     Text(String),
 }
@@ -52,6 +53,13 @@ pub enum ActionOp {
 }
 
 pub fn parse_dsl(input: &str) -> Result<Vec<ActionOp>, String> {
+    parse_dsl_at_depth(input, 0)
+}
+
+fn parse_dsl_at_depth(input: &str, depth: usize) -> Result<Vec<ActionOp>, String> {
+    if depth >= 16 {
+        return Err("macro nesting limit. use: see".into());
+    }
     let mut ops = Vec::new();
     let sanitized = input.replace('\r', "");
     let statements = sanitized.split([';', '\n']);
@@ -70,7 +78,7 @@ pub fn parse_dsl(input: &str) -> Result<Vec<ActionOp>, String> {
                 let raw_args: Vec<String> = parts.get(1..).unwrap_or(&[]).iter().map(|a| unquote(a)).collect();
                 let playbook = super::playbook::get_or_init_registry();
                 let expanded = playbook.expand_macro(macro_name, &raw_args)?;
-                let expanded_ops = parse_dsl(&expanded)?;
+                let expanded_ops = parse_dsl_at_depth(&expanded, depth + 1)?;
                 ops.extend(expanded_ops);
                 continue;
             }
@@ -196,6 +204,12 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         let w = stripped.trim();
         let condition = if w == "idle" {
             WaitCondition::Idle
+        } else if w == "stable" {
+            WaitCondition::Stable(1500)
+        } else if let Some(interval) = w.strip_prefix("stable ") {
+            let ms = interval.trim().parse::<u64>().ok().filter(|ms| (1..=30000).contains(ms))
+                .ok_or("invalid stable wait. use: do \"wait stable 1500\"")?;
+            WaitCondition::Stable(ms)
         } else if let Ok(ms) = w.parse::<u64>() {
             WaitCondition::Millis(ms)
         } else {
@@ -256,7 +270,11 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
     }
 
     // Default: simple click on ref
-    if !s.is_empty() {
+    let mut characters = s.chars();
+    if characters.next().is_some_and(|kind| kind.is_ascii_lowercase())
+        && !characters.as_str().is_empty()
+        && characters.all(|character| character.is_ascii_digit())
+    {
         return Ok(ActionOp::Click { ref_id: s.to_string() });
     }
 
@@ -280,74 +298,81 @@ pub fn execute_dsl(
     app: &mut crate::app::Lumen,
     tab_id: &str,
     ops: &[ActionOp],
-) -> AgentResponse {
+    response: async_channel::Sender<AgentResponse>,
+) {
     let agent_state = app.engine.agent_state();
-    let mut op_count: usize = 0;
     let policy_config = PolicyConfig::load();
     let mut submissions = Vec::new();
-
-    for (index, op) in ops.iter().enumerate() {
-        let op_num = index.saturating_add(1);
-        let res = execute_single_op(app, tab_id, op, &agent_state, &policy_config, &mut submissions);
-        if let Err(e) = res {
-            log_audit_event(&format!("op{op_num}: {op:?}"), tab_id, &format!("fail: {e}"));
-            return if e.starts_with("needs_confirm:") {
-                AgentResponse::err(e)
+    let (actions, stable) = match ops.split_last() {
+        Some((ActionOp::Wait { condition: WaitCondition::Stable(ms) }, actions)) => (actions, Some(*ms)),
+        _ => (ops, None),
+    };
+    if actions.iter().any(|op| matches!(op, ActionOp::Wait { condition: WaitCondition::Stable(_) })) {
+        let _ = response.try_send(AgentResponse::err("stable must be last. use: do \"wait stable\""));
+        return;
+    }
+    let mut target = tab_id.to_owned();
+    for (index, op) in actions.iter().enumerate() {
+        if let Err(error) = execute_single_op(app, &target, op, &agent_state, &policy_config, &mut submissions) {
+            let error = if error.starts_with("needs_confirm:") {
+                error
             } else {
-                AgentResponse::err(format!("fail op{op_num}: {e}"))
+                format!("fail op{}: {error}", index + 1)
             };
+            let _ = response.try_send(AgentResponse::err(error));
+            return;
         }
-        op_count = op_count.saturating_add(1);
+        if matches!(op, ActionOp::Tab { .. }) {
+            target = app.active_tab_id().to_owned();
+        }
     }
-
+    let count = ops.len();
     let summary = if submissions.is_empty() {
-        format!("ok {op_count}")
+        format!("ok {count}")
     } else {
-        format!("ok {op_count} · {}", submissions.join(" · "))
+        format!("ok {count} · {}", submissions.join(" · "))
     };
-
-    // Settle wait and post-action observation
-    std::thread::sleep(std::time::Duration::from_millis(150));
-
-    let script = build_see_call_script("view");
-    let eval_rx = app.engine.evaluate(tab_id, &script);
-    let raw_res = futures_lite::future::block_on(async { eval_rx.recv().await });
-
-    let raw_json = match raw_res {
-        Ok(Ok(s)) => s,
-        _ => {
-            log_audit_event("batch", tab_id, &format!("ok {op_count}"));
-            return AgentResponse::success(summary);
-        }
-    };
-
-    let raw_index: RawIndex = match serde_json::from_str(&raw_json) {
-        Ok(idx) => idx,
-        _ => {
-            log_audit_event("batch", tab_id, &format!("ok {op_count}"));
-            return AgentResponse::success(summary);
-        }
-    };
-
-    let mut guard = match agent_state.lock() {
-        Ok(g) => g,
-        Err(_) => return AgentResponse::success(summary),
-    };
-
-    let registry = guard.registries.entry(tab_id.to_string()).or_default();
-    let (header, elements, diff, gen_changed) = registry.update_from_raw(raw_index);
-
-    log_audit_event("batch", tab_id, &format!("{summary} · g{}", header.generation));
-
-    if gen_changed {
-        let see_output = format_see_output(&header, &elements, Some(&super::plugin::compact_tabs(app)));
-        AgentResponse::success(format!("{summary} · g{}\n{see_output}", header.generation))
-    } else if !diff.is_empty() {
-        let diff_str = diff.format_diff();
-        AgentResponse::success(format!("{summary} · g{}\n{diff_str}", header.generation))
+    let tabs = super::plugin::compact_tabs(app);
+    let script = if let Some(ms) = stable {
+        build_stable_call_script(ms)
     } else {
-        AgentResponse::success(format!("{summary} · g{}", header.generation))
-    }
+        build_see_call_script("view")
+    };
+    // DevTools awaits the page promise on its own threads. GPUI can render and process other calls.
+    let started = std::time::Instant::now();
+    let evaluation = app.engine.evaluate(&target, &script);
+    let _ = std::thread::Builder::new().name("anarc-do-worker".into()).spawn(move || {
+        let result = evaluation.recv_blocking().ok().and_then(Result::ok);
+        if stable.is_some() {
+            if result.as_deref() == Some("streaming")
+                || (result.is_none() && started.elapsed() >= std::time::Duration::from_secs(30))
+            {
+                let _ = response.try_send(AgentResponse::success("streaming"));
+                return;
+            }
+            if result.is_none() {
+                let _ = response.try_send(AgentResponse::err("stable wait interrupted. use: see"));
+                return;
+            }
+        }
+        let raw = result.and_then(|json| serde_json::from_str::<RawIndex>(&json).ok());
+        let reply = if let (Some(raw), Ok(mut state)) = (raw, agent_state.lock()) {
+            let registry = state.registries.entry(target).or_default();
+            let (header, elements, diff, gen_changed) = registry.update_from_raw(raw);
+            let mut reply = format!("{summary} · g{}", header.generation);
+            if gen_changed {
+                reply.push('\n');
+                reply.push_str(&format_see_output(&header, &elements, Some(&tabs)));
+            } else if !diff.is_empty() {
+                reply.push('\n');
+                reply.push_str(&diff.format_diff());
+            }
+            reply
+        } else {
+            summary
+        };
+        let _ = response.try_send(AgentResponse::success(reply));
+    });
 }
 
 fn execute_single_op(
@@ -362,8 +387,7 @@ fn execute_single_op(
         ActionOp::Click { ref_id } => {
             let (cx, cy) = resolve_ref_coords(ref_id, tab_id, state_lock)?;
             check_occlusion(app, tab_id, cx, cy, ref_id)?;
-            check_click_policy(app, tab_id, cx, cy, policy_config)?;
-            click_at(app, tab_id, cx, cy)?;
+            click_at(app, tab_id, cx, cy, policy_config)?;
             super::playbook::record_action(ref_id);
             Ok(())
         }
@@ -388,8 +412,7 @@ fn execute_single_op(
         ActionOp::SemanticClick { kind, label } => {
             let (cx, cy, id) = resolve_semantic_coords(*kind, label, tab_id, state_lock)?;
             check_occlusion(app, tab_id, cx, cy, &id)?;
-            check_click_policy(app, tab_id, cx, cy, policy_config)?;
-            click_at(app, tab_id, cx, cy)?;
+            click_at(app, tab_id, cx, cy, policy_config)?;
             super::playbook::record_action(&format!("{kind}:\"{label}\""));
             Ok(())
         }
@@ -432,7 +455,7 @@ fn execute_single_op(
                 NavigationCheck::CrossSiteWarning(detail) => {
                     eprintln!("[anarc-agent] Cross-site navigation warning: {detail}");
                 }
-                NavigationCheck::RequiresConfirmation(_) => {
+                NavigationCheck::RequiresConfirmation => {
                     return Err("needs_confirm: approve navigation in Anarc, then retry".into());
                 }
             }
@@ -474,7 +497,7 @@ fn execute_single_op(
         }
         ActionOp::Focus { ref_id } => {
             let (cx, cy) = resolve_ref_coords(ref_id, tab_id, state_lock)?;
-            click_at(app, tab_id, cx, cy)?;
+            click_at(app, tab_id, cx, cy, policy_config)?;
             let focus_script = format!(
                 "const el = document.elementFromPoint({cx}, {cy}); \
                  if (el) {{ \
@@ -489,6 +512,8 @@ fn execute_single_op(
         ActionOp::Drag { from_ref, to_ref } => {
             let (x1, y1) = resolve_ref_coords(from_ref, tab_id, state_lock)?;
             let (x2, y2) = resolve_ref_coords(to_ref, tab_id, state_lock)?;
+            check_click_policy(app, tab_id, x1, y1, policy_config)?;
+            check_click_policy(app, tab_id, x2, y2, policy_config)?;
             let mods = gpui_kit::Modifiers::default();
             app.engine.send_mouse_click(tab_id, x1, y1, cef::MouseButtonType::LEFT, false, 1, &mods);
             // Intermediate drag steps
@@ -501,10 +526,7 @@ fn execute_single_op(
             app.engine.send_mouse_click(tab_id, x2, y2, cef::MouseButtonType::LEFT, true, 1, &mods);
             Ok(())
         }
-        ActionOp::XY { x, y } => {
-            check_click_policy(app, tab_id, *x, *y, policy_config)?;
-            click_at(app, tab_id, *x, *y)
-        }
+        ActionOp::XY { x, y } => click_at(app, tab_id, *x, *y, policy_config),
         ActionOp::Upload { ref_id, file_path } => {
             let p = std::path::Path::new(file_path);
             if !p.exists() {
@@ -517,7 +539,7 @@ fn execute_single_op(
             }
 
             let (cx, cy) = resolve_ref_coords(ref_id, tab_id, state_lock)?;
-            app.engine.input_click(tab_id, cx, cy, None);
+            click_at(app, tab_id, cx, cy, policy_config)?;
             let script = "(function() { var el = document.activeElement; if (el && el.type === 'file') { el.dispatchEvent(new Event('change', { bubbles: true })); } })()";
             app.engine.execute_script(tab_id, script);
             Ok(())
@@ -546,7 +568,8 @@ fn execute_single_op(
         }
         ActionOp::Wait { condition } => {
             match condition {
-                WaitCondition::Millis(ms) => std::thread::sleep(std::time::Duration::from_millis(*ms)),
+                WaitCondition::Stable(_) => {}
+                WaitCondition::Millis(ms) => std::thread::sleep(std::time::Duration::from_millis((*ms).min(30000))),
                 WaitCondition::Idle => std::thread::sleep(std::time::Duration::from_millis(150)),
                 WaitCondition::Text(_) => std::thread::sleep(std::time::Duration::from_millis(200)),
             }
@@ -575,7 +598,8 @@ fn check_action_policy(
     Ok(())
 }
 
-fn click_at(app: &crate::app::Lumen, tab: &str, x: i32, y: i32) -> Result<(), String> {
+fn click_at(app: &crate::app::Lumen, tab: &str, x: i32, y: i32, policy: &PolicyConfig) -> Result<(), String> {
+    check_click_policy(app, tab, x, y, policy)?;
     app.engine.set_focus(tab, true);
     for kind in ["mousePressed", "mouseReleased"] {
         let params = serde_json::json!({
@@ -597,11 +621,11 @@ fn press_key(app: &crate::app::Lumen, tab: &str, key: &str, mods: &gpui_kit::Mod
 fn type_at(
     app: &crate::app::Lumen, tab: &str, x: i32, y: i32, text: &str, replace: bool,
 ) -> Result<(), String> {
-    click_at(app, tab, x, y)?;
+    app.engine.set_focus(tab, true);
     let script = format!(r#"(() => {{
         const target = document.elementFromPoint({x}, {y})
-            ?.closest('input, textarea, select, [contenteditable], [role=textbox]');
-        if (!target) return 'missing';
+            ?.closest('input, textarea, select, [contenteditable]:not([contenteditable=false]), [role=textbox]');
+        if (!target || target.disabled || target.readOnly || target.matches('input[type=submit], input[type=button], input[type=file], input[type=reset], input[type=checkbox], input[type=radio]')) return 'missing';
         target.focus();
         if (target instanceof HTMLSelectElement) {{
             target.value = {text};
@@ -671,7 +695,7 @@ fn submit(app: &crate::app::Lumen, tab: &str, policy: &PolicyConfig) -> Result<&
         const form = field?.form || field?.closest('form');
         const rect = field?.getBoundingClientRect();
         const candidates = Array.from(document.querySelectorAll('button, [role=button], input[type=submit], input[type=button]'))
-            .filter(el => /(send|submit|post|go)/i.test(
+            .filter(el => /\b(send|submit|post|go)\b/i.test(
                 el.getAttribute('aria-label') || el.innerText || el.value || el.title || ''
             ) && !el.disabled && el.getAttribute('aria-disabled') !== 'true' && el.checkVisibility());
         const score = el => {
@@ -689,8 +713,7 @@ fn submit(app: &crate::app::Lumen, tab: &str, policy: &PolicyConfig) -> Result<&
     let coords = evaluate_action(app, tab, button)?;
     let (x, y) = serde_json::from_str::<(i32, i32)>(&coords)
         .map_err(|_| "submit button unavailable. use: see")?;
-    check_click_policy(app, tab, x, y, policy)?;
-    click_at(app, tab, x, y)?;
+    click_at(app, tab, x, y, policy)?;
     Ok("submit via button")
 }
 
