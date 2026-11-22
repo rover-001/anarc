@@ -40,6 +40,7 @@ Execute batch actions using the `do` DSL.
 - **Args**: `ops` (semicolon or newline separated)
 - **Syntax**:
   - `b1` / `click b1` / `click css=button` / `click aria="Send"` : Click element
+  - `clickjs b1` / `domclick b1` : Direct DOM `.click()` via CDP for React/SPA links that swallow coordinate clicks
   - `i1="text"` / `fill i1 text` / `fill css=input text` : Focus, clear, and type into input
   - `i1+"text"` / `type append i1 text` / `type i1 text append=true` : Append text without wiping rich tokens (Slate.js/Draft.js)
   - `type i1 text` : Type into input/contenteditable emitting standard `insertText` events
@@ -61,6 +62,18 @@ Execute batch actions using the `do` DSL.
   +b5 "Confirm" -b1 ~i2 err "Required"
   ```
   If generation changed (navigation/SPA update), automatically appends new `see` output.
+
+- **Reliability notes:**
+  - `tab select <id>` wakes asleep tabs and waits for `document.readyState != "loading"`; the DOM is indexed implicitly, so no extra `reload` or `go` is needed.
+  - `fill` / `<ref>="text"` scrolls the field into view, focuses it, then types. Failures name the reason (`no-field`, `disabled`, `readonly`, `not-editable`, `off-screen`) instead of a generic error.
+  - `click <ref>` rejects sticky/fixed overlay occlusion. `xy X Y` is a raw-coordinate fallback with no element identity — prefer typed refs. Use `clickjs <ref>` when an SPA swallows coordinate clicks.
+  - **Direct URL routing for complex SPAs** saves interaction turns. Prefer one `navigate <url>` / `go <url>` (or `tab new <url>` for a fresh tab) over multi-step modal clicking:
+    - LinkedIn people: `navigate https://www.linkedin.com/search/results/people/?keywords=Parth%20Sharma`
+    - LinkedIn compose: `navigate https://www.linkedin.com/messaging/compose/?recipient=<encoded-name>`
+    - Gmail compose: `navigate https://mail.google.com/mail/u/0/?view=cm&fs=1&to=<email>&su=<subject>&body=<body>`
+    - GitHub: navigate straight to `/issues`, `/pulls`, or `/repos/<owner>/<repo>`.
+    - Query strings containing `;` must be quoted: `navigate "https://example.com/?a=1;b=2"`.
+  - Cold start: `anarc-ctl start` launches Anarc detached and waits for its socket. MCP/CLI calls also attempt auto-spawn when the socket is missing.
 
 ### 3. `read`
 Extract page content in structured, budgeted modes.

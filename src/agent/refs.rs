@@ -83,12 +83,21 @@ pub struct RefRegistry {
     pub previous_elements: HashMap<String, ElementRef>,
     pub ref_by_fingerprint: HashMap<String, String>,
     pub last_url: String,
+    /// Cursor for `see +` pagination into the last full index.
+    pub see_plus_offset: usize,
     next_index_by_kind: HashMap<char, usize>,
 }
 
 impl Default for RefRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ElementRef {
+    /// Fingerprint layout is `kind:name:path`; `splitn` keeps colons inside paths intact.
+    pub fn dom_path(&self) -> &str {
+        self.fingerprint.splitn(3, ':').nth(2).unwrap_or("")
     }
 }
 
@@ -100,6 +109,7 @@ impl RefRegistry {
             previous_elements: HashMap::new(),
             ref_by_fingerprint: HashMap::new(),
             last_url: String::new(),
+            see_plus_offset: 0,
             next_index_by_kind: HashMap::new(),
         }
     }
@@ -116,6 +126,7 @@ impl RefRegistry {
             generation_changed = true;
             self.next_index_by_kind.clear();
             self.ref_by_fingerprint.clear();
+            self.see_plus_offset = 0;
         }
         self.last_url = clean_url.clone();
 
@@ -201,10 +212,6 @@ impl RefRegistry {
         };
 
         (header, new_elements, diff, generation_changed)
-    }
-
-    pub fn resolve_ref(&self, ref_id: &str) -> Option<&ElementRef> {
-        self.current_elements.get(ref_id)
     }
 
     pub fn resolve_ref_with_fallback(&self, ref_id: &str) -> Option<&ElementRef> {
@@ -347,5 +354,41 @@ mod tests {
         assert_eq!(diff.added.len(), 1);
         assert!(diff.added.first().is_some_and(|line| line.contains("i2")));
         assert!(diff.removed.is_empty());
+    }
+
+    #[test]
+    fn test_dom_path_keeps_colons_in_paths() {
+        let el = ElementRef {
+            id: "x13".into(),
+            kind: 'x',
+            name: "bubble".into(),
+            flags: Vec::new(),
+            center: (1, 2),
+            bounds: (0, 0, 1, 1),
+            fingerprint: "x:bubble:div.msg>span[data-id='a:b']".into(),
+            is_banner: false,
+            is_dialog: false,
+        };
+        assert_eq!(el.dom_path(), "div.msg>span[data-id='a:b']");
+    }
+
+    #[test]
+    fn test_see_plus_cursor_resets_on_navigation() {
+        let mut reg = RefRegistry::new();
+        reg.see_plus_offset = 42;
+        reg.update_from_raw(RawIndex {
+            title: "Same".into(),
+            url: "https://example.com/a".into(),
+            scroll_remaining: 0,
+            elements: vec![],
+        });
+        assert_eq!(reg.see_plus_offset, 42);
+        reg.update_from_raw(RawIndex {
+            title: "New".into(),
+            url: "https://example.com/b".into(),
+            scroll_remaining: 0,
+            elements: vec![],
+        });
+        assert_eq!(reg.see_plus_offset, 0);
     }
 }

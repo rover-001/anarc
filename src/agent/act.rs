@@ -40,6 +40,9 @@ pub enum ActionOp {
     Click {
         ref_id: String,
     },
+    DomClick {
+        ref_id: String,
+    },
     SemanticClick {
         kind: char,
         label: String,
@@ -685,6 +688,19 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         }
     }
 
+    // Direct DOM click: "clickjs b1", "domclick b1". Dispatches element.click()
+    // over CDP, which SPAs with synthetic event delegation do not swallow.
+    if let Some(stripped) = s
+        .strip_prefix("clickjs ")
+        .or_else(|| s.strip_prefix("domclick "))
+    {
+        let target = unquote(stripped.trim()).to_string();
+        if target.is_empty() {
+            return Err("missing click target. use: do \"clickjs b1\"".into());
+        }
+        return Ok(ActionOp::DomClick { ref_id: target });
+    }
+
     // Click command: "click b1", "click css=...", "click aria=..."
     if let Some(stripped) = s.strip_prefix("click ") {
         let target = unquote(stripped.trim()).to_string();
@@ -968,7 +984,7 @@ pub fn execute_dsl(
                     reply.push_str(&format_see_output(&header, &elements, Some(&tabs)));
                 } else if !diff.is_empty() {
                     reply.push('\n');
-                    reply.push_str(&diff.format_diff());
+                    reply.push_str(&compact_diff(&diff));
                 }
                 reply
             } else {
@@ -989,16 +1005,25 @@ fn execute_single_op(
     match op {
         ActionOp::Click { ref_id } => {
             let (cx, cy) = resolve_target_coords(app, ref_id, tab_id, state_lock)?;
-            check_occlusion(app, tab_id, cx, cy, ref_id)?;
+            check_occlusion(app, tab_id, cx, cy, ref_id, state_lock)?;
             click_at(app, tab_id, cx, cy, policy_config)?;
             super::playbook::record_action(ref_id);
             Ok(())
         }
+        ActionOp::DomClick { ref_id } => {
+            let (cx, cy) = resolve_target_coords(app, ref_id, tab_id, state_lock)?;
+            check_occlusion(app, tab_id, cx, cy, ref_id, state_lock)?;
+            dom_click(app, tab_id, cx, cy, policy_config)?;
+            super::playbook::record_action(&format!("clickjs {ref_id}"));
+            Ok(())
+        }
         ActionOp::ClearAndType { ref_id, text } | ActionOp::AppendText { ref_id, text } => {
             let (x, y) = resolve_target_coords(app, ref_id, tab_id, state_lock)?;
-            check_occlusion(app, tab_id, x, y, ref_id)?;
+            check_occlusion(app, tab_id, x, y, ref_id, state_lock)?;
+            let name = ref_name(tab_id, ref_id, state_lock);
+            let (x, y) = focus_field(app, tab_id, x, y, &name).unwrap_or((x, y));
             let replace = matches!(op, ActionOp::ClearAndType { .. });
-            type_at(app, tab_id, x, y, text, replace)?;
+            type_at(app, tab_id, x, y, text, replace, &name)?;
             let operator = if replace { "=" } else { "+" };
             super::playbook::record_action(&format!("{ref_id}{operator}\"{text}\""));
             Ok(())
@@ -1011,22 +1036,26 @@ fn execute_single_op(
                 .filter(|secret| !secret.is_empty())
                 .ok_or("secret missing. use: see")?;
             let (x, y) = resolve_target_coords(app, ref_id, tab_id, state_lock)?;
-            check_occlusion(app, tab_id, x, y, ref_id)?;
-            type_at(app, tab_id, x, y, &secret, true)?;
+            check_occlusion(app, tab_id, x, y, ref_id, state_lock)?;
+            let name = ref_name(tab_id, ref_id, state_lock);
+            let (x, y) = focus_field(app, tab_id, x, y, &name).unwrap_or((x, y));
+            type_at(app, tab_id, x, y, &secret, true, &name)?;
             super::playbook::record_action(&format!("{ref_id}=@secret:{secret_name}"));
             Ok(())
         }
         ActionOp::SemanticClick { kind, label } => {
             let (cx, cy, id) = resolve_semantic_coords(*kind, label, tab_id, state_lock)?;
-            check_occlusion(app, tab_id, cx, cy, &id)?;
+            check_occlusion(app, tab_id, cx, cy, &id, state_lock)?;
             click_at(app, tab_id, cx, cy, policy_config)?;
             super::playbook::record_action(&format!("{kind}:\"{label}\""));
             Ok(())
         }
         ActionOp::SemanticType { kind, label, text } => {
             let (x, y, id) = resolve_semantic_coords(*kind, label, tab_id, state_lock)?;
-            check_occlusion(app, tab_id, x, y, &id)?;
-            type_at(app, tab_id, x, y, text, true)?;
+            check_occlusion(app, tab_id, x, y, &id, state_lock)?;
+            let name = ref_name(tab_id, &id, state_lock);
+            let (x, y) = focus_field(app, tab_id, x, y, &name).unwrap_or((x, y));
+            type_at(app, tab_id, x, y, text, true, &name)?;
             super::playbook::record_action(&format!("{kind}:\"{label}\"=\"{text}\""));
             Ok(())
         }
@@ -1195,7 +1224,7 @@ fn execute_single_op(
         ActionOp::Paste { ref_id, text } => {
             if let Some(r) = ref_id {
                 let (cx, cy) = resolve_target_coords(app, r, tab_id, state_lock)?;
-                check_occlusion(app, tab_id, cx, cy, r)?;
+                check_occlusion(app, tab_id, cx, cy, r, state_lock)?;
                 click_at(app, tab_id, cx, cy, policy_config)?;
             }
             let paste_content = if let Some(t) = text {
@@ -1254,7 +1283,10 @@ fn execute_single_op(
             super::playbook::record_action(&op_str);
             Ok(())
         }
-        ActionOp::XY { x, y } => click_at(app, tab_id, *x, *y, policy_config),
+        ActionOp::XY { x, y } => {
+            check_occlusion(app, tab_id, *x, *y, "", state_lock)?;
+            click_at(app, tab_id, *x, *y, policy_config)
+        }
         ActionOp::Upload { ref_id, file_paths } => {
             let mut valid_paths = Vec::new();
             for file_path in file_paths {
@@ -1431,13 +1463,16 @@ fn execute_single_op(
                             .engine
                             .ensure_browser(&space_id, &id, wake_url, 768, 512, 0, 0.0);
                     }
-                    // Wait for execution context / frame to mount
+                    // Wait for the execution context AND a hydrated DOM. A
+                    // successful eval alone can still report "loading", which
+                    // caused `see` to index about:blank on freshly woken tabs.
                     for _ in 0..10 {
                         if app.engine.has_browser(&id) {
-                            if let Ok(Ok(_)) = app
+                            if let Ok(Ok(state)) = app
                                 .engine
                                 .evaluate(&id, "document.readyState")
                                 .recv_blocking()
+                                && state.trim_matches('"') != "loading"
                             {
                                 break;
                             }
@@ -1563,13 +1598,17 @@ fn type_at(
     y: i32,
     text: &str,
     replace: bool,
+    label: &str,
 ) -> Result<(), String> {
     app.engine.set_focus(tab, true);
     let script = format!(
         r#"(() => {{
         const target = document.elementFromPoint({x}, {y})
             ?.closest('input, textarea, select, [contenteditable]:not([contenteditable=false]), [role=textbox]');
-        if (!target || target.disabled || target.readOnly || target.matches('input[type=submit], input[type=button], input[type=file], input[type=reset], input[type=checkbox], input[type=radio]')) return 'missing';
+        if (!target) return 'no-field';
+        if (target.disabled) return 'disabled';
+        if (target.readOnly) return 'readonly';
+        if (target.matches('input[type=submit], input[type=button], input[type=file], input[type=reset], input[type=checkbox], input[type=radio]')) return 'not-editable';
         target.focus();
         if (target instanceof HTMLSelectElement) {{
             target.value = {text};
@@ -1597,7 +1636,8 @@ fn type_at(
         text = serde_json::json!(text),
         replace = replace
     );
-    match evaluate_action(app, tab, &script)?.as_str() {
+    let result = evaluate_action(app, tab, &script)?;
+    match result.as_str() {
         "select" | "ok" => return Ok(()),
         "contenteditable" => {
             if replace && text.is_empty() {
@@ -1613,7 +1653,7 @@ fn type_at(
             return Ok(());
         }
         "editable" => {}
-        _ => return Err("field unavailable. use: see".into()),
+        reason => return Err(field_unavailable_error(reason, label)),
     }
     let control = gpui_kit::Modifiers {
         control: true,
@@ -1788,6 +1828,7 @@ fn live_coords_for_name(app: &crate::app::Lumen, tab_id: &str, name: &str) -> Op
             );
             if (!el) return null;
             el.scrollIntoView({{ block: 'nearest', inline: 'nearest' }});
+            el.focus?.();
             const r = el.getBoundingClientRect();
             return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)];
         }})()"#,
@@ -1926,26 +1967,156 @@ fn resolve_semantic_coords(
     Err("ref missing. use: see".into())
 }
 
+/// A single focus/typing action can re-index the whole page, producing a diff
+/// with over a hundred removed refs. Cap it so `do` replies stay token-dense.
+fn compact_diff(diff: &super::refs::SnapshotDiff) -> String {
+    const MAX_ITEMS: usize = 24;
+    let formatted = diff.format_diff();
+    let mut parts = formatted.split("  ");
+    let shown: Vec<&str> = parts.by_ref().take(MAX_ITEMS).collect();
+    let hidden = parts.count();
+    let mut out = shown.join("  ");
+    if hidden > 0 {
+        out.push_str(&format!("  …+{hidden} more"));
+    }
+    out
+}
+
+/// Map a fill failure reason to an actionable, ref-specific error message.
+fn field_unavailable_error(reason: &str, label: &str) -> String {
+    let suffix = if label.is_empty() {
+        String::new()
+    } else {
+        format!(": {label}")
+    };
+    match reason {
+        "no-field" => format!("input field not focused or off-screen{suffix}. use: see"),
+        "disabled" => format!("input field disabled{suffix}. use: see"),
+        "readonly" => format!("input field read-only{suffix}. use: see"),
+        "not-editable" => format!("element not editable{suffix}. use: see"),
+        other => format!("field unavailable{suffix}: {other}. use: see"),
+    }
+}
+
+/// Accessible name recorded for a ref, used for occlusion identity and fill diagnostics.
+fn ref_name(
+    tab_id: &str,
+    ref_id: &str,
+    state_lock: &std::sync::Arc<std::sync::Mutex<super::plugin::AgentState>>,
+) -> String {
+    let Ok(guard) = state_lock.lock() else {
+        return String::new();
+    };
+    let Some(registry) = guard.registries.get(tab_id) else {
+        return String::new();
+    };
+    registry
+        .current_elements
+        .get(ref_id)
+        .or_else(|| registry.previous_elements.get(ref_id))
+        .map(|element| element.name.clone())
+        .unwrap_or_default()
+}
+
+/// Scroll a field into view and give it DOM focus before input events fire.
+/// Re-resolves by accessible name so a generation-bumped ref still finds its element.
+fn focus_field(
+    app: &crate::app::Lumen,
+    tab_id: &str,
+    x: i32,
+    y: i32,
+    name: &str,
+) -> Option<(i32, i32)> {
+    let (px, py) = if name.is_empty() {
+        (x, y)
+    } else {
+        live_coords_for_name(app, tab_id, &name.to_lowercase()).unwrap_or((x, y))
+    };
+    let script = format!(
+        r#"(() => {{
+            const el = document.elementFromPoint({px}, {py});
+            const field = (el && el.closest)
+                ? el.closest('input, textarea, select, [contenteditable]:not([contenteditable=false]), [role=textbox]')
+                : null;
+            if (!field) return null;
+            field.scrollIntoView({{ block: 'nearest', inline: 'nearest' }});
+            field.focus?.();
+            const r = field.getBoundingClientRect();
+            return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)];
+        }})()"#
+    );
+    evaluate_action(app, tab_id, &script)
+        .ok()
+        .and_then(|json| serde_json::from_str::<Option<(i32, i32)>>(&json).ok().flatten())
+}
+
+/// Dispatch a direct DOM click. SPAs with delegated synthetic handlers can
+/// swallow CDP mouse events even when the element is visually at the right point.
+fn dom_click(
+    app: &crate::app::Lumen,
+    tab: &str,
+    x: i32,
+    y: i32,
+    policy: &PolicyConfig,
+) -> Result<(), String> {
+    check_click_policy(app, tab, x, y, policy)?;
+    let script = format!(
+        r#"(function() {{
+            const el = document.elementFromPoint({x}, {y});
+            if (!el) return 'none';
+            const target = el.closest('a[href], button, [role=button], [role=link], [role=menuitem], input[type=submit], input[type=button]') || el;
+            target.focus?.();
+            target.click?.();
+            return 'ok';
+        }})()"#
+    );
+    match evaluate_action(app, tab, &script)?.as_str() {
+        "ok" => Ok(()),
+        "none" => Err("no clickable element at coordinates. use: see".into()),
+        _ => Err("DOM click failed. use: see".into()),
+    }
+}
+
 fn check_occlusion(
     app: &crate::app::Lumen,
     tab_id: &str,
     x: i32,
     y: i32,
-    _ref_id: &str,
+    ref_id: &str,
+    state_lock: &std::sync::Arc<std::sync::Mutex<super::plugin::AgentState>>,
 ) -> Result<(), String> {
+    let expected = ref_name(tab_id, ref_id, state_lock).to_lowercase();
     let script = format!(
-        "(function() {{ \
-            var el = document.elementFromPoint({x}, {y}); \
-            if (!el) return 'ok'; \
-            var b = el.closest('[role=\"banner\"], [role=\"alert\"], .cookie-banner, .toast'); \
-            if (b) return '!banner'; \
-            return 'ok'; \
-        }})()"
+        r#"(function() {{
+            const el = document.elementFromPoint({x}, {y});
+            if (!el) return 'ok';
+            if (el.closest('[role="banner"], [role="alert"], .cookie-banner, .toast')) return '!banner';
+            let overlay = false;
+            for (let p = el; p && p !== document.body; p = p.parentElement) {{
+                const style = getComputedStyle(p);
+                if ((style.position === 'sticky' || style.position === 'fixed')
+                    && (style.position === 'fixed' || parseInt(style.zIndex || '0', 10) > 0)) {{
+                    overlay = true;
+                    break;
+                }}
+            }}
+            if (!overlay) return 'ok';
+            const hit = el.closest('a[href], button, [role=button], [role=link], input, textarea, [contenteditable]') || el;
+            const actual = ((hit.getAttribute('aria-label') || hit.getAttribute('title') || hit.innerText || hit.value || '') + '').trim().toLowerCase();
+            if (!actual) return 'ok';
+            const wanted = {expected};
+            if (wanted && (actual.includes(wanted) || wanted.includes(actual))) return 'ok';
+            return '!overlay:' + actual;
+        }})()"#,
+        expected = serde_json::json!(expected)
     );
     let eval_rx = app.engine.evaluate(tab_id, &script);
     if let Ok(Ok(res)) = futures_lite::future::block_on(async { eval_rx.recv().await }) {
         if res == "!banner" {
-            return Err("ref covered by !banner. use: see".into());
+            return Err("ref covered by banner. use: see".into());
+        }
+        if let Some(label) = res.strip_prefix("!overlay:") {
+            return Err(format!("ref covered by sticky/fixed overlay \"{label}\". use: see"));
         }
     }
     Ok(())
@@ -2000,6 +2171,57 @@ mod tests {
             );
             assert!(error.len() <= 86, "{input}: {error}");
         }
+    }
+
+    #[test]
+    fn dom_click_parses_from_both_aliases() {
+        for (script, target) in [
+            ("clickjs b1", "b1"),
+            ("domclick b1", "b1"),
+            ("clickjs css=a[href^='/messaging/']", "css=a[href^='/messaging/']"),
+        ] {
+            let ops = parse_dsl(script).unwrap();
+            assert_eq!(
+                ops,
+                vec![ActionOp::DomClick {
+                    ref_id: target.into()
+                }],
+                "{script}"
+            );
+        }
+        assert!(parse_dsl("clickjs").is_err());
+    }
+
+    #[test]
+    fn diff_output_is_capped() {
+        let mut diff = crate::agent::refs::SnapshotDiff::default();
+        for index in 0..40 {
+            diff.removed.push(format!("l{index}"));
+        }
+        let output = compact_diff(&diff);
+        assert!(output.contains("…+16 more"), "{output}");
+        assert!(output.matches("-l").count() <= 24, "{output}");
+    }
+
+    #[test]
+    fn fill_failures_name_the_reason_and_ref() {
+        assert_eq!(
+            field_unavailable_error("no-field", "Write a message"),
+            "input field not focused or off-screen: Write a message. use: see"
+        );
+        assert_eq!(
+            field_unavailable_error("disabled", "Email"),
+            "input field disabled: Email. use: see"
+        );
+        assert_eq!(
+            field_unavailable_error("readonly", "Date"),
+            "input field read-only: Date. use: see"
+        );
+        assert_eq!(
+            field_unavailable_error("not-editable", "Send"),
+            "element not editable: Send. use: see"
+        );
+        assert!(field_unavailable_error("unknown", "").starts_with("field unavailable:"));
     }
 
     #[test]

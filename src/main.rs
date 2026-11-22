@@ -1,4 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+// Browser subsystems are gated with `#[cfg(not(test))]` so unit tests can run
+// without CEF; their helpers are only "unused" in the test configuration.
+#![cfg_attr(test, allow(dead_code))]
 
 mod app;
 pub(crate) mod agent;

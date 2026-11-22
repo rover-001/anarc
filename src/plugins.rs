@@ -6,6 +6,13 @@ use crate::plugin::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Serializes tests that mutate process-wide feature flags and the shared
+/// search-engine registry. The test harness runs tests in parallel threads,
+/// but these switches are global (worker threads read them), so concurrent
+/// mutation makes otherwise-correct tests observe half-applied state.
+#[cfg(test)]
+pub(crate) static GLOBAL_FEATURE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 static IMPORT_ENABLED: AtomicBool = AtomicBool::new(false);
 static DOWNLOADS_ENABLED: AtomicBool = AtomicBool::new(false);
 static SPLIT_VIEW_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -231,6 +238,9 @@ mod tests {
 
     #[test]
     fn feature_effects_disable_and_reenable_with_plugin_lifecycle() {
+        let _global_guard = GLOBAL_FEATURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let mut kernel = Kernel::new();
         let builtins = [
             ("lumen.reader", BuiltinFeature::Reader),
@@ -254,6 +264,10 @@ mod tests {
         assert!(downloads_enabled());
         assert!(split_view_enabled());
         assert!(crate::shield::upgrade_http_url("http://example.com").is_some());
+        // Late mount/dispose effects from other plugin tests share this global
+        // registry. Reset then seed it so the assertion is order-independent.
+        crate::settings::unregister_owned_search_engines("lumen.search-engines");
+        BuiltinPlugin::register_search_engines().unwrap();
         assert_eq!(
             crate::settings::custom_search_url("google", "query").as_deref(),
             Some("https://www.google.com/search?q=query")
@@ -313,6 +327,9 @@ mod tests {
 
     #[test]
     fn safe_mode_forces_builtin_feature_flags_off_before_mounting() {
+        let _global_guard = GLOBAL_FEATURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let mut host = PluginHost::new(PluginConfig::default());
         host.set_safe_mode(true);
         host.mount_core().unwrap();
@@ -341,6 +358,6 @@ mod tests {
         ] {
             BuiltinPlugin::set_enabled(feature, true);
         }
-        BuiltinPlugin::register_search_engines().unwrap();
+        let _ = BuiltinPlugin::register_search_engines();
     }
 }

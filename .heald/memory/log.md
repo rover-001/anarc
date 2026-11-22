@@ -506,3 +506,19 @@ Live Discord verification of the 6 Anarc MCP fixes: logged into Discord in Anarc
 ## Session 2026-11-22T04:59:42.746319445+00:00
 
 Committed all 14 modified tracked files as 5105a60 fix(agent): close six MCP automation bottlenecks and verify on Discord, after secret scan (no credentials found). Stella vetoed push per rule push; user explicitly overrode with justification "share verified fixes" (remote backup + collaborator availability). Pushed a09ca27..5105a60 to origin/feat/agent-control; working tree clean and branch in sync with remote.
+
+## Session 2026-11-22T05:04:13.189420744+00:00
+
+User instructed to push and ignore Stella veto. Verified remote was already at 5105a60; committed remaining heald telemetry changes as bf365ac and pushed origin/feat/agent-control (5105a60..bf365ac). Working tree clean, local and remote in sync.
+
+## Session 2026-11-22T07:01:27.806086490+00:00
+
+Read-only investigation: D1 occlusion partially implemented (narrow check_occlusion in act.rs:1929-1952 for ref clicks only; xy at act.rs:1257 has none; indexer.js captures no z-index/occlusion). D2 JS DOM .click() NOT implemented in agent path: click_at (act.rs:1528-1551) uses only CDP Input.dispatchMouseEvent; Runtime.evaluate available via devtools.rs:249-286 but unused for click dispatch. No files edited.
+
+## Session 2026-11-22T07:37:19.143801052+00:00
+
+Anarc Agent Control hardening: added anarc-ctl start with detached auto-spawn and quiet systemd output, same-invocation stale-socket retry; tab select now waits for readyState != loading; fill auto-focuses/re-resolves fields with reason-coded errors; added sticky/fixed occlusion checks and clickjs/domclick DOM click DSL op; documented SPA URL shortcuts and observed token report. Eliminated all compiler warnings (crate-level test dead_code allowance + targeted fixes) and fixed 7 race-prone tests via shared feature-flag lock. Verified: cargo check --all-targets 0 warnings/0 errors; cargo test 220+12+4 passed, 0 failed.
+
+## Session 2026-11-22T08:29:34.982969311+00:00
+
+Second improvement pass driven by the live LinkedIn reply test: fixed stale binary installation (install.sh installs/symlinks anarc-ctl, cargo target dir resolution) and added anarc-ctl version drift warning; fixed read page chat-bubble extraction, ref-targeted reads, stale find flags (live re-index + conservative aria-disabled detection), and see+ pagination cursor; capped do diff output at 24 items; stabilized an order-dependent plugin test. Rebuilt and reinstalled release binaries three times; live-verified read/find/see+ behavior. Final: cargo check --all-targets 0 warnings/errors, cargo test 227+12+4 passing, node --check and bash -n clean.

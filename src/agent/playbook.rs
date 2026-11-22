@@ -77,6 +77,8 @@ impl PlaybookRegistry {
         reg
     }
 
+    // Kept as the lookup hook for site-scoped playbooks loaded from playbooks.toml.
+    #[allow(dead_code)]
     pub fn find_site_config(&self, url: &str) -> Option<&AgentSiteConfig> {
         for site in &self.sites {
             for pattern in &site.r#match {
@@ -123,6 +125,9 @@ pub fn get_or_init_registry() -> PlaybookRegistry {
     loaded
 }
 
+// Recording entry points for the playbook recorder; `record_action` is already
+// wired into the DSL executor, these two bound a recording session.
+#[allow(dead_code)]
 pub fn start_recording(name: &str) {
     if let Ok(mut guard) = RECORDING_SESSION.lock() {
         *guard = Some((name.to_string(), Vec::new()));
@@ -137,6 +142,7 @@ pub fn record_action(op: &str) {
     }
 }
 
+#[allow(dead_code)]
 pub fn stop_recording() -> Option<PlaybookMacro> {
     let session = if let Ok(mut guard) = RECORDING_SESSION.lock() {
         guard.take()

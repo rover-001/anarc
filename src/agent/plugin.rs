@@ -1,5 +1,6 @@
 use super::observe::{
-    build_read_call_script, build_see_call_script, execute_find, format_see_output,
+    build_read_call_script, build_read_ref_call_script, build_see_call_script, execute_find,
+    format_see_output, format_see_output_paged,
 };
 use super::protocol::{AgentRequest, AgentResponse};
 use super::refs::{RawIndex, RefRegistry};
@@ -399,6 +400,7 @@ pub(crate) fn handle_agent_request(
             let target_tab = tab_id.unwrap_or_default();
 
             let script = build_see_call_script(scope.as_deref().unwrap_or("view"));
+            let is_plus = scope.as_deref() == Some("+");
             let eval_rx = app.engine.evaluate(&target_tab, &script);
             let state_arc = agent_state.clone();
             let tab_id_str = target_tab.clone();
@@ -442,7 +444,20 @@ pub(crate) fn handle_agent_request(
 
                     let registry = guard.registries.entry(tab_id_str).or_default();
                     let (header, elements, _, _) = registry.update_from_raw(raw_index);
-                    let mut formatted = format_see_output(&header, &elements, Some(&tabs));
+                    let mut formatted = if is_plus {
+                        let (text, next, exhausted) = format_see_output_paged(
+                            &header,
+                            &elements,
+                            Some(&tabs),
+                            registry.see_plus_offset,
+                        );
+                        // Page through the full index; wrap after the final page.
+                        registry.see_plus_offset = if exhausted { 0 } else { next };
+                        text
+                    } else {
+                        registry.see_plus_offset = 0;
+                        format_see_output(&header, &elements, Some(&tabs))
+                    };
 
                     if let Some(reason) = super::policy::check_human_handoff(
                         &header.title,
@@ -469,7 +484,41 @@ pub(crate) fn handle_agent_request(
                 mode.as_deref().unwrap_or("text")
             };
             let max_chars = max.unwrap_or(4000);
-            let script = build_read_call_script(m, max_chars);
+
+            // A non-"last" target is a ref (or `css=` selector). Resolve it
+            // against a freshly indexed DOM so reads follow the actual element
+            // instead of falling through to article/feed extraction.
+            let mut ref_spec: Option<(String, i32, i32)> = None;
+            if let Some(raw) = target.as_deref().filter(|t| *t != "last") {
+                if let Some(selector) = raw.strip_prefix("css=") {
+                    ref_spec = Some((selector.to_string(), 0, 0));
+                } else {
+                    let see_script = build_see_call_script("all");
+                    if let Ok(Ok(raw_json)) =
+                        app.engine.evaluate(&target_tab, &see_script).recv_blocking()
+                        && let Ok(raw_index) = serde_json::from_str::<RawIndex>(&raw_json)
+                        && let Ok(mut guard) = agent_state.lock()
+                    {
+                        guard
+                            .registries
+                            .entry(target_tab.clone())
+                            .or_default()
+                            .update_from_raw(raw_index);
+                    }
+                    if let Ok(guard) = agent_state.lock()
+                        && let Some(registry) = guard.registries.get(&target_tab)
+                        && let Some(el) = registry.resolve_ref_with_fallback(raw)
+                    {
+                        ref_spec = Some((el.dom_path().to_string(), el.center.0, el.center.1));
+                    }
+                }
+            }
+
+            let script = if let Some((path, x, y)) = ref_spec {
+                build_read_ref_call_script(&path, m, max_chars, x, y)
+            } else {
+                build_read_call_script(m, max_chars)
+            };
             let eval_rx = app.engine.evaluate(&target_tab, &script);
 
             std::thread::Builder::new()
@@ -495,25 +544,20 @@ pub(crate) fn handle_agent_request(
         AgentRequest::Find { tab_id, query } => {
             let target_tab = tab_id.unwrap_or_default();
 
-            // A freshly woken tab has a CEF browser but no ref registry yet, so
-            // `find` used to fail with "index missing" until the caller ran
-            // `see` first. Hydrate it from the same index the `see` arm uses.
-            let needs_index = agent_state
-                .lock()
-                .map(|guard| !guard.registries.contains_key(&target_tab))
-                .unwrap_or(false);
-            if needs_index {
-                let script = build_see_call_script("view");
-                if let Ok(Ok(raw_json)) = app.engine.evaluate(&target_tab, &script).recv_blocking()
-                    && let Ok(raw_index) = serde_json::from_str::<RawIndex>(&raw_json)
-                    && let Ok(mut guard) = agent_state.lock()
-                {
-                    guard
-                        .registries
-                        .entry(target_tab.clone())
-                        .or_default()
-                        .update_from_raw(raw_index);
-                }
+            // Always re-index against the LIVE DOM. Typing, async renders and
+            // SPA swaps mutate flags/names (e.g. a Send button becoming
+            // enabled); searching a stale registry returned old refs/flags.
+            // This also hydrates a freshly woken tab with no registry yet.
+            let script = build_see_call_script("view");
+            if let Ok(Ok(raw_json)) = app.engine.evaluate(&target_tab, &script).recv_blocking()
+                && let Ok(raw_index) = serde_json::from_str::<RawIndex>(&raw_json)
+                && let Ok(mut guard) = agent_state.lock()
+            {
+                guard
+                    .registries
+                    .entry(target_tab.clone())
+                    .or_default()
+                    .update_from_raw(raw_index);
             }
 
             let guard = match agent_state.lock() {

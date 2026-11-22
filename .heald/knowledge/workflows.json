@@ -3064,5 +3064,42 @@
     "symbols": [],
     "guidance": "Committed all 14 modified tracked files as 5105a60 fix(agent): close six MCP automation bottlenecks and verify on Discord, after secret scan (no credentials found). Stella vetoed push per rule push; user explicitly overrode with justification \"share verified fixes\" (remote backup + collaborator availability). Pushed a09ca27..5105a60 to origin/feat/agent-control; working tree clean and branch in sync with remote.",
     "updated_at": "2026-11-22T04:59:42.753132927+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/agent/act.rs",
+      "src/agent/observe.rs",
+      "src/agent/playbook.rs",
+      "src/agent/refs.rs",
+      "src/app/tests.rs",
+      "src/bin/anarc_ctl.rs",
+      "src/main.rs",
+      "src/paths.rs",
+      "src/plugins.rs",
+      "src/shield.rs"
+    ],
+    "symbols": [],
+    "guidance": "Anarc Agent Control hardening: added anarc-ctl start with detached auto-spawn and quiet systemd output, same-invocation stale-socket retry; tab select now waits for readyState != loading; fill auto-focuses/re-resolves fields with reason-coded errors; added sticky/fixed occlusion checks and clickjs/domclick DOM click DSL op; documented SPA URL shortcuts and observed token report. Eliminated all compiler warnings (crate-level test dead_code allowance + targeted fixes) and fixed 7 race-prone tests via shared feature-flag lock. Verified: cargo check --all-targets 0 warnings/0 errors; cargo test 220+12+4 passed, 0 failed.",
+    "updated_at": "2026-11-22T07:37:19.155619309+00:00"
+  },
+  {
+    "feature": "Core Application Logic",
+    "files": [
+      "src/agent/act.rs",
+      "src/agent/observe.rs",
+      "src/agent/playbook.rs",
+      "src/agent/plugin.rs",
+      "src/agent/refs.rs",
+      "src/app/tests.rs",
+      "src/bin/anarc_ctl.rs",
+      "src/main.rs",
+      "src/paths.rs",
+      "src/plugins.rs",
+      "src/shield.rs"
+    ],
+    "symbols": [],
+    "guidance": "Second improvement pass driven by the live LinkedIn reply test: fixed stale binary installation (install.sh installs/symlinks anarc-ctl, cargo target dir resolution) and added anarc-ctl version drift warning; fixed read page chat-bubble extraction, ref-targeted reads, stale find flags (live re-index + conservative aria-disabled detection), and see+ pagination cursor; capped do diff output at 24 items; stabilized an order-dependent plugin test. Rebuilt and reinstalled release binaries three times; live-verified read/find/see+ behavior. Final: cargo check --all-targets 0 warnings/errors, cargo test 227+12+4 passing, node --check and bash -n clean.",
+    "updated_at": "2026-11-22T08:29:34.995370188+00:00"
   }
 ]
