@@ -53,6 +53,7 @@ struct EngineEvents {
     plugin_events: Vec<(String, String)>,
     close_requests: Vec<String>,
     live_share_space_request: Option<LiveShareSpaceRequest>,
+    live_share_switch_space: Option<String>,
 }
 
 fn origin_favicon_url(page_url: &str) -> Option<String> {
@@ -451,8 +452,7 @@ pub fn frame_rate_for_refresh(refresh_interval: Option<std::time::Duration>) -> 
         .and_then(|value| value.trim().parse::<i32>().ok())
         .unwrap_or(default_headroom_percent)
         .clamp(0, 100);
-    let requested = refresh_rate
-        + (refresh_rate * headroom_percent + 99) / 100;
+    let requested = refresh_rate + (refresh_rate * headroom_percent + 99) / 100;
     requested.min(osr_frame_rate_cap())
 }
 
@@ -597,7 +597,7 @@ cef::wrap_app! {
                 command_line.append_switch_with_value(Some(&name), Some(&value));
                 let name = CefString::from("disable-features");
                 let value = CefString::from(
-                    "Translate,MediaRouter,OptimizationHints,AutofillServerCommunication,InterestFeedContentSuggestions",
+                    "Translate,MediaRouter,OptimizationHints,AutofillServerCommunication,InterestFeedContentSuggestions,BlockInsecurePrivateNetworkRequests",
                 );
                 command_line.append_switch_with_value(
                     Some(&name),
@@ -613,6 +613,7 @@ cef::wrap_app! {
 
 #[derive(Default)]
 pub struct BrowserSharedState {
+    pub space_id: String,
     pub width: i32,
     pub height: i32,
     pub initial_url: String,
@@ -654,6 +655,7 @@ pub struct BrowserSharedState {
 /// own size and zoom level; windows the page opened itself (OAuth popups) keep
 /// the default zoom.
 pub(super) fn new_shared_state(
+    space_id: &str,
     width: i32,
     height: i32,
     url: &str,
@@ -662,6 +664,7 @@ pub(super) fn new_shared_state(
     let initial_host = crate::shield::url_host(url);
     let initial_favicon = initial_host.as_deref().and_then(load_favicon_from_disk);
     BrowserSharedState {
+        space_id: space_id.to_string(),
         width: width.max(1),
         height: height.max(1),
         initial_url: url.to_string(),
@@ -722,6 +725,7 @@ fn median_edge_color_bgra(pixels: &[u8], width: usize, height: usize) -> Option<
 }
 
 mod callbacks;
+pub mod devtools;
 use callbacks::{
     HttpsFirstState, LumenClient, LumenContextMenuHandler, LumenDialogHandler, LumenDisplayHandler,
     LumenDownloadHandler, LumenLifeSpanHandler, LumenLoadHandler, LumenPermissionHandler,
@@ -731,6 +735,7 @@ use callbacks::{
 pub struct BrowserEntry {
     pub browser: Browser,
     pub state: Arc<Mutex<BrowserSharedState>>,
+    pub space_id: String,
 }
 
 pub struct Engine {
@@ -760,6 +765,12 @@ pub struct Engine {
     /// Names the browsers CEF creates for page popups so their ids stay unique
     /// without the app having to know about them ahead of time.
     popup_serial: Arc<std::sync::atomic::AtomicU64>,
+    devtools: Mutex<devtools::DevToolsManager>,
+    agent_state: Arc<Mutex<crate::agent::plugin::AgentState>>,
+    agent_receiver: async_channel::Receiver<(
+        crate::agent::protocol::AgentRequest,
+        async_channel::Sender<crate::agent::protocol::AgentResponse>,
+    )>,
 }
 
 fn resize_should_send(
@@ -813,6 +824,11 @@ pub fn windows_key_code_for_key(key: &str) -> i32 {
         "down" | "arrowdown" => 0x28,
         "insert" => 0x2d,
         "delete" => 0x2e,
+        // Modifier keys
+        "shift" | "shiftleft" | "shiftright" => 0x10,
+        "control" | "ctrl" | "controlleft" | "controlright" => 0x11,
+        "alt" | "altleft" | "altright" => 0x12,
+        "cmd" | "meta" | "super" | "win" => 0x5b,
         // Punctuation and symbols - Windows OEM Virtual Key Codes
         ";" | ":" => 0xba,
         "=" | "+" => 0xbb,
@@ -963,6 +979,13 @@ fn native_key_code(key: &str, fallback: i32) -> i32 {
             "end" => x11::keysym::XK_End,
             "delete" => x11::keysym::XK_Delete,
             "insert" => x11::keysym::XK_Insert,
+            "shift" | "shiftleft" => x11::keysym::XK_Shift_L,
+            "shiftright" => x11::keysym::XK_Shift_R,
+            "control" | "ctrl" | "controlleft" => x11::keysym::XK_Control_L,
+            "controlright" => x11::keysym::XK_Control_R,
+            "alt" | "altleft" => x11::keysym::XK_Alt_L,
+            "altright" => x11::keysym::XK_Alt_R,
+            "cmd" | "meta" | "super" | "win" => x11::keysym::XK_Super_L,
             value if value.len() == 1 => value.as_bytes()[0] as u32,
             _ => 0,
         };
@@ -1091,6 +1114,7 @@ mod tests {
     fn forgetting_a_page_closed_browser_waits_for_pending_creation_instead_of_double_closing() {
         let mut engine = Engine::new();
         let state = Arc::new(Mutex::new(new_shared_state(
+            "test-space",
             10,
             10,
             "https://example.com",

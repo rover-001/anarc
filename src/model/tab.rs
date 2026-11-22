@@ -12,6 +12,7 @@ pub struct Tab {
     pub pinned_title: Option<String>,
     #[serde(default)]
     pub favicon_path: Option<String>,
+    #[serde(default)]
     pub pinned: bool,
     /// Favorite tabs live in the Arc-style grid at the top of the sidebar.
     #[serde(default)]
@@ -19,8 +20,11 @@ pub struct Tab {
     /// Folder that owns this tab in the sidebar, if any.
     #[serde(default)]
     pub folder: Option<String>,
+    #[serde(default)]
     pub last_active: u64,
+    #[serde(default)]
     pub scroll_y: f64,
+    #[serde(default)]
     pub state: TabState,
 }
 

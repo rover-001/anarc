@@ -209,10 +209,12 @@ pub(crate) fn render(
 ) -> gpui_kit::AnyElement {
     let mut sorted_rows = rows.to_vec();
     sorted_rows.sort_by_key(|row| {
-        if row.descriptor.kind == crate::plugin::PluginKind::Core {
+        if row.descriptor.id == "com.anarc.live-share" {
             0
-        } else {
+        } else if row.descriptor.kind == crate::plugin::PluginKind::Core {
             1
+        } else {
+            2
         }
     });
     let mut list = div().w_full().flex().flex_col().gap_2();
@@ -404,6 +406,19 @@ fn plugin_row(
                                             row.descriptor.name.clone()
                                         }),
                                 )
+                                .when(row.descriptor.id == "com.anarc.live-share", |d| {
+                                    d.child(
+                                        div()
+                                            .px_1p5()
+                                            .py_0p5()
+                                            .rounded_sm()
+                                            .bg(rgb(theme.accent))
+                                            .text_color(rgb(theme.base))
+                                            .text_xs()
+                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                            .child("Top Recommended"),
+                                    )
+                                })
                                 .child(
                                     div()
                                         .text_xs()

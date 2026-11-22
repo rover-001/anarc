@@ -23,10 +23,23 @@ pub fn spaces_path() -> PathBuf {
     crate::paths::config_dir().join("spaces.json")
 }
 
+pub fn spaces_mtime() -> Option<std::time::SystemTime> {
+    let path = spaces_path();
+    fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
 pub fn load_state() -> Option<AppState> {
     let path = spaces_path();
-    let data = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&data).ok()
+    let data = fs::read_to_string(&path).ok()?;
+    match serde_json::from_str(&data) {
+        Ok(state) => Some(state),
+        Err(err) => {
+            eprintln!("[Persistence] Failed to parse {}: {}", path.display(), err);
+            let bak = path.with_extension("json.bak");
+            let _ = fs::write(bak, &data);
+            None
+        }
+    }
 }
 
 pub fn save_state(

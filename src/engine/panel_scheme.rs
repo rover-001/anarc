@@ -1,5 +1,7 @@
 use super::*;
 use crate::plugin::{PanelRegistryHandle, PanelRequest, PanelResponse};
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::ptr;
 
 pub(super) type PanelRegistry = PanelRegistryHandle;
@@ -50,7 +52,11 @@ pub(super) fn run_live_share_script(frame: &Frame, body: &str) {
 }
 
 pub(super) fn register_panel_scheme(registrar: &mut SchemeRegistrar) {
-    let options = (SchemeOptions::STANDARD.get_raw() | SchemeOptions::SECURE.get_raw()) as i32;
+    let options = (SchemeOptions::STANDARD.get_raw()
+        | SchemeOptions::LOCAL.get_raw()
+        | SchemeOptions::SECURE.get_raw()
+        | SchemeOptions::CORS_ENABLED.get_raw()
+        | SchemeOptions::FETCH_ENABLED.get_raw()) as i32;
     let anarc_name = CefString::from("anarc-plugin");
     let _ = registrar.add_custom_scheme(Some(&anarc_name), options);
     let lumen_name = CefString::from("lumen-plugin");
@@ -88,6 +94,33 @@ cef::wrap_scheme_handler_factory! {
             let url = CefStringUtf16::from(&request.url()).to_string();
             let method = CefStringUtf16::from(&request.method()).to_string();
             let parsed = PanelRequest::parse(&url);
+            if let Ok(p) = &parsed {
+                if p.plugin_id == "com.anarc.live-share" {
+                    crate::app::ensure_live_share_daemon_running();
+                }
+            }
+            if url.contains("__anarc_start_service") {
+                crate::app::ensure_live_share_daemon_running();
+                let resp = PanelResponse {
+                    status: 200,
+                    mime_type: "application/json".into(),
+                    body: b"{\"ok\":true}".to_vec(),
+                    headers: vec![
+                        ("Access-Control-Allow-Origin".into(), "*".into()),
+                        ("Content-Type".into(), "application/json".into()),
+                    ],
+                };
+                return Some(PanelResourceHandler::new(Arc::new(resp), Arc::new(Mutex::new(0))));
+            }
+            // Reverse-proxy: anarc-plugin://com.anarc.live-share/api-proxy/<path>
+            // → http://127.0.0.1:7433/<path>  (same-process, no browser CORS)
+            const PROXY_PREFIX: &str = "anarc-plugin://com.anarc.live-share/api-proxy";
+            if url.starts_with(PROXY_PREFIX) {
+                let daemon_path = &url[PROXY_PREFIX.len()..];
+                let daemon_path = if daemon_path.is_empty() { "/" } else { daemon_path };
+                let resp = live_share_proxy_request(&method, daemon_path, request);
+                return Some(PanelResourceHandler::new(Arc::new(resp), Arc::new(Mutex::new(0))));
+            }
             let package = parsed.as_ref().ok().and_then(|parsed| {
                 self.registry
                     .lock()
@@ -185,6 +218,109 @@ cef::wrap_resource_handler! {
     }
 }
 
+/// Synchronous TCP proxy: forward an HTTP request to the Live Share daemon at
+/// 127.0.0.1:7433 and return the response as a PanelResponse.  Because this
+/// runs on the CEF IO thread the call must complete quickly; the daemon is
+/// local so the round-trip is negligible.
+fn live_share_proxy_request(method: &str, path: &str, request: &mut cef::Request) -> PanelResponse {
+    let error_resp = |msg: &str| PanelResponse {
+        status: 502,
+        mime_type: "application/json; charset=utf-8".into(),
+        body: format!("{{\"error\":\"{msg}\"}}").into_bytes(),
+        headers: vec![
+            ("Access-Control-Allow-Origin".into(), "*".into()),
+            ("Content-Type".into(), "application/json".into()),
+        ],
+    };
+
+    // Read POST body bytes from CEF post data
+    let body_bytes: Vec<u8> = {
+        let mut bytes = Vec::new();
+        if let Some(post_data) = request.post_data() {
+            let count = post_data.element_count();
+            if count > 0 {
+                let mut elements: Vec<Option<cef::PostDataElement>> = Vec::new();
+                post_data.elements(Some(&mut elements));
+                for elem in elements.into_iter().flatten() {
+                    if elem.get_type() == cef::PostdataelementType::BYTES {
+                        let size = elem.bytes_count();
+                        if size > 0 {
+                            let mut buf = vec![0u8; size];
+                            elem.bytes(size, buf.as_mut_ptr());
+                            bytes.extend_from_slice(&buf);
+                        }
+                    }
+                }
+            }
+        }
+        bytes
+    };
+
+    let Ok(mut stream) = TcpStream::connect("127.0.0.1:7433") else {
+        return error_resp("daemon not reachable");
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
+
+    let http_req = if body_bytes.is_empty() {
+        format!(
+            "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1:7433\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+        )
+    } else {
+        format!(
+            "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1:7433\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body_bytes.len()
+        )
+    };
+
+    if stream.write_all(http_req.as_bytes()).is_err()
+        || (!body_bytes.is_empty() && stream.write_all(&body_bytes).is_err())
+    {
+        return error_resp("write failed");
+    }
+
+    let mut raw = Vec::new();
+    if stream.read_to_end(&mut raw).is_err() && raw.is_empty() {
+        return error_resp("read failed");
+    }
+
+    // Parse HTTP response: split at \r\n\r\n
+    if let Some(header_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+        let header_part = std::str::from_utf8(&raw[..header_end]).unwrap_or("");
+        let body = raw[header_end + 4..].to_vec();
+
+        let mut lines = header_part.lines();
+        let status_line = lines.next().unwrap_or("HTTP/1.0 200 OK");
+        let status: u16 = status_line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(200);
+
+        let mut mime_type = "application/json; charset=utf-8".to_string();
+        for line in lines {
+            if let Some(val) = line.strip_prefix("Content-Type:").or_else(|| line.strip_prefix("content-type:")) {
+                mime_type = val.trim().to_string();
+            }
+        }
+
+        PanelResponse {
+            status,
+            mime_type,
+            body,
+            headers: vec![("Access-Control-Allow-Origin".into(), "*".into())],
+        }
+    } else {
+        // No header separator — treat entire response as body
+        PanelResponse {
+            status: 200,
+            mime_type: "application/json; charset=utf-8".into(),
+            body: raw,
+            headers: vec![("Access-Control-Allow-Origin".into(), "*".into())],
+        }
+    }
+}
+
 fn blocked_panel_response() -> PanelResponse {
     PanelResponse {
         status: 404,
@@ -215,7 +351,7 @@ pub(super) fn allowed_panel_network_request(
     if let Ok(target) = PanelRequest::parse(target_url) {
         return target.plugin_id == source.plugin_id;
     }
-    let Some(host) = https_host(target_url) else {
+    let Some(host) = network_target_host(target_url) else {
         return false;
     };
     registry
@@ -225,19 +361,42 @@ pub(super) fn allowed_panel_network_request(
         .is_some_and(|package| package.allows_host(host))
 }
 
-fn https_host(url: &str) -> Option<&str> {
-    let rest = url.strip_prefix("https://")?;
-    let authority = rest.split(['/', '?', '#']).next()?;
-    if authority.is_empty() || authority.contains(['@', '%']) {
-        return None;
+fn network_target_host(url: &str) -> Option<&str> {
+    if let Some(rest) = url.strip_prefix("https://") {
+        let authority = rest.split(['/', '?', '#']).next()?;
+        if authority.is_empty() || authority.contains(['@', '%']) {
+            return None;
+        }
+        let (host, port) = authority
+            .split_once(':')
+            .map_or((authority, None), |(host, port)| (host, Some(port)));
+        if port.is_some_and(|port| port != "443") || host.contains(']') || host.contains('[') {
+            return None;
+        }
+        return (!host.is_empty()).then_some(host);
     }
-    let (host, port) = authority
-        .split_once(':')
-        .map_or((authority, None), |(host, port)| (host, Some(port)));
-    if port.is_some_and(|port| port != "443") || host.contains(']') || host.contains('[') {
-        return None;
+    if let Some(rest) = url.strip_prefix("http://") {
+        let authority = rest.split(['/', '?', '#']).next()?;
+        if authority.is_empty() || authority.contains(['@', '%']) {
+            return None;
+        }
+        let (host, _port) = authority
+            .split_once(':')
+            .map_or((authority, None), |(host, port)| (host, Some(port)));
+        if host == "127.0.0.1" || host == "localhost" {
+            return Some(host);
+        }
     }
-    (!host.is_empty()).then_some(host)
+    if let Some(rest) = url.strip_prefix("ws://") {
+        let authority = rest.split(['/', '?', '#']).next()?;
+        let (host, _port) = authority
+            .split_once(':')
+            .map_or((authority, None), |(host, port)| (host, Some(port)));
+        if host == "127.0.0.1" || host == "localhost" {
+            return Some(host);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -308,6 +467,19 @@ mod tests {
             source,
             "lumen-plugin://other/index.html",
             &registry
+        ));
+        let live_pkg = PanelPackage::new("live", &root, ["127.0.0.1".to_owned()]).unwrap();
+        let live_reg = Arc::new(Mutex::new(HashMap::from([("live".to_owned(), live_pkg)])));
+        let live_source = "anarc-plugin://live/index.html";
+        assert!(allowed_panel_network_request(
+            live_source,
+            "http://127.0.0.1:7433/api/share",
+            &live_reg
+        ));
+        assert!(allowed_panel_network_request(
+            live_source,
+            "ws://127.0.0.1:7433/ws",
+            &live_reg
         ));
         std::fs::remove_dir_all(root).unwrap();
     }

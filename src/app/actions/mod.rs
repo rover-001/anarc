@@ -227,6 +227,21 @@ impl Lumen {
                     let text = this.address.read(cx).value().to_string();
                     this.update_suggestions(&text);
                     this.selected_suggestion = None;
+                    let space = this.active_space();
+                    let peer_ips = if !space.peer_ips.is_empty() {
+                        &space.peer_ips
+                    } else {
+                        this.spaces()
+                            .iter()
+                            .find_map(|s| (!s.peer_ips.is_empty()).then_some(&s.peer_ips))
+                            .unwrap_or(&space.peer_ips)
+                    };
+                    if !peer_ips.is_empty() {
+                        crate::app::live_cursor::set_local_typing_text(
+                            if text.is_empty() { None } else { Some(text) },
+                            peer_ips,
+                        );
+                    }
                     cx.notify();
                 }
                 _ => {}
@@ -242,6 +257,7 @@ impl Lumen {
         let mut engine = crate::engine::Engine::new();
         engine.set_panel_registry(panel_registry.clone());
         engine.set_ad_blocker_enabled(preferences.ad_blocker_enabled);
+        crate::app::live_cursor::init_live_cursors(engine.ui_update_wake());
         if let Some(url) = initial_http_first
             && let Some(tab_id) = spaces
                 .iter()
@@ -251,7 +267,7 @@ impl Lumen {
             engine.navigate_http_first(tab_id, &url);
         }
 
-        let app = Self {
+        let mut app = Self {
             spaces,
             active_space,
             sidebar_collapsed,
@@ -324,6 +340,15 @@ impl Lumen {
             plugins_menu_open: false,
             dismissed_download_toast_id: None,
             settings_section: SettingsSection::default(),
+            last_spaces_mtime: std::sync::atomic::AtomicU64::new(
+                crate::persist::spaces_mtime()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+            ),
+            last_shared_cookies_mtime: std::sync::atomic::AtomicU64::new(0),
+            last_cookie_sync: std::time::Instant::now(),
+            pending_auth_recovery: std::collections::HashMap::new(),
             preferences,
             plugins,
             panel_registry,
@@ -339,6 +364,8 @@ impl Lumen {
         );
         let initial_theme = crate::ui::visual::theme_for_space(app.active_space());
         crate::ui::visual::update_theme_caret(initial_theme, cx);
+        ensure_live_share_daemon_running();
+        app.focus_browser(window, cx);
         app
     }
     pub(crate) fn close_app_page(&mut self) {
@@ -500,18 +527,49 @@ impl Lumen {
             ));
         }
     }
-    pub(in crate::app) fn active_tab_id(&self) -> &str {
+    pub(crate) fn active_tab_id(&self) -> &str {
         self.active_space().active.as_deref().unwrap_or_default()
     }
-    pub(in crate::app) fn save_state(&self) {
+    pub(crate) fn process_agent_requests(&mut self) {
+        let requests = self.engine.take_agent_requests();
+        for (req, resp_tx) in requests {
+            crate::agent::plugin::handle_agent_request(self, req, resp_tx);
+        }
+    }
+    pub(crate) fn save_state(&self) {
         #[cfg(not(test))]
-        persist::save_state(
-            &self.spaces,
-            &self.active_space,
-            self.sidebar_width
-                .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
-            self.sidebar_collapsed,
-        );
+        {
+            let mut spaces_to_save = self.spaces.clone();
+            if let Some(loaded) = persist::load_state() {
+                for s in &mut spaces_to_save {
+                    if let Some(ext) = loaded.spaces.iter().find(|e| e.id == s.id) {
+                        if s.peer_ips.is_empty() && !ext.peer_ips.is_empty() {
+                            s.peer_ips = ext.peer_ips.clone();
+                        }
+                    }
+                }
+                for ext in loaded.spaces {
+                    if (ext.name.starts_with("[Shared]") || ext.id.starts_with("shared-"))
+                        && !spaces_to_save.iter().any(|s| s.id == ext.id)
+                    {
+                        spaces_to_save.push(ext);
+                    }
+                }
+            }
+            persist::save_state(
+                &spaces_to_save,
+                &self.active_space,
+                self.sidebar_width
+                    .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
+                self.sidebar_collapsed,
+            );
+            if let Some(mtime) = persist::spaces_mtime()
+                && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
+            {
+                self.last_spaces_mtime
+                    .store(d.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
         #[cfg(test)]
         let _ = self;
     }
@@ -520,6 +578,9 @@ impl Lumen {
         self.peek_focused = false;
         self.show_suggestions = false;
         self.selected_suggestion = None;
+        // A stale edit flag would route the next Return to address navigation
+        // even after GPUI focus moved into the CEF canvas.
+        self.address_editing = false;
         self.close_app_page();
         self.plugins_menu_open = false;
         self.tab_context_menu = None;
@@ -612,10 +673,78 @@ impl Lumen {
             self.save_state();
         }
     }
-    pub(in crate::app) fn active_space_mut(&mut self) -> &mut Space {
+    pub(crate) fn active_space_mut(&mut self) -> &mut Space {
         self.spaces
             .iter_mut()
             .find(|space| space.id == self.active_space)
             .expect("active space must exist")
+    }
+}
+
+pub(crate) fn ensure_live_share_daemon_running() {
+    #[cfg(not(test))]
+    {
+        if let Ok(addr) = "127.0.0.1:7433".parse::<std::net::SocketAddr>()
+            && std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50))
+                .is_ok()
+        {
+            return;
+        }
+        let exe = std::env::current_exe().ok();
+        let exe_dir = exe.as_ref().and_then(|p| p.parent());
+        let candidates = [
+            Some(crate::paths::data_dir().join("plugins/com.anarc.live-share/daemon.py")),
+            Some(crate::paths::data_dir().join("plugins/live-share/daemon.py")),
+            Some(std::path::PathBuf::from("plugins/live-share/daemon.py")),
+            exe_dir.map(|p| p.join("plugins/live-share/daemon.py")),
+            exe_dir
+                .and_then(|p| p.parent())
+                .map(|p| p.join("plugins/live-share/daemon.py")),
+            exe_dir
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+                .map(|p| p.join("plugins/live-share/daemon.py")),
+            exe_dir
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+                .map(|p| p.join("plugins/live-share/daemon.py")),
+            Some(std::path::PathBuf::from(
+                "/home/rover/Projects/kreon/anarc/plugins/live-share/daemon.py",
+            )),
+        ];
+        for path in candidates.into_iter().flatten() {
+            if path.is_file() {
+                let python_execs = if cfg!(windows) {
+                    &["pythonw", "python", "python3"][..]
+                } else {
+                    &["python3", "python"][..]
+                };
+                for &py in python_execs {
+                    let mut cmd = std::process::Command::new(py);
+                    cmd.arg(&path)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null());
+                    if let Some(parent) = path.parent() {
+                        cmd.current_dir(parent);
+                    }
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                    }
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::process::CommandExt;
+                        cmd.process_group(0);
+                    }
+                    if cmd.spawn().is_ok() {
+                        return;
+                    }
+                }
+                break;
+            }
+        }
     }
 }

@@ -1091,6 +1091,7 @@ impl Lumen {
                     .child(Icon::new(icon).size(px(15.0 * UI_SCALE)))
             };
 
+            let inner_radius = (CARD_RADIUS - 1.0).max(0.0);
             let card = div()
                 .id("peek-overlay")
                 .occlude()
@@ -1103,6 +1104,7 @@ impl Lumen {
                 .bg(rgb(theme.surface))
                 .border_1()
                 .border_color(rgb(theme.border))
+                .shadow_2xl()
                 .overflow_hidden()
                 .flex()
                 .flex_col()
@@ -1121,6 +1123,7 @@ impl Lumen {
                         .gap_2()
                         .px(px(10.0 * UI_SCALE))
                         .bg(rgb(theme.surface))
+                        .rounded_t(px(inner_radius))
                         .border_b_1()
                         .border_color(rgb(theme.border))
                         .child(favicon_element)
@@ -1167,6 +1170,7 @@ impl Lumen {
                         .id("peek-viewport")
                         .flex_1()
                         .relative()
+                        .rounded_b(px(inner_radius))
                         .overflow_hidden()
                         .child(
                             AnyView::from(self.peek_web_viewport.clone())
@@ -1215,6 +1219,21 @@ impl Lumen {
                 } else {
                     this.close_active_tab();
                 }
+                window.prevent_default();
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+            if !event.is_held
+                && browser_modifier
+                && !modifiers.shift
+                && key == "t"
+            {
+                this.add_tab();
+                this.address.update(cx, |input, cx| {
+                    input.set_value("", window, cx);
+                    input.focus(window, cx);
+                });
                 window.prevent_default();
                 cx.stop_propagation();
                 cx.notify();

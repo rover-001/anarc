@@ -43,15 +43,15 @@ pub(in crate::app) fn peek_layout(
     };
     let card_x = (window_width - right_inset - card_w).max(0.0);
     let card_y = topbar_height + PEEK_MARGIN;
-    let viewport_w = card_w.max(1.0) as i32;
-    let viewport_h = (card_h - PEEK_HEADER_HEIGHT).max(1.0) as i32;
+    let viewport_w = (card_w - 2.0).max(1.0) as i32;
+    let viewport_h = (card_h - PEEK_HEADER_HEIGHT - 2.0).max(1.0) as i32;
     PeekLayout {
         card_x,
         card_y,
         card_w,
         card_h,
-        viewport_x: card_x,
-        viewport_y: card_y + PEEK_HEADER_HEIGHT,
+        viewport_x: card_x + 1.0,
+        viewport_y: card_y + PEEK_HEADER_HEIGHT + 1.0,
         viewport_w,
         viewport_h,
     }
@@ -149,6 +149,7 @@ impl Lumen {
         self.peek_focused = true;
         self.show_suggestions = false;
         self.selected_suggestion = None;
+        self.address_editing = false;
         self.close_app_page();
         self.plugins_menu_open = false;
         self.tab_context_menu = None;
