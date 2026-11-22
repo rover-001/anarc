@@ -479,6 +479,7 @@ impl Lumen {
         &mut self,
         window: &Window,
         split_divider: bool,
+        freeze: bool,
     ) {
         let pair = self.current_split_pair();
         let bounds = window.bounds();
@@ -526,7 +527,11 @@ impl Lumen {
                 )
             })
             .collect();
-        self.resize_drag.start(sizes.clone(), edge_colors);
+        if freeze {
+            self.resize_drag.start_frozen(sizes.clone(), edge_colors);
+        } else {
+            self.resize_drag.start(sizes.clone(), edge_colors);
+        }
         for size in sizes {
             resize_debug(format_args!(
                 "drag_start kind={} tab={} size={}x{}",

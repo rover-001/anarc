@@ -38,7 +38,7 @@ impl Lumen {
                 .right(px(8.0 * UI_SCALE))
                 .w(px(300.0 * UI_SCALE))
                 .max_h(px(480.0 * UI_SCALE))
-                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -61,13 +61,13 @@ impl Lumen {
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme.muted))
+                                .text_color(rgb(visual::panel_muted(theme)))
                                 .child("Extensions"),
                         )
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(rgb(theme.muted))
+                                .text_color(rgb(visual::panel_muted(theme)))
                                 .child(format!("{active_count} active")),
                         ),
                 )
@@ -115,7 +115,7 @@ impl Lumen {
                                         .child(
                                             div()
                                                 .text_xs()
-                                                .text_color(rgb(theme.muted))
+                                                .text_color(rgb(visual::panel_muted(theme)))
                                                 .overflow_hidden()
                                                 .text_ellipsis()
                                                 .whitespace_nowrap()
@@ -187,7 +187,7 @@ impl Lumen {
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(rgb(theme.muted))
+                                        .text_color(rgb(visual::panel_muted(theme)))
                                         .overflow_hidden()
                                         .text_ellipsis()
                                         .whitespace_nowrap()
@@ -249,7 +249,7 @@ impl Lumen {
                     .top(px(TOPBAR_HEIGHT + 4.0 * UI_SCALE))
                     .right(px(8.0 * UI_SCALE))
                     .w(px(280.0 * UI_SCALE))
-                    .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                    .bg(rgb(visual::panel_surface(theme.surface)))
                     .border_1()
                     .border_color(rgb(if is_active {
                         theme.accent
@@ -300,7 +300,7 @@ impl Lumen {
                                     .py_0p5()
                                     .rounded_md()
                                     .hover(move |s| s.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
-                                    .text_color(rgb(theme.muted))
+                                    .text_color(rgb(visual::panel_muted(theme)))
                                     .text_xs()
                                     .child("✕")
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -375,7 +375,7 @@ impl Lumen {
                 .left(px(x))
                 .w(px(width))
                 .max_h(px(height))
-                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -393,7 +393,7 @@ impl Lumen {
                         .py_1()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme.muted))
+                        .text_color(rgb(visual::panel_muted(theme)))
                         .child("Sidebar"),
                 )
                 .child(
@@ -502,7 +502,7 @@ impl Lumen {
                 .bottom(px(48.0 * UI_SCALE))
                 .left(px(8.0 * UI_SCALE))
                 .w(px(224.0 * UI_SCALE))
-                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -520,7 +520,7 @@ impl Lumen {
                         .py_1()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme.muted))
+                        .text_color(rgb(visual::panel_muted(theme)))
                         .flex()
                         .items_center()
                         .gap_2()
@@ -629,7 +629,7 @@ impl Lumen {
                 .w(px(menu.width))
                 .max_h(px(menu.height))
                 .overflow_y_scroll()
-                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -649,7 +649,7 @@ impl Lumen {
                         .py_1()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme.muted))
+                        .text_color(rgb(visual::panel_muted(theme)))
                         .child("Split with…"),
                 );
                 for (id, title, favicon) in tabs {
@@ -775,7 +775,7 @@ impl Lumen {
                         .py_1()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme.muted))
+                        .text_color(rgb(visual::panel_muted(theme)))
                         .child("Folders"),
                 );
                 for (folder_id, folder_name) in &target_folders {
@@ -1075,7 +1075,7 @@ impl Lumen {
                 .w(px(menu.width))
                 .max_h(px(menu.height))
                 .overflow_y_scroll()
-                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -1093,7 +1093,7 @@ impl Lumen {
                         .py_1()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme.muted))
+                        .text_color(rgb(visual::panel_muted(theme)))
                         .child(folder_name),
                 );
             let rename_id = folder_id.clone();
@@ -1179,7 +1179,7 @@ impl Lumen {
                 .left(px(menu.x))
                 .top(px(menu.y))
                 .w(px(180.0 * UI_SCALE))
-                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_lg()

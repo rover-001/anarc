@@ -13,7 +13,6 @@ pub(crate) enum SettingsSection {
     Appearance,
     Search,
     Privacy,
-    Downloads,
     Shortcuts,
     Plugins,
 }

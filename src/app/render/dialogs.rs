@@ -43,7 +43,7 @@ impl Lumen {
                 .when(sidebar_on_right, |this| this.right(px(8.0 * UI_SCALE)))
                 .when(!sidebar_on_right, |this| this.left(px(8.0 * UI_SCALE)))
                 .w(px(240.0 * UI_SCALE))
-                .bg(crate::ui::visual::translucent_surface(modal_theme.surface, 0x30))
+                .bg(rgb(visual::panel_surface(modal_theme.surface)))
                 .border_1()
                 .border_color(rgb(modal_theme.border))
                 .rounded_xl()
@@ -71,7 +71,7 @@ impl Lumen {
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(modal_theme.muted))
+                                .text_color(rgb(visual::panel_muted(modal_theme)))
                                 .child("Name"),
                         )
                         .child(
@@ -110,7 +110,7 @@ impl Lumen {
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(modal_theme.muted))
+                                .text_color(rgb(visual::panel_muted(modal_theme)))
                                 .child("Icon"),
                         )
                         .child({
@@ -186,7 +186,7 @@ impl Lumen {
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(modal_theme.muted))
+                                .text_color(rgb(visual::panel_muted(modal_theme)))
                                 .child("Color"),
                         )
                         .child({
@@ -223,7 +223,7 @@ impl Lumen {
                                 .py_1()
                                 .rounded_md()
                                 .text_xs()
-                                .text_color(rgb(modal_theme.muted))
+                                .text_color(rgb(visual::panel_muted(modal_theme)))
                                 .hover(move |s| {
                                     s.bg(crate::ui::visual::translucent_surface(modal_theme.surface_hover, 0x40))
                                         .text_color(rgb(modal_theme.text))
@@ -303,7 +303,7 @@ impl Lumen {
                 .top(px(modal.anchor_y - 12.0 * UI_SCALE))
                 .left(px(modal.anchor_x + 12.0 * UI_SCALE))
                 .w(px(224.0 * UI_SCALE))
-                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -331,7 +331,7 @@ impl Lumen {
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(theme.muted))
+                                .text_color(rgb(visual::panel_muted(theme)))
                                 .child("Name"),
                         )
                         .child(
@@ -375,7 +375,7 @@ impl Lumen {
                                 .py_1()
                                 .rounded_md()
                                 .text_xs()
-                                .text_color(rgb(theme.muted))
+                                .text_color(rgb(visual::panel_muted(theme)))
                                 .hover(move |style| {
                                     style
                                         .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))

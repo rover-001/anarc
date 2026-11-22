@@ -182,9 +182,57 @@ pub fn translucent_surface(color: u32, alpha: u8) -> gpui_kit::Rgba {
     gpui_kit::rgba((light_surface_tint(color) << 8) | u32::from(alpha))
 }
 
+/// Opaque, slightly lightened fill for floating panels.
+///
+/// Panels sit over live page content and must stay solid, but the raw surface
+/// token reads as a dark slab at that scale. Lifting it a little keeps the
+/// panel distinct from the chrome without the washed-out glass look.
+pub fn panel_surface(color: u32) -> u32 {
+    tint_rgb(color, 0xffffff, 0.18)
+}
+
+/// Secondary foreground for labels drawn on a floating panel.
+///
+/// The regular muted token only clears 3.5:1 against the dark chrome base; on
+/// the lighter panel fill it washes out into the background. Re-derive it
+/// against the actual panel surface so menu headers and descriptions stay
+/// readable.
+pub fn panel_muted(theme: SpaceTheme) -> u32 {
+    muted_for_chrome(theme.text, panel_surface(theme.surface))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panel_surface_lightens_without_washing_out() {
+        let base = 0x34363d;
+        let panel = panel_surface(base);
+        assert!(
+            panel > base,
+            "panel fill must be lighter than the raw surface"
+        );
+        assert!(
+            panel < light_surface_tint(base),
+            "panel fill must stay below the glass tint"
+        );
+        assert_eq!(panel_surface(0xffffff), 0xffffff);
+    }
+
+    #[test]
+    fn panel_muted_beats_the_regular_muted_token_on_panels() {
+        for color in [
+            0x9aa6ff, 0x76d7b2, 0xf6ad55, 0xf687b3, 0x63b3ed, 0xb794f4, 0xfbb6ce, 0x68d391,
+        ] {
+            let theme = space_theme(color);
+            let panel = panel_surface(theme.surface);
+            assert!(
+                contrast(panel_muted(theme), panel) > contrast(theme.muted, panel),
+                "panel label should be more readable than muted for {color:#08x}"
+            );
+        }
+    }
 
     #[test]
     fn default_zoom_is_seventy_percent() {

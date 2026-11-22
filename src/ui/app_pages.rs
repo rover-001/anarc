@@ -40,7 +40,6 @@ pub fn render(
             search_engine,
             sidebar_mode,
             active_space_color,
-            downloads.clone(),
             plugin_rows,
             pending_plugin_review,
             plugin_action_error,
@@ -131,7 +130,6 @@ fn settings_content(
     search_engine: SearchEngine,
     sidebar_mode: SidebarMode,
     _active_space_color: u32,
-    downloads: Vec<DownloadRecord>,
     plugin_rows: Vec<crate::plugin::PluginRow>,
     pending_plugin_review: Option<crate::ui::plugin_manager::PluginReview>,
     plugin_action_error: Option<String>,
@@ -183,16 +181,6 @@ fn settings_content(
             }),
         ))
         .child(settings_tab(
-            "Downloads",
-            SettingsSection::Downloads,
-            selected_section,
-            theme,
-            cx.listener(|this, _, _, cx| {
-                this.set_settings_section(SettingsSection::Downloads);
-                cx.notify();
-            }),
-        ))
-        .child(settings_tab(
             "Shortcuts",
             SettingsSection::Shortcuts,
             selected_section,
@@ -227,21 +215,6 @@ fn settings_content(
                 .flex()
                 .flex_col()
                 .gap_4()
-                .child(setting_card(
-                    "About",
-                    "Anarc Browser",
-                    "Fast, customisable, private web browser built with Rust and GPUI.",
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .children(visual::anarc_logo().map(|logo| {
-                            div()
-                                .size(px(32.0 * UI_SCALE))
-                                .child(gpui_kit::img(logo).size_full())
-                        })),
-                    theme,
-                ))
                 .child(setting_card(
                     "Browsing data",
                     "History and search suggestions",
@@ -460,7 +433,6 @@ fn settings_content(
             )
             .into_any_element()
         }
-        SettingsSection::Downloads => downloads_content(downloads, theme),
         SettingsSection::Shortcuts => section(
             "Keyboard shortcuts",
             vec![

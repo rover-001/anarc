@@ -285,6 +285,37 @@ impl Lumen {
                                             Icon::new(IconName::ArrowRight)
                                                 .size(px(16.0 * UI_SCALE)),
                                         )
+                                })
+                                .child({
+                                    div()
+                                        .id("reload-btn")
+                                        .size(px(NAV_BUTTON_SIZE))
+                                        .rounded_lg()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(rgb(theme.muted))
+                                        .cursor_pointer()
+                                        .active(|s| s.opacity(0.92))
+                                        .hover(move |s| {
+                                            s.bg(crate::ui::visual::translucent_surface(
+                                                theme.surface_hover,
+                                                0x40,
+                                            ))
+                                            .text_color(rgb(theme.text))
+                                        })
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.close_app_page();
+                                            this.address_editing = false;
+                                            this.show_suggestions = false;
+                                            this.selected_suggestion = None;
+                                            this.reload_active(false);
+                                            this.focus_browser(window, cx);
+                                            cx.notify();
+                                        }))
+                                        .child(
+                                            Icon::new(IconName::RotateCw).size(px(15.0 * UI_SCALE)),
+                                        )
                                 }),
                         )
                         .child(
@@ -625,7 +656,7 @@ impl Lumen {
                                         cx.listener(|this, _, _window, cx| {
                                             this.split_resizing = true;
                                             #[cfg(not(test))]
-                                            this.begin_browser_resize_drag(_window, true);
+                                            this.begin_browser_resize_drag(_window, true, false);
                                             cx.notify();
                                         }),
                                     )
@@ -740,7 +771,7 @@ impl Lumen {
                         CONTENT_BEZEL_X
                     }))
                     .rounded(px(visual::active_card_radius()))
-                    .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                    .bg(rgb(theme.base))
                     .overflow_hidden()
                     .child(content),
             );
@@ -767,7 +798,7 @@ impl Lumen {
                         cx.listener(|this, _, _window, cx| {
                             this.sidebar_resizing = true;
                             #[cfg(not(test))]
-                            this.begin_browser_resize_drag(_window, false);
+                            this.begin_browser_resize_drag(_window, false, false);
                             cx.notify();
                         }),
                     ),
@@ -843,7 +874,7 @@ impl Lumen {
                 .top(px(topbar_height + 4.0 * UI_SCALE))
                 .left(px(suggestion_left))
                 .w(px(suggestion_width))
-                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -945,7 +976,7 @@ impl Lumen {
                     .px_3()
                     .rounded_lg()
                     .overflow_hidden()
-                    .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                    .bg(rgb(visual::panel_surface(theme.surface)))
                     .border_1()
                     .border_color(rgb(theme.border))
                     .child(
@@ -1020,7 +1051,7 @@ impl Lumen {
                 .max_h(px(520.0 * UI_SCALE))
                 .overflow_hidden()
                 .rounded_xl()
-                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .shadow_lg()
@@ -1133,7 +1164,7 @@ impl Lumen {
                 .w(px(layout.card_w))
                 .h(px(layout.card_h))
                 .rounded(px(CARD_RADIUS))
-                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .shadow_2xl()
@@ -1154,7 +1185,7 @@ impl Lumen {
                         .items_center()
                         .gap_2()
                         .px(px(10.0 * UI_SCALE))
-                        .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                        .bg(rgb(visual::panel_surface(theme.surface)))
                         .rounded_t(px(inner_radius))
                         .border_b_1()
                         .border_color(rgb(theme.border))

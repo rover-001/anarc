@@ -191,13 +191,32 @@ chmod 755 "$BIN_DIR/anarc"
 # --- Desktop entry + icon ---------------------------------------------------
 if [ "$NO_DESKTOP" -eq 0 ]; then
     mkdir -p "$ICON_DIR" "$PIXMAPS_DIR" "$DESKTOP_DIR"
+    SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
     LOGO=""
-    for candidate in ./anarc_logo.png ./assets/anarc_logo.png ../assets/anarc_logo.png; do
+    for candidate in "$SCRIPT_DIR/assets/anarc_logo.png" "$SCRIPT_DIR/anarc_logo.png" ./assets/anarc_logo.png ../assets/anarc_logo.png; do
         [ -f "$candidate" ] && LOGO="$candidate" && break
     done
     if [ -n "$LOGO" ]; then
-        cp "$LOGO" "$ICON_DIR/anarc.png"
         cp "$LOGO" "$PIXMAPS_DIR/anarc.png"
+        # Install every standard hicolor size so desktop environments pick the
+        # new logo at any scale instead of caching an old 256-only entry.
+        ICON_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
+        if command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1; then
+            RESIZER=$(command -v magick >/dev/null 2>&1 && echo magick || echo convert)
+            for size in 16 32 48 64 128 256; do
+                mkdir -p "$ICON_ROOT/${size}x${size}/apps"
+                "$RESIZER" "$LOGO" -background none -resize "${size}x${size}" \
+                    "$ICON_ROOT/${size}x${size}/apps/anarc.png"
+            done
+        else
+            for size in 16 32 48 64 128 256; do
+                mkdir -p "$ICON_ROOT/${size}x${size}/apps"
+                cp "$LOGO" "$ICON_ROOT/${size}x${size}/apps/anarc.png"
+            done
+        fi
+        # Keep the Windows icon resource beside the binary for bundle installs;
+        # the ico is also embedded into the exe at build time (build.rs).
+        [ -f "$SCRIPT_DIR/assets/anarc.ico" ] && cp "$SCRIPT_DIR/assets/anarc.ico" "$BIN_DIR/anarc.ico" || true
     fi
     cat > "$DESKTOP_DIR/anarc.desktop" <<EOF
 [Desktop Entry]
