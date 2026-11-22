@@ -22,11 +22,23 @@ pub fn plugin_config_path() -> PathBuf {
 /// it. The launcher claims a slot per window; slot 1 keeps the default profile
 /// and every later slot gets its own root, so the rest of the user data
 /// (settings, spaces, history) stays shared like a second browser window.
+fn normalize_path_separators(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = path.to_string_lossy().replace('/', "\\");
+        PathBuf::from(s)
+    }
+    #[cfg(not(windows))]
+    {
+        path
+    }
+}
+
 pub fn cef_root_dir() -> PathBuf {
-    instance_cef_root(
+    normalize_path_separators(instance_cef_root(
         cef_root_from_data_dir(data_dir()),
         resolve_instance_slot(std::env::var_os("ANARC_INSTANCE_SLOT")),
-    )
+    ))
 }
 
 const MAX_INSTANCE_SLOTS: u32 = 9;
@@ -59,7 +71,7 @@ fn profile_from_cef_root(cef_root: PathBuf, space_id: &str) -> PathBuf {
             _ => format!("%{byte:02X}"),
         })
         .collect::<String>();
-    cef_root.join(format!("space-{sanitized_id}"))
+    normalize_path_separators(cef_root.join(format!("space-{sanitized_id}")))
 }
 
 /// General Lumen cache location, reserved for non-profile caches.
@@ -102,11 +114,14 @@ fn resolve_override_or_home(
     home: Option<std::ffi::OsString>,
     suffix: &str,
 ) -> PathBuf {
-    override_value.map(PathBuf::from).unwrap_or_else(|| {
-        home.map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir)
-            .join(suffix)
-    })
+    let path = override_value.map(PathBuf::from).unwrap_or_else(|| {
+        let mut base = home.map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        for part in suffix.split('/') {
+            base.push(part);
+        }
+        base
+    });
+    normalize_path_separators(path)
 }
 
 #[cfg(test)]
@@ -206,5 +221,144 @@ mod tests {
             profile_from_cef_root(secondary, "personal"),
             PathBuf::from("/tmp/lumen-data/cef/instance-2/space-personal")
         );
+    }
+}
+
+#[cfg(unix)]
+pub(crate) mod agent_socket {
+    use super::{PathBuf, resolve_instance_slot};
+    use std::ffi::OsString;
+    use std::fs::{self, File, OpenOptions};
+    use std::io::{self, Seek, Write};
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+    use std::os::unix::net::UnixStream;
+    use std::path::Path;
+
+    unsafe extern "C" {
+        fn getuid() -> u32;
+        fn kill(pid: i32, signal: i32) -> i32;
+    }
+
+    // `resolved` and `environment` are consumed by the anarc-ctl binary, which
+    // includes this file via #[path]; the browser binary only needs `bind`.
+    #[allow(dead_code)]
+    pub(crate) struct Discovery {
+        pub(crate) resolved: PathBuf,
+        pub(crate) bind: PathBuf,
+        pub(crate) environment: [(&'static str, Option<OsString>); 6],
+    }
+
+    pub(crate) fn resolve_socket(explicit: Option<&Path>, instance: Option<u32>) -> Discovery {
+        let environment = [
+            "ANARC_CTL_SOCKET", "ANARC_SOCKET_PATH", "XDG_RUNTIME_DIR",
+            "ANARC_DATA_DIR", "HOME", "ANARC_INSTANCE_SLOT",
+        ].map(|name| (name, std::env::var_os(name)));
+        let [override_path, legacy_override, runtime, data, home, slot] =
+            environment.each_ref().map(|(_, value)| value.as_deref());
+        if let Some(path) = explicit.or_else(|| override_path.or(legacy_override).map(Path::new)) {
+            return Discovery { resolved: path.into(), bind: path.into(), environment };
+        }
+
+        let instance = instance.or_else(|| resolve_instance_slot(slot.map(OsString::from)));
+        let filename = match instance {
+            Some(slot) if slot > 1 => format!("ctl-{slot}.sock"),
+            _ => "ctl.sock".into(),
+        };
+        let runtime = runtime.map(PathBuf::from);
+        let uid = unsafe { getuid() };
+        let standard_runtime = PathBuf::from(format!("/run/user/{uid}"));
+        let default_data = home.map(PathBuf::from).unwrap_or_else(std::env::temp_dir)
+            .join(".local/share/anarc");
+        let data_socket = data.map(PathBuf::from).map(|dir| dir.join("agent").join(&filename));
+        let home_socket = default_data.join("agent").join(&filename);
+        let runtime_socket = runtime.as_ref().map(|dir| dir.join("anarc").join(&filename));
+
+        // Explicit data directories keep isolated browser runs independent.
+        let bind = data_socket.as_ref().or(runtime_socket.as_ref()).unwrap_or(&home_socket).clone();
+        let directories = [
+            runtime.as_ref().map(|dir| dir.join("anarc")),
+            data_socket.as_ref().and_then(|path| path.parent()).map(Path::to_owned),
+            home_socket.parent().map(Path::to_owned),
+            runtime.is_none().then(|| standard_runtime.join("anarc")),
+        ];
+        let candidates = directories.iter().flatten().map(|dir| dir.join(&filename));
+        let is_socket = |path: &Path| fs::symlink_metadata(path).is_ok_and(|metadata| {
+            metadata.file_type().is_socket() && metadata.uid() == uid
+        });
+        let mut resolved = candidates.into_iter().find(|path| is_socket(path));
+        if resolved.is_none() && instance.is_none() {
+            // A harness can lack the launcher's slot. A unique instance remains discoverable.
+            let mut sockets: Vec<_> = directories.iter().flatten()
+                .flat_map(|dir| (2..=super::MAX_INSTANCE_SLOTS).map(move |slot| dir.join(format!("ctl-{slot}.sock"))))
+                .filter(|path| is_socket(path))
+                .collect();
+            sockets.sort_unstable();
+            sockets.dedup();
+            if sockets.len() == 1 {
+                resolved = sockets.pop();
+            }
+        }
+        if resolved.is_none() && instance.is_none_or(|slot| slot == 1) {
+            let legacy_candidates = [
+                Some(runtime.unwrap_or(standard_runtime).join("anarc-agent.sock")),
+                Some(PathBuf::from(format!("/tmp/anarc-agent-{uid}.sock"))),
+            ];
+            resolved = legacy_candidates.into_iter().flatten().find(|path| is_socket(path));
+        }
+        let resolved = resolved.unwrap_or_else(|| bind.clone());
+        Discovery { resolved, bind, environment }
+    }
+
+    fn owner_path(socket: &Path) -> PathBuf {
+        let mut path = socket.as_os_str().to_os_string();
+        path.push(".owner");
+        path.into()
+    }
+
+    pub(crate) fn lock_owner(socket: &Path, create: bool) -> io::Result<File> {
+        let file = OpenOptions::new().read(true).write(true).create(create)
+            .mode(0o600).custom_flags(0o400000 /* O_NOFOLLOW */)
+            .open(owner_path(socket))?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.nlink() != 1 || metadata.uid() != unsafe { getuid() } {
+            return Err(io::Error::other("invalid socket owner file"));
+        }
+        file.try_lock().map_err(io::Error::from)?;
+        Ok(file)
+    }
+
+    pub(crate) fn record_owner(mut owner: &File, socket: &Path) -> io::Result<()> {
+        let metadata = fs::symlink_metadata(socket)?;
+        owner.set_len(0)?;
+        owner.rewind()?;
+        writeln!(owner, "{} {} {}", std::process::id(), metadata.dev(), metadata.ino())
+    }
+
+    pub(crate) fn remove_dead_socket(socket: &Path, owner: &File) -> bool {
+        use std::io::Read;
+        let mut record = String::new();
+        if owner.take(128).read_to_string(&mut record).is_err() {
+            return false;
+        }
+        let mut fields = record.split_whitespace();
+        let (Some(pid), Some(dev), Some(ino), None) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            return false;
+        };
+        let Ok(pid) = pid.parse::<i32>() else { return false };
+        if pid <= 0 || unsafe { kill(pid, 0) } == 0 || io::Error::last_os_error().raw_os_error() != Some(3) {
+            return false;
+        }
+        let Ok(metadata) = fs::symlink_metadata(socket) else { return false };
+        if !metadata.file_type().is_socket()
+            || metadata.uid() != unsafe { getuid() }
+            || Some(metadata.dev()) != dev.parse().ok()
+            || Some(metadata.ino()) != ino.parse().ok()
+        {
+            return false;
+        }
+        matches!(UnixStream::connect(socket), Err(error) if error.kind() == io::ErrorKind::ConnectionRefused)
+            && fs::remove_file(socket).is_ok()
     }
 }

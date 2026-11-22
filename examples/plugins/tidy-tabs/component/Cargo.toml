@@ -1,5 +1,5 @@
 [package]
-name = "lumen-tidy-tabs-component"
+name = "anarc-tidy-tabs-component"
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -8,6 +8,6 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-lumen-plugin-sdk = { path = "../../../../lumen-plugin-sdk" }
-lumen-tidy-tabs = { path = ".." }
+anarc-plugin-sdk = { path = "../../../../anarc-plugin-sdk" }
+anarc-tidy-tabs = { path = ".." }
 wit-bindgen = "=0.57.1"

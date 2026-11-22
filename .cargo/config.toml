@@ -4,3 +4,8 @@ rustflags = [
     "-C", "link-arg=-Wl,-rpath,$ORIGIN:$ORIGIN/../../anarc-cef:$ORIGIN/../anarc-cef",
 ]
 
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+    "-C", "link-arg=/STACK:16777216",
+]
+

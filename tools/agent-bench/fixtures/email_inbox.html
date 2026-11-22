@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Inbox (5 unread) - Webmail</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; display: flex; height: 100vh; background: #f8fafc; color: #0f172a; }
+    #sidebar { width: 220px; background: #ffffff; border-right: 1px solid #e2e8f0; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+    .nav-btn { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-radius: 6px; font-weight: 500; text-decoration: none; color: #334155; }
+    .nav-btn.active { background: #e0f2fe; color: #0369a1; }
+    .badge { background: #0284c7; color: white; border-radius: 12px; padding: 2px 8px; font-size: 12px; font-weight: 600; }
+    #main { flex: 1; display: flex; flex-direction: column; }
+    #toolbar { height: 56px; border-bottom: 1px solid #e2e8f0; background: #ffffff; display: flex; align-items: center; padding: 0 16px; gap: 12px; }
+    .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid #cbd5e1; background: #ffffff; cursor: pointer; font-size: 13px; font-weight: 500; }
+    .btn.primary { background: #0284c7; color: #ffffff; border-color: #0284c7; }
+    #email-list { flex: 1; overflow-y: auto; background: #ffffff; }
+    .email-row { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid #f1f5f9; cursor: pointer; text-decoration: none; color: inherit; }
+    .email-row:hover { background: #f8fafc; }
+    .email-row.unread { font-weight: 600; background: #f0fdf4; }
+    .sender { width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .subject { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 12px; color: #1e293b; }
+    .snippet { color: #64748b; font-weight: normal; }
+    .date { width: 80px; text-align: right; color: #64748b; font-size: 12px; }
+    #detail-view { display: none; padding: 24px; background: #ffffff; flex: 1; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <button class="btn primary" id="compose-btn">+ Compose</button>
+    <a href="#inbox" class="nav-btn active"><span>📥 Inbox</span> <span class="badge">5</span></a>
+    <a href="#starred" class="nav-btn"><span>⭐ Starred</span></a>
+    <a href="#sent" class="nav-btn"><span>📤 Sent</span></a>
+    <a href="#drafts" class="nav-btn"><span>📝 Drafts</span></a>
+    <a href="#trash" class="nav-btn"><span>🗑️ Trash</span></a>
+  </div>
+  <div id="main">
+    <div id="toolbar">
+      <input type="text" id="search-input" placeholder="Search emails..." style="width: 280px; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px;">
+      <button class="btn" id="refresh-btn">🔄 Refresh</button>
+      <button class="btn" id="mark-read-btn">✓ Mark as read</button>
+      <button class="btn" id="delete-btn">🗑️ Delete</button>
+    </div>
+    <div id="email-list">
+      <div class="email-row unread" id="email-1" onclick="openEmail(1)">
+        <input type="checkbox" id="chk-1" onclick="event.stopPropagation()">
+        <span class="sender">Google Cloud Billing</span>
+        <span class="subject">Your monthly invoice for November is ready <span class="snippet">- Total charges: $34.12. Automatic payment scheduled...</span></span>
+        <span class="date">10:45 AM</span>
+      </div>
+      <div class="email-row unread" id="email-2" onclick="openEmail(2)">
+        <input type="checkbox" id="chk-2" onclick="event.stopPropagation()">
+        <span class="sender">GitHub Security</span>
+        <span class="subject">[Security Notice] New personal access token created <span class="snippet">- Token 'agent-token' was generated from IP 192.168.1.10...</span></span>
+        <span class="date">09:30 AM</span>
+      </div>
+      <div class="email-row unread" id="email-3" onclick="openEmail(3)">
+        <input type="checkbox" id="chk-3" onclick="event.stopPropagation()">
+        <span class="sender">Stripe Notifications</span>
+        <span class="subject">Payout of $4,250.00 is on the way <span class="snippet">- Funds will arrive in your bank account in 1-2 business days...</span></span>
+        <span class="date">Yesterday</span>
+      </div>
+      <div class="email-row unread" id="email-4" onclick="openEmail(4)">
+        <input type="checkbox" id="chk-4" onclick="event.stopPropagation()">
+        <span class="sender">Linear Team</span>
+        <span class="subject">Rover assigned you to issue ENG-412: In-process DevTools <span class="snippet">- Priority: Urgent. Due by end of sprint...</span></span>
+        <span class="date">Yesterday</span>
+      </div>
+      <div class="email-row unread" id="email-5" onclick="openEmail(5)">
+        <input type="checkbox" id="chk-5" onclick="event.stopPropagation()">
+        <span class="sender">Anthropic Updates</span>
+        <span class="subject">Claude 3.7 Sonnet hybrid reasoning availability <span class="snippet">- Access has been provisioned for your organization workspace...</span></span>
+        <span class="date">Nov 18</span>
+      </div>
+      <div class="email-row" id="email-6" onclick="openEmail(6)">
+        <input type="checkbox" id="chk-6" onclick="event.stopPropagation()">
+        <span class="sender">Tailscale Alerts</span>
+        <span class="subject">Node 'rover-dev' key expiry warning <span class="snippet">- Authentication key expires in 5 days. Run tailscale login to refresh...</span></span>
+        <span class="date">Nov 17</span>
+      </div>
+    </div>
+    <div id="detail-view">
+      <button class="btn" onclick="backToList()">← Back to Inbox</button>
+      <h2 id="email-subject"></h2>
+      <p id="email-sender" style="color: #64748b; font-size: 14px;"></p>
+      <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 16px 0;">
+      <div id="email-body" style="line-height: 1.6;"></div>
+    </div>
+  </div>
+
+  <script>
+    const emails = {
+      1: { subject: "Your monthly invoice for November is ready", sender: "billing@google.com", body: "Hello Rover,\n\nYour Google Cloud invoice for November is now available. Total amount: $34.12 USD. Payment will be automatically deducted from your primary payment method." },
+      2: { subject: "[Security Notice] New personal access token created", sender: "security@github.com", body: "A new personal access token named 'agent-token' was recently added to your account. If you did not generate this token, please revoke it immediately in settings." },
+      3: { subject: "Payout of $4,250.00 is on the way", sender: "notifications@stripe.com", body: "We sent $4,250.00 to your bank account ending in 4102. It usually takes 1-2 business days to arrive." },
+      4: { subject: "Rover assigned you to issue ENG-412: In-process DevTools", sender: "updates@linear.app", body: "ENG-412: Wire CEF DevTools protocol without TCP port.\n\nDescription: Make sure BrowserHost::execute_dev_tools_method supports result callbacks and correlate message IDs." },
+      5: { subject: "Claude 3.7 Sonnet hybrid reasoning availability", sender: "news@anthropic.com", body: "Welcome to Claude 3.7 Sonnet with hybrid reasoning capabilities. The model allows dynamic thinking budgets for complex coding and agent control." }
+    };
+
+    function openEmail(id) {
+      const email = emails[id];
+      if (!email) return;
+      document.getElementById('email-list').style.display = 'none';
+      document.getElementById('detail-view').style.display = 'block';
+      document.getElementById('email-subject').innerText = email.subject;
+      document.getElementById('email-sender').innerText = "From: " + email.sender;
+      document.getElementById('email-body').innerText = email.body;
+      const row = document.getElementById('email-' + id);
+      if (row) row.classList.remove('unread');
+    }
+
+    function backToList() {
+      document.getElementById('detail-view').style.display = 'none';
+      document.getElementById('email-list').style.display = 'block';
+    }
+  </script>
+</body>
+</html>

@@ -31,15 +31,16 @@ impl Lumen {
         self.theme_editor = None;
         self.show_suggestions = false;
         self.selected_suggestion = None;
+        let mut target_nav = None;
         if let Some(space) = self
             .spaces
             .iter_mut()
             .find(|space| space.id == self.active_space)
         {
-            let is_already_active = space.active.as_deref() == Some(tab_id);
-            if is_already_active {
-                if let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id)
-                    && (tab.pinned || tab.favorite)
+            let was_already_active = space.active.as_deref() == Some(tab_id);
+            if let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                seed_pinned_destination(tab);
+                if (tab.pinned || tab.favorite)
                     && let Some(pinned_url) = tab.pinned_url.clone()
                     && tab.url != pinned_url
                 {
@@ -47,19 +48,18 @@ impl Lumen {
                     if let Some(pinned_title) = tab.pinned_title.clone() {
                         tab.title = pinned_title;
                     }
-                    self.engine.navigate(tab_id, &pinned_url);
-                    self.save_state();
+                    target_nav = Some(pinned_url);
                 }
-            } else {
-                if let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id) {
-                    // Adopt the destination before the browser loads it, so a
-                    // later close cannot mistake a navigation for the pin.
-                    seed_pinned_destination(tab);
-                }
+            }
+            if !was_already_active {
                 space.active = Some(tab_id.to_owned());
                 let _ = space;
                 self.emit_plugin_text("tab.activated", tab_id.to_owned());
             }
+        }
+        if let Some(url) = target_nav {
+            self.engine.navigate(tab_id, &url);
+            self.save_state();
         }
     }
 
@@ -82,7 +82,7 @@ impl Lumen {
 
     /// Favorites take precedence over pinning and folders so each tab lives in
     /// exactly one sidebar section.
-    pub(in crate::app) fn favorite_tab(&mut self, tab_id: &str, favorite: bool) {
+    pub(crate) fn favorite_tab(&mut self, tab_id: &str, favorite: bool) {
         let mut changed = false;
         if let Some(space) = self
             .spaces
@@ -112,7 +112,7 @@ impl Lumen {
     }
 
     /// Pinned tabs render directly below the favorites grid.
-    pub(in crate::app) fn pin_tab(&mut self, tab_id: &str, pinned: bool) {
+    pub(crate) fn pin_tab(&mut self, tab_id: &str, pinned: bool) {
         let mut changed = false;
         if let Some(space) = self
             .spaces
@@ -143,7 +143,7 @@ impl Lumen {
 
     /// Dragging a tab out of a favorite/pinned/folder section and dropping it
     /// on the regular tab list returns it to the plain section.
-    pub(in crate::app) fn clear_tab_section(&mut self, tab_id: &str) {
+    pub(crate) fn clear_tab_section(&mut self, tab_id: &str) {
         let mut changed = false;
         if let Some(space) = self
             .spaces
@@ -276,23 +276,27 @@ impl Lumen {
         self.save_state();
     }
     pub(crate) fn close_active_tab(&mut self) {
+        self.show_suggestions = false;
+        self.address_editing = false;
+        self.reset_address_for_tab_change = true;
         let active_id = self.focused_tab_id().to_owned();
         if active_id.is_empty() {
             return;
         }
-        let is_kept_page = self
+        let is_kept = self
             .active_space()
             .tabs
             .iter()
             .find(|tab| tab.id == active_id)
-            .is_some_and(|tab| tab.favorite || tab.pinned || tab.folder.is_some());
-        if is_kept_page {
+            .is_some_and(|tab| tab.favorite || tab.pinned);
+
+        if is_kept {
             self.unload_kept_tab(&active_id);
-        } else if !self.close_tab_by_id(&active_id) {
-            self.add_tab();
+        } else {
+            self.close_tab_by_id(&active_id);
         }
     }
-    pub(in crate::app) fn close_tab_by_id(&mut self, tab_id: &str) -> bool {
+    pub(crate) fn close_tab_by_id(&mut self, tab_id: &str) -> bool {
         let Some(space) = self
             .spaces
             .iter_mut()
@@ -328,16 +332,19 @@ impl Lumen {
             let excess = self.recently_closed_tabs.len() - MAX_RECENTLY_CLOSED;
             self.recently_closed_tabs.drain(..excess);
         }
+        let mut activated_new_tab = None;
         if space.tabs.is_empty() {
             let id = next_tab_id(space);
             space.tabs.push(Tab::new(&id, "New tab", "about:blank"));
-            space.active = Some(id);
+            space.active = Some(id.clone());
+            activated_new_tab = Some(id);
         } else if let Some(other) = split_other {
-            space.active = Some(other);
+            space.active = Some(other.clone());
+            activated_new_tab = Some(other);
         } else if was_active {
-            // Kept tabs remain in the sidebar even when they have never been
-            // opened. Closing a regular tab should not unexpectedly activate
-            // one of those pages.
+            // Closing a regular tab should never open a favorite or pinned page.
+            // Kept tabs stay unloaded unless the user selects them, so keep a
+            // regular tab active even when it is the last regular tab.
             let next_regular = (index..space.tabs.len())
                 .chain((0..index.min(space.tabs.len())).rev())
                 .find_map(|candidate| {
@@ -345,11 +352,13 @@ impl Lumen {
                     (!tab.favorite && !tab.pinned && tab.folder.is_none()).then(|| tab.id.clone())
                 });
             if let Some(next_regular) = next_regular {
-                space.active = Some(next_regular);
+                space.active = Some(next_regular.clone());
+                activated_new_tab = Some(next_regular);
             } else {
                 let id = next_tab_id(space);
                 space.tabs.push(Tab::new(&id, "New tab", "about:blank"));
-                space.active = Some(id);
+                space.active = Some(id.clone());
+                activated_new_tab = Some(id);
             }
         }
         let is_empty_tab = closing_snapshot.url == "about:blank"
@@ -368,6 +377,9 @@ impl Lumen {
             self.closing_tab = None;
         }
         self.emit_plugin_text("tab.closed", closed_tab_id);
+        if let Some(act) = activated_new_tab {
+            self.activate_tab_in_active_space(&act);
+        }
         self.save_state();
         true
     }
@@ -377,7 +389,7 @@ impl Lumen {
             .tabs
             .iter()
             .find(|tab| tab.id == tab_id)
-            .is_some_and(|tab| tab.favorite || tab.pinned || tab.folder.is_some());
+            .is_some_and(|tab| tab.favorite || tab.pinned);
         if is_kept_page {
             self.unload_kept_tab(tab_id);
         } else {
@@ -467,6 +479,20 @@ impl Lumen {
                                 && tab.folder.is_none()
                                 && (tab.url == "about:blank" || tab.url == "lumen://welcome")
                         })
+                        .map(|tab| tab.id.clone())
+                })
+                .or_else(|| {
+                    space
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.id != tab_id && !tab.favorite && !tab.pinned && tab.folder.is_none())
+                        .map(|tab| tab.id.clone())
+                })
+                .or_else(|| {
+                    space
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.id != tab_id)
                         .map(|tab| tab.id.clone())
                 });
             space.active = next_active.or_else(|| {

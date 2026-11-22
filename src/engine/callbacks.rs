@@ -366,6 +366,25 @@ cef::wrap_request_handler! {
                 }
                 return 1;
             }
+            if url.starts_with("anarc-plugin://com.anarc.live-share") {
+                crate::app::ensure_live_share_daemon_running();
+            }
+            if url.starts_with("anarc-plugin://com.anarc.live-share/__anarc_start_service") {
+                crate::app::ensure_live_share_daemon_running();
+                return 1;
+            }
+            if url.starts_with("anarc-plugin://com.anarc.live-share/__anarc_switch_to_space") {
+                let space_id = url
+                    .split("?id=")
+                    .nth(1)
+                    .unwrap_or("shared-space")
+                    .to_string();
+                if let Ok(mut events) = self.events.lock() {
+                    events.live_share_switch_space = Some(space_id);
+                    let _ = self.ui_update_wake.try_send(());
+                }
+                return 1;
+            }
             if let Ok(mut events) = self.events.lock() {
                 events.plugin_events.push((
                     "navigation.before".to_string(),
@@ -1054,6 +1073,27 @@ cef::wrap_life_span_handler! {
             {
                 return 1;
             }
+
+            // If an auth URL is opened from a landing/marketing page (e.g. Google Workspace/Gmail
+            // or Microsoft landing pages), navigate the current tab directly instead of trapping
+            // the user in an orphaned peek overlay.
+            if is_auth_flow_url(trimmed) {
+                let current_url = _frame.as_ref().map(|f| CefString::from(&f.url()).to_string()).unwrap_or_default();
+                let c_lower = current_url.to_ascii_lowercase();
+                let is_landing_page = c_lower.contains("workspace.google.")
+                    || c_lower.contains("google.com/gmail")
+                    || c_lower.contains("google.com/intl")
+                    || c_lower.contains("google.com/about")
+                    || c_lower.contains("live.com")
+                    || c_lower.contains("apple.com");
+                if is_landing_page {
+                    if let Some(frame) = _frame {
+                        frame.load_url(target_url);
+                        return 1;
+                    }
+                }
+            }
+
             // Sign-in popups have to keep a live `window.opener`: identity
             // providers hand the result back through `postMessage` and finish
             // with `window.close()`. Letting CEF own those windows keeps that
@@ -1116,7 +1156,7 @@ fn start_popup_browser(
         .popup_serial
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tab_id = format!("{}-popup-{serial}", handler.space_id);
-    let shared = Arc::new(Mutex::new(new_shared_state(width, height, url, 1.0)));
+    let shared = Arc::new(Mutex::new(new_shared_state(&handler.space_id, width, height, url, 1.0)));
     let render_handler =
         LumenRenderHandler::new(shared.clone(), handler.paint_wake.clone(), tab_id.clone());
     let display_handler = LumenDisplayHandler::new(
@@ -1687,10 +1727,14 @@ fn run_windows_file_picker(
         )
     };
 
-    let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let output = cmd.output().ok()?;
 
     if !output.status.success() {
         return None;
@@ -1759,6 +1803,18 @@ cef::wrap_dialog_handler! {
             let filters = extract_cef_string_list(accept_filters);
             let extensions = extract_cef_string_list(accept_extensions);
             let wake = self.ui_update_wake.clone();
+
+            if let Some(paths) = crate::agent::act::take_pending_upload_files() {
+                if !paths.is_empty() {
+                    let mut list = CefStringList::new();
+                    for path in paths {
+                        list.append(&path);
+                    }
+                    callback.cont(Some(&mut list));
+                    let _ = wake.try_send(());
+                    return 1;
+                }
+            }
 
             std::thread::spawn(move || {
                 let selected = run_file_picker(
