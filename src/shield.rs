@@ -545,13 +545,19 @@ ob.observe(document.body||document.documentElement,{childList:true,subtree:true}
 mod tests {
     use super::*;
 
-    fn enable_shield_plugin() {
+    fn enable_shield_plugin() -> std::sync::MutexGuard<'static, ()> {
+        // Hold the shared feature-flag lock for the whole test: plugin-lifecycle
+        // tests toggle these process-wide switches off while running in parallel.
+        let guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         set_plugin_enabled(true);
+        guard
     }
 
     #[test]
     fn https_first_upgrades_public_http_hosts_only() {
-        enable_shield_plugin();
+        let _global_guard = enable_shield_plugin();
         assert_eq!(
             upgrade_http_url("http://example.com/path?q=1"),
             Some("https://example.com/path?q=1".into())
@@ -598,7 +604,7 @@ mod tests {
 
     #[test]
     fn bundled_rules_block_and_increment_per_tab_counts() {
-        enable_shield_plugin();
+        let _global_guard = enable_shield_plugin();
         let state = ShieldState::start();
         let url = "https://doubleclick.net/ad.js";
         let source = "https://publisher.test/";
@@ -666,7 +672,7 @@ mod tests {
 
     #[test]
     fn cosmetic_script_is_cached_per_host_and_respects_global_toggle() {
-        enable_shield_plugin();
+        let _global_guard = enable_shield_plugin();
         let state = ShieldState::start();
         let url = "https://www.youtube.com/watch?v=123";
         for _ in 0..500 {
@@ -732,7 +738,7 @@ mod tests {
 
     #[test]
     fn worker_replaces_pack_rules_without_disabling_builtins() {
-        enable_shield_plugin();
+        let _global_guard = enable_shield_plugin();
         let state = ShieldState::start();
         state.replace_pack_filter_lists(vec!["||worker-pack-filter.example^".into()]);
         assert!(state.should_block(
@@ -784,7 +790,7 @@ mod tests {
 
     #[test]
     fn ad_blocker_defaults_on_and_global_toggle_controls_filtering() {
-        enable_shield_plugin();
+        let _global_guard = enable_shield_plugin();
         let state = ShieldState::start();
         let url = "https://doubleclick.net/ad.js";
         let source = "https://publisher.test/";

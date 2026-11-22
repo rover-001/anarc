@@ -117,10 +117,14 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         pending_auth_recovery: std::collections::HashMap::new(),
         preferences: Default::default(),
         plugins: {
+            // Do not mount the built-in plugins here. Their mount/dispose
+            // effects mutate process-wide feature flags and the shared search
+            // engine registry; because GPUI entities outlive the test body,
+            // those effects would run after the test's serialization guard is
+            // released and race with other tests. Each test that needs a flag
+            // sets it explicitly (see set_split_view_enabled_for_test above).
             let mut plugins = crate::plugin::PluginHost::new(Default::default());
             plugins.mount_core().expect("core plugin mounts");
-            crate::plugins::register(&mut plugins);
-            plugins.mount_enabled().expect("built-ins mount");
             plugins
         },
         panel_registry,
@@ -146,6 +150,9 @@ fn dispatch_test_key(
 
 #[gpui::test]
 fn browser_tab_shortcuts_work_from_focused_address_bar(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -165,6 +172,9 @@ fn browser_tab_shortcuts_work_from_focused_address_bar(cx: &mut gpui::TestAppCon
 fn plugin_settings_and_extensions_menu_render_without_nested_entity_reads(
     cx: &mut gpui::TestAppContext,
 ) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -186,6 +196,9 @@ fn plugin_settings_and_extensions_menu_render_without_nested_entity_reads(
 #[cfg(debug_assertions)]
 #[gpui::test]
 fn clicking_plugins_keeps_settings_open_over_a_blank_tab(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -212,6 +225,9 @@ fn clicking_plugins_keeps_settings_open_over_a_blank_tab(cx: &mut gpui::TestAppC
 #[cfg(debug_assertions)]
 #[gpui::test]
 fn opening_a_panel_from_plugins_settings_focuses_its_tab(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let root = std::env::temp_dir().join(format!("anarc-open-panel-test-{}", std::process::id()));
     let package = root.join("notes");
     std::fs::create_dir_all(&package).unwrap();
@@ -270,6 +286,9 @@ fn opening_a_panel_from_plugins_settings_focuses_its_tab(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn split_shortcuts_create_focus_and_exit_the_pane_pair(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -309,6 +328,9 @@ fn split_shortcuts_create_focus_and_exit_the_pane_pair(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn closing_a_non_active_tab_by_id_preserves_the_active_tab(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -329,6 +351,9 @@ fn closing_a_non_active_tab_by_id_preserves_the_active_tab(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn closing_a_pinned_tab_request_keeps_it_pinned_and_unloads_it(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -355,6 +380,9 @@ fn closing_a_pinned_tab_request_keeps_it_pinned_and_unloads_it(cx: &mut gpui::Te
 
 #[gpui::test]
 fn unloading_a_pinned_tab_restores_its_pinned_destination(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -384,6 +412,9 @@ fn unloading_a_pinned_tab_restores_its_pinned_destination(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn unloading_a_favorite_tab_restores_its_pinned_destination(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -414,6 +445,9 @@ fn unloading_a_favorite_tab_restores_its_pinned_destination(cx: &mut gpui::TestA
 
 #[test]
 fn legacy_kept_tabs_adopt_their_saved_url_and_keep_it_after_navigation() {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let mut tab = Tab::new("tab-1", "ChatGPT", "https://chatgpt.com/");
     tab.favorite = true;
     super::actions::seed_pinned_destination(&mut tab);
@@ -435,6 +469,9 @@ fn legacy_kept_tabs_adopt_their_saved_url_and_keep_it_after_navigation() {
 
 #[gpui::test]
 fn transitioning_between_favorite_and_pinned_preserves_pinned_url(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -479,6 +516,9 @@ fn transitioning_between_favorite_and_pinned_preserves_pinned_url(cx: &mut gpui:
 fn activating_already_active_pinned_tab_resets_to_pinned_destination(
     cx: &mut gpui::TestAppContext,
 ) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -507,6 +547,9 @@ fn activating_already_active_pinned_tab_resets_to_pinned_destination(
 
 #[gpui::test]
 fn closing_an_empty_tab_does_not_trigger_closing_ghost_animation(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -540,6 +583,9 @@ fn closing_an_empty_tab_does_not_trigger_closing_ghost_animation(cx: &mut gpui::
 
 #[gpui::test]
 fn closing_last_regular_tab_keeps_favorite_unloaded_and_spawns_new_tab(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -570,6 +616,9 @@ fn closing_last_regular_tab_keeps_favorite_unloaded_and_spawns_new_tab(cx: &mut 
 
 #[gpui::test]
 fn download_toast_and_button_active_when_downloading(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -624,6 +673,9 @@ fn download_toast_and_button_active_when_downloading(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn closing_a_split_member_exits_split_and_selects_its_partner(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -644,6 +696,9 @@ fn closing_a_split_member_exits_split_and_selects_its_partner(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn split_with_context_flow_uses_the_clicked_tab_and_selected_target(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -677,6 +732,9 @@ fn split_with_context_flow_uses_the_clicked_tab_and_selected_target(cx: &mut gpu
 
 #[gpui::test]
 fn favorite_pin_and_folder_sections_are_exclusive(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -735,6 +793,9 @@ fn favorite_pin_and_folder_sections_are_exclusive(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn find_shortcut_opens_and_escape_closes_find(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -750,6 +811,9 @@ fn find_shortcut_opens_and_escape_closes_find(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn command_palette_opens_with_ctrl_k_and_closes_with_escape(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -769,6 +833,9 @@ fn command_palette_opens_with_ctrl_k_and_closes_with_escape(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn command_palette_enter_runs_the_matching_action(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -793,6 +860,9 @@ fn command_palette_enter_runs_the_matching_action(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn browser_tab_cycle_and_number_shortcuts_select_the_expected_tab(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -815,6 +885,9 @@ fn browser_tab_cycle_and_number_shortcuts_select_the_expected_tab(cx: &mut gpui:
 
 #[gpui::test]
 fn new_tab_clears_and_focuses_the_address_bar(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -844,6 +917,9 @@ fn new_tab_clears_and_focuses_the_address_bar(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn tab_switch_syncs_address_to_the_active_tab(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -894,6 +970,9 @@ fn tab_switch_syncs_address_to_the_active_tab(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn active_tab_navigation_updates_address_bar(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -921,6 +1000,9 @@ fn active_tab_navigation_updates_address_bar(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn new_tab_temporarily_leaves_a_split_and_address_targets_it(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -980,6 +1062,9 @@ fn new_tab_temporarily_leaves_a_split_and_address_targets_it(cx: &mut gpui::Test
 
 #[gpui::test]
 fn autocomplete_arrows_select_a_suggestion_and_enter_opens_it(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1008,6 +1093,9 @@ fn autocomplete_arrows_select_a_suggestion_and_enter_opens_it(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn typing_in_the_address_bar_opens_autocomplete(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1031,6 +1119,9 @@ fn typing_in_the_address_bar_opens_autocomplete(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn pressing_enter_after_typing_search_navigates(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1055,6 +1146,9 @@ fn pressing_enter_after_typing_search_navigates(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn pressing_enter_with_popular_keyword_navigates_to_domain(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1080,6 +1174,9 @@ fn pressing_enter_with_popular_keyword_navigates_to_domain(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn focusing_web_content_moves_focus_off_the_address_bar(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1111,6 +1208,9 @@ fn focusing_web_content_moves_focus_off_the_address_bar(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn recent_searches_appear_when_the_address_bar_is_empty(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1139,6 +1239,9 @@ fn recent_searches_appear_when_the_address_bar_is_empty(cx: &mut gpui::TestAppCo
 
 #[test]
 fn test_all_assets_has_all_space_icons() {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     for &name in SPACE_ICONS {
         let icon_name = match name {
             "globe" => IconName::Globe,
@@ -1175,6 +1278,9 @@ fn test_all_assets_has_all_space_icons() {
 
 #[test]
 fn space_has_icon_and_isolated_identity() {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let space1 = Space::new("s1", "Personal", "compass", 0x9aa6ff);
     let space2 = Space::new("s2", "Work", "briefcase", 0x76d7b2);
     let space3 = Space::new("s3", "Fun", "gamepad", 0xf6ad55);
@@ -1186,6 +1292,9 @@ fn space_has_icon_and_isolated_identity() {
 
 #[test]
 fn default_space_has_no_hardcoded_secondary_spaces() {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (spaces, active) = create_default_space();
     assert_eq!(spaces.len(), 1);
     assert_eq!(spaces[0].id, "personal");
@@ -1198,6 +1307,9 @@ fn default_space_has_no_hardcoded_secondary_spaces() {
 
 #[test]
 fn svg_icon_palette_has_plenty_of_distinct_choices() {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     assert!(SPACE_ICONS.len() >= 20);
     let mut set = std::collections::HashSet::new();
     for &icon in SPACE_ICONS {
@@ -1207,6 +1319,9 @@ fn svg_icon_palette_has_plenty_of_distinct_choices() {
 
 #[test]
 fn space_creation_and_deletion_invariants() {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (mut spaces, mut active) = create_default_space();
     assert_eq!(spaces.len(), 1);
     assert_eq!(active, "personal");
@@ -1235,6 +1350,9 @@ fn space_creation_and_deletion_invariants() {
 
 #[test]
 fn sidebar_width_has_minimum_and_maximum_clamp() {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let requested_shrink = 50.0_f32;
     let clamped = requested_shrink.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
     assert_eq!(clamped, SIDEBAR_MIN_WIDTH);
@@ -1249,12 +1367,18 @@ fn sidebar_width_has_minimum_and_maximum_clamp() {
 
 #[test]
 fn sidebar_width_depends_only_on_manual_collapse_state() {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     assert_eq!(sidebar_width_for(false, 240.0), 240.0);
     assert_eq!(sidebar_width_for(true, 240.0), SIDEBAR_COLLAPSED_WIDTH);
 }
 
 #[gpui::test]
 fn theme_picker_grain_drag_and_outside_dismiss_use_rendered_bounds(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1405,6 +1529,9 @@ fn theme_picker_grain_drag_and_outside_dismiss_use_rendered_bounds(cx: &mut gpui
 
 #[gpui::test]
 fn closing_a_tab_in_non_active_space_succeeds_and_updates_model(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1435,12 +1562,18 @@ fn closing_a_tab_in_non_active_space_succeeds_and_updates_model(cx: &mut gpui::T
 
 #[test]
 fn take_close_requests_drains_queued_tabs() {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let engine = engine::Engine::new();
     assert!(engine.take_close_requests().is_empty());
 }
 
 #[gpui::test]
 fn open_popup_tab_shows_a_peek_overlay_instead_of_a_new_tab(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1462,6 +1595,9 @@ fn open_popup_tab_shows_a_peek_overlay_instead_of_a_new_tab(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn peek_promotes_to_a_live_tab_keeping_its_browser_id(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1488,6 +1624,9 @@ fn peek_promotes_to_a_live_tab_keeping_its_browser_id(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn closing_a_peek_removes_it_and_restores_the_active_tab(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1507,6 +1646,9 @@ fn closing_a_peek_removes_it_and_restores_the_active_tab(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn address_bar_select_all_then_paste_replaces_the_text(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (handle, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1536,6 +1678,9 @@ fn address_bar_select_all_then_paste_replaces_the_text(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn sign_in_popups_show_their_cef_window_in_the_peek_overlay(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1565,6 +1710,9 @@ fn sign_in_popups_show_their_cef_window_in_the_peek_overlay(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn page_closing_its_popup_window_only_dismisses_the_peek(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let (_, view) = cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1588,6 +1736,9 @@ fn page_closing_its_popup_window_only_dismisses_the_peek(cx: &mut gpui::TestAppC
 
 #[test]
 fn single_line_paste_drops_line_breaks_and_empty_clipboards() {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     assert_eq!(
         single_line_paste("https://example.com/a\n").as_deref(),
         Some("https://example.com/a")

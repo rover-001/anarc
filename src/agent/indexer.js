@@ -93,7 +93,18 @@
     if (tag === 'iframe') flags.push('iframe');
 
     if (type === 'password') flags.push('secret');
-    if (el.disabled || el.getAttribute('aria-disabled') === 'true') flags.push('disabled');
+    // SPAs such as LinkedIn leave aria-disabled="true" on an actionable button.
+    // Trust the native property when present; for ARIA-only widgets, require a
+    // visibly inert state before reporting disabled.
+    const nativeDisabled = 'disabled' in el ? el.disabled === true : false;
+    let ariaDisabled = el.getAttribute('aria-disabled') === 'true' && !('disabled' in el);
+    if (ariaDisabled) {
+      const s = window.getComputedStyle(el);
+      const inert = s.pointerEvents === 'none' || s.cursor === 'not-allowed' ||
+        (s.opacity !== '' && parseFloat(s.opacity) <= 0.6);
+      if (!inert) ariaDisabled = false;
+    }
+    if (nativeDisabled || ariaDisabled) flags.push('disabled');
     if (el.required || el.getAttribute('aria-required') === 'true') flags.push('req');
 
     const isInvalid = el.getAttribute('aria-invalid') === 'true' ||
@@ -199,7 +210,66 @@
     return '';
   }
 
+  // Chat/message bubbles are usually plain divs, not <article>. Detect a
+  // messaging surface by walking up from a visible composer and collecting
+  // message-shaped descendants near it. Feed cards elsewhere on the page are
+  // deliberately ignored.
+  const CHAT_SELECTORS = [
+    '[role="log"]',
+    '[data-message]',
+    '[data-message-author-role]',
+    '[data-testid*="message" i]',
+    '[class*="msg-s-" i]',
+    '[class*="message-bubble" i]',
+    '[class*="chat-message" i]',
+    '[class*="bubble" i]',
+    '[aria-live="polite"]',
+    '[role="listitem"][class*="message" i]'
+  ];
+  const STRONG_CHAT_SELECTORS = new Set([
+    '[role="log"]',
+    '[data-message]',
+    '[data-message-author-role]',
+    '[data-testid*="message" i]',
+    '[class*="msg-s-" i]',
+    '[class*="message-bubble" i]',
+    '[class*="chat-message" i]'
+  ]);
+
+  function visibleComposer() {
+    const nodes = document.querySelectorAll('[contenteditable="true"], textarea, [role="textbox"]');
+    for (let i = 0; i < nodes.length; i++) {
+      if (isVisible(nodes[i])) return nodes[i];
+    }
+    return null;
+  }
+
+  function chatMessages(composer) {
+    if (!composer) return [];
+    let scope = composer.parentElement;
+    for (let depth = 0; depth < 7 && scope; depth++, scope = scope.parentElement) {
+      for (const selector of CHAT_SELECTORS) {
+        const nodes = Array.from(scope.querySelectorAll(selector)).filter(n =>
+          isVisible(n) && n !== composer && !n.contains(composer) && n.innerText && n.innerText.trim()
+        );
+        if (nodes.length === 0) continue;
+        // Keep leaf-most matches so a wrapper and its children do not duplicate text.
+        const leaves = nodes.filter(n => !nodes.some(other => other !== n && other.contains(n)));
+        const text = leaves
+          .map(n => n.innerText.trim().replace(/\s+/g, ' '))
+          .filter(Boolean)
+          .slice(-200);
+        if (text.length >= 2 || (text.length === 1 && STRONG_CHAT_SELECTORS.has(selector))) {
+          return text;
+        }
+      }
+    }
+    return [];
+  }
+
   function lastMessage() {
+    const chat = chatMessages(visibleComposer());
+    if (chat.length) return chat.join('\n');
     return lastVisibleText('article, [role=article], [data-message], [data-message-author-role]')
       || lastVisibleText('main > div:last-child, [role=main] > div:last-child');
   }
@@ -271,6 +341,42 @@
     }
   };
 
+  // Read a single indexed element (by its DOM path) including descendants.
+  // `x`/`y` are the ref's recorded center, used to disambiguate identical paths.
+  window.__anarc_read_ref = function(path, maxChars, x, y) {
+    if (!path) return '';
+    let nodes = [];
+    try {
+      nodes = Array.from(document.querySelectorAll(path));
+    } catch (e) {
+      return '';
+    }
+    let best = null;
+    let bestDistance = Infinity;
+    for (const node of nodes) {
+      if (!isVisible(node)) continue;
+      const rect = node.getBoundingClientRect();
+      const dx = (rect.left + rect.width / 2) - (x || 0);
+      const dy = (rect.top + rect.height / 2) - (y || 0);
+      const distance = dx * dx + dy * dy;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = node;
+      }
+    }
+    if (!best) return '';
+    const clone = best.cloneNode(true);
+    const remove = clone.querySelectorAll('script, style, noscript, svg');
+    remove.forEach(n => n.remove());
+    let text = (clone.innerText || clone.textContent || '').trim();
+    text = text.replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n').trim();
+    if (!text) return '';
+    if (text.length > maxChars) {
+      text = text.slice(0, maxChars) + `\n… (trimmed to ${maxChars} chars)`;
+    }
+    return text;
+  };
+
   window.__anarc_read = function(mode, maxChars) {
     mode = mode || 'text';
     maxChars = maxChars || 4000;
@@ -310,25 +416,31 @@
       return lines.join('\n');
     }
 
-    // Default 'text' mode: readability-style extraction
-    const articles = document.querySelectorAll('article, [data-message-author-role="assistant"], [data-message-author-role="user"]');
+    // Default 'text' mode: chat bubbles first when a messaging surface is
+    // detected, otherwise the existing readability-style extraction.
+    const chat = chatMessages(visibleComposer());
     let text = '';
-    if (articles.length > 0) {
-      const parts = [];
-      articles.forEach(art => {
-        const clone = art.cloneNode(true);
+    if (chat.length) {
+      text = chat.join('\n');
+    } else {
+      const articles = document.querySelectorAll('article, [data-message-author-role="assistant"], [data-message-author-role="user"]');
+      if (articles.length > 0) {
+        const parts = [];
+        articles.forEach(art => {
+          const clone = art.cloneNode(true);
+          const remove = clone.querySelectorAll('script, style, noscript, svg, nav, footer, header, button');
+          remove.forEach(n => n.remove());
+          const t = (clone.innerText || clone.textContent || '').trim();
+          if (t) parts.push(t);
+        });
+        text = parts.join('\n\n---\n\n');
+      } else {
+        const main = document.querySelector('main, [role="main"]') || document.body;
+        const clone = main.cloneNode(true);
         const remove = clone.querySelectorAll('script, style, noscript, svg, nav, footer, header, button');
         remove.forEach(n => n.remove());
-        const t = (clone.innerText || clone.textContent || '').trim();
-        if (t) parts.push(t);
-      });
-      text = parts.join('\n\n---\n\n');
-    } else {
-      const main = document.querySelector('main, [role="main"]') || document.body;
-      const clone = main.cloneNode(true);
-      const remove = clone.querySelectorAll('script, style, noscript, svg, nav, footer, header, button');
-      remove.forEach(n => n.remove());
-      text = clone.innerText || clone.textContent || '';
+        text = clone.innerText || clone.textContent || '';
+      }
     }
     text = text.replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n').trim();
     if (mode === 'last') {

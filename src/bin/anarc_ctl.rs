@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, Write};
 #[cfg(target_family = "unix")]
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 #[cfg(unix)]
 #[allow(dead_code)]
@@ -45,6 +46,8 @@ fn print_usage() {
            tabs                         List open tabs and spaces\n\
            tab <action> [target]        Tab control: pin, unpin, fav, unfav, close, new, select\n\
            doctor                       Diagnose agent control failures\n\
+           version                      Show build version/time and source drift warning\n\
+           start                        Launch Anarc detached and wait for its socket\n\
            do <ops>                     Execute action DSL (click, type, key, wait)\n\
            shot [ref|view]              Save a PNG and print its path\n\
            wait stable [ms]             Wait for the latest text to stop growing\n\
@@ -67,6 +70,50 @@ fn print_usage() {
     );
 }
 
+/// Launch Anarc without inheriting harness stdio. Spawn output is captured so
+/// raw unit errors (for example "Unit anarc.socket not found") never leak to agents.
+#[cfg(unix)]
+fn launch_anarc() -> bool {
+    let run = |program: &str, args: &[&str]| {
+        std::process::Command::new(program)
+            .args(args)
+            .output()
+            .is_ok_and(|output| output.status.success())
+    };
+    // Socket activation is preferred: the browser starts on first connection.
+    let socket_ready = run("systemctl", &["--user", "start", "anarc.socket"]);
+    if run("systemctl", &["--user", "start", "anarc.service"]) {
+        return true;
+    }
+    let launcher = std::env::var_os("ANARC_LAUNCHER")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/home/rover/.local/bin/anarc"));
+    if !launcher.exists() {
+        return socket_ready;
+    }
+    let launcher = launcher.to_string_lossy().to_string();
+    let unit = format!("anarc-ctl-{}", std::process::id());
+    if run("systemd-run", &["--user", "--unit", &unit, &launcher]) {
+        return true;
+    }
+    run("omarchy-launch-or-focus", &["anarc", &launcher]) || socket_ready
+}
+
+#[cfg(not(unix))]
+fn launch_anarc() -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn socket_ready(target: &SocketTarget) -> bool {
+    UnixStream::connect(target.path()).is_ok()
+}
+
+#[cfg(not(unix))]
+fn socket_ready(_target: &SocketTarget) -> bool {
+    false
+}
+
 #[cfg(unix)]
 fn connect_socket(
     target: &SocketTarget,
@@ -79,9 +126,9 @@ fn connect_socket(
     let tries = if target.explicit.is_some() {
         1
     } else if mcp {
-        5
+        10
     } else {
-        3
+        6
     };
     for attempt in 1..=tries {
         let discovery = target.resolve();
@@ -104,18 +151,7 @@ fn connect_socket(
             && matches!(kind, ErrorKind::NotFound | ErrorKind::ConnectionRefused)
             && attempt == 1
         {
-            let _ = std::process::Command::new("systemctl")
-                .args(["--user", "start", "anarc.socket"])
-                .status();
-            let started_unit = std::process::Command::new("systemctl")
-                .args(["--user", "start", "anarc.service"])
-                .status()
-                .is_ok_and(|s| s.success());
-            if !started_unit && std::path::Path::new("/home/rover/.local/bin/anarc").exists() {
-                let _ = std::process::Command::new("systemd-run")
-                    .args(["--user", "--unit=anarc", "/home/rover/.local/bin/anarc"])
-                    .status();
-            }
+            launch_anarc();
             std::thread::sleep(Duration::from_millis(600));
             continue;
         }
@@ -137,6 +173,10 @@ fn connect_socket(
             ErrorKind::ConnectionRefused => {
                 use paths::agent_socket::{lock_owner, remove_dead_socket};
                 if lock_owner(&path, false).is_ok_and(|owner| remove_dead_socket(&path, &owner)) {
+                    if attempt < tries {
+                        std::thread::sleep(Duration::from_millis(300));
+                        continue;
+                    }
                     "stale socket removed, retry. use: start Anarc and run anarc-ctl doctor"
                 } else {
                     "connection refused. use: check the Anarc instance and run anarc-ctl doctor"
@@ -759,6 +799,135 @@ fn handle_install(harness: Option<&str>, socket: &SocketTarget) {
     }
 }
 
+// --- Build/source drift diagnostics ---------------------------------------
+
+/// Format a SystemTime as a compact UTC timestamp without a date/time crate.
+fn format_utc(time: SystemTime) -> String {
+    let secs = time
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    let days = secs.div_euclid(86_400);
+    let sod = secs.rem_euclid(86_400);
+    // Howard Hinnant's civil_from_days algorithm.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC",
+        sod / 3600,
+        (sod % 3600) / 60,
+        sod % 60
+    )
+}
+
+/// Prefer git-tracked sources; fall back to a src/**/*.rs walk if git is absent.
+fn source_files(root: &std::path::Path) -> Vec<PathBuf> {
+    let tracked = std::process::Command::new("git")
+        .args([
+            "ls-files",
+            "-z",
+            "--",
+            "src",
+            "Cargo.toml",
+            "Cargo.lock",
+            "install.sh",
+            "build.rs",
+        ])
+        .current_dir(root)
+        .output();
+    if let Ok(output) = tracked {
+        if output.status.success() {
+            return output
+                .stdout
+                .split(|&byte| byte == 0)
+                .filter(|name| !name.is_empty())
+                .map(|name| root.join(String::from_utf8_lossy(name).as_ref() as &str))
+                .collect();
+        }
+    }
+    let mut files = Vec::new();
+    for name in ["Cargo.toml", "Cargo.lock", "install.sh", "build.rs"] {
+        let path = root.join(name);
+        if path.is_file() {
+            files.push(path);
+        }
+    }
+    fn walk(dir: &std::path::Path, files: &mut Vec<PathBuf>) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, files);
+                } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+                    files.push(path);
+                }
+            }
+        }
+    }
+    walk(&root.join("src"), &mut files);
+    files
+}
+
+/// Compact build identity plus a warning when tracked sources postdate the binary.
+fn handle_version() {
+    let exe = std::env::current_exe().ok();
+    let built = exe
+        .as_ref()
+        .and_then(|path| path.metadata().ok())
+        .and_then(|meta| meta.modified().ok());
+    println!("anarc-ctl {}", env!("CARGO_PKG_VERSION"));
+    if let Some(path) = &exe {
+        println!("binary: {}", path.display());
+    }
+    match built {
+        Some(time) => println!("built:  {}", format_utc(time)),
+        None => println!("built:  unknown"),
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    println!("source: {}", root.display());
+    if !root.join("Cargo.toml").is_file() {
+        println!("status: source tree unavailable; drift check skipped");
+        return;
+    }
+    let Some(built) = built else {
+        println!("status: binary mtime unavailable; drift check skipped");
+        return;
+    };
+    let mut newer: Vec<PathBuf> = source_files(root)
+        .into_iter()
+        .filter(|path| {
+            path.metadata()
+                .and_then(|meta| meta.modified())
+                .is_ok_and(|modified| modified > built)
+        })
+        .collect();
+    if newer.is_empty() {
+        println!("status: up to date (no source newer than binary)");
+        return;
+    }
+    newer.sort();
+    let total = newer.len();
+    let shown: Vec<String> = newer
+        .iter()
+        .take(3)
+        .map(|path| path.strip_prefix(root).unwrap_or(path).display().to_string())
+        .collect();
+    println!("WARNING: {total} tracked source file(s) newer than binary");
+    println!("  {}", shown.join(", "));
+    if total > shown.len() {
+        println!("  ... +{} more", total - shown.len());
+    }
+    println!("  rebuild: cargo build --release && ./install.sh");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
@@ -858,6 +1027,32 @@ fn main() {
 
     if cmd == "install" {
         handle_install(explicit_harness.as_deref(), &socket);
+        return;
+    }
+
+    if cmd == "version" {
+        handle_version();
+        return;
+    }
+
+    if cmd == "start" {
+        let launched = launch_anarc();
+        let mut ready = socket_ready(&socket);
+        if !ready && launched {
+            for _ in 0..20 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                if socket_ready(&socket) {
+                    ready = true;
+                    break;
+                }
+            }
+        }
+        if ready {
+            println!("anarc started: {}", socket.path().display());
+        } else {
+            eprintln!("unable to start anarc. use: anarc-ctl doctor");
+            std::process::exit(1);
+        }
         return;
     }
 

@@ -239,6 +239,9 @@ pub(crate) mod agent_socket {
         fn kill(pid: i32, signal: i32) -> i32;
     }
 
+    // `resolved` and `environment` are consumed by the anarc-ctl binary, which
+    // includes this file via #[path]; the browser binary only needs `bind`.
+    #[allow(dead_code)]
     pub(crate) struct Discovery {
         pub(crate) resolved: PathBuf,
         pub(crate) bind: PathBuf,
