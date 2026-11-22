@@ -502,3 +502,7 @@ Fixed all 6 Anarc MCP/Discord automation bottlenecks in working tree. (1) Cold-s
 ## Session 2026-11-22T04:58:34.488564527+00:00
 
 Live Discord verification of the 6 Anarc MCP fixes: logged into Discord in Anarc, opened Cooked Society > #₊‿︵lounge, found Slate editor i3, ran anarc-ctl do i3="hi"; key Enter -> ok 2 with new message elements in diff. Confirmed via read page and screenshot that ! Rover [COOK] posted "hi" at 10:28 AM and editor cleared. Exact previously failing scenario now works on real Discord/Slate.
+
+## Session 2026-11-22T04:59:42.746319445+00:00
+
+Committed all 14 modified tracked files as 5105a60 fix(agent): close six MCP automation bottlenecks and verify on Discord, after secret scan (no credentials found). Stella vetoed push per rule push; user explicitly overrode with justification "share verified fixes" (remote backup + collaborator availability). Pushed a09ca27..5105a60 to origin/feat/agent-control; working tree clean and branch in sync with remote.
