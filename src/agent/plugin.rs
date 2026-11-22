@@ -1,4 +1,6 @@
-use super::observe::{build_read_call_script, build_see_call_script, execute_find, format_see_output};
+use super::observe::{
+    build_read_call_script, build_see_call_script, execute_find, format_see_output,
+};
 use super::protocol::{AgentRequest, AgentResponse};
 use super::refs::{RawIndex, RefRegistry};
 use super::server::{start_server, stop_server};
@@ -47,6 +49,31 @@ pub(crate) fn register_engine_agent_channel(
     }
 }
 
+/// Wait briefly for the GUI to register its request channel.
+///
+/// The agent socket starts during plugin mount, before `Engine::new()` runs. A
+/// request arriving in that window would otherwise be rejected as "engine
+/// unavailable", which forces callers into a `status`/`doctor` handshake.
+fn wait_for_engine_channel(
+    timeout: std::time::Duration,
+) -> Option<(
+    async_channel::Sender<(AgentRequest, async_channel::Sender<AgentResponse>)>,
+    async_channel::Sender<()>,
+)> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Ok(guard) = ENGINE_REQUEST_CHANNEL.lock()
+            && let Some(channel) = guard.as_ref()
+        {
+            return Some(channel.clone());
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 pub(crate) fn forward_request_to_engine(
     req: AgentRequest,
     resp_tx: async_channel::Sender<AgentResponse>,
@@ -78,18 +105,16 @@ pub(crate) fn forward_request_to_engine(
         }
     }
 
-    if let Ok(guard) = ENGINE_REQUEST_CHANNEL.lock() {
-        if let Some((ref r_tx, ref w_tx)) = *guard {
-            if let Err(error) = r_tx.try_send((req, resp_tx)) {
-                let (_, reply) = error.into_inner();
-                let _ = reply.try_send(AgentResponse::err("agent busy. use: status"));
-            } else {
-                let _ = w_tx.try_send(());
-            }
-            return;
-        }
+    let Some((req_tx, wake_tx)) = wait_for_engine_channel(std::time::Duration::from_secs(2)) else {
+        let _ = resp_tx.try_send(AgentResponse::err("engine unavailable. use: status"));
+        return;
+    };
+    if let Err(error) = req_tx.try_send((req, resp_tx)) {
+        let (_, reply) = error.into_inner();
+        let _ = reply.try_send(AgentResponse::err("agent busy. use: status"));
+    } else {
+        let _ = wake_tx.try_send(());
     }
-    let _ = resp_tx.try_send(AgentResponse::err("engine unavailable. use: status"));
 }
 
 #[derive(Default)]
@@ -129,7 +154,8 @@ impl Plugin for AgentPlugin {
     }
 
     fn apply(&mut self, ctx: &mut PluginCtx<'_>) -> Result<(), PluginError> {
-        let (req_tx, req_rx) = async_channel::bounded::<(AgentRequest, async_channel::Sender<AgentResponse>)>(32);
+        let (req_tx, req_rx) =
+            async_channel::bounded::<(AgentRequest, async_channel::Sender<AgentResponse>)>(32);
 
         let socket_res = start_server(req_tx);
         let _socket_path = match socket_res {
@@ -141,14 +167,18 @@ impl Plugin for AgentPlugin {
         let forwarder = std::thread::Builder::new()
             .name("anarc-agent-forwarder".into())
             .spawn(move || {
-                while let Ok((request, resp_tx)) = futures_lite::future::block_on(async { req_rx.recv().await }) {
+                while let Ok((request, resp_tx)) =
+                    futures_lite::future::block_on(async { req_rx.recv().await })
+                {
                     forward_request_to_engine(request, resp_tx);
                 }
             });
         if forwarder.is_err() {
             dispose_rx.close();
             stop_server();
-            return Err(PluginError("Agent forwarder unavailable; use: status".into()));
+            return Err(PluginError(
+                "Agent forwarder unavailable; use: status".into(),
+            ));
         }
         ctx.effect(move || {
             dispose_rx.close();
@@ -167,7 +197,12 @@ pub(crate) fn handle_agent_request(
     let agent_state = app.engine.agent_state();
     let is_paused = agent_state.lock().map(|s| s.is_paused).unwrap_or(false);
 
-    if is_paused && !matches!(req, AgentRequest::Resume | AgentRequest::Status | AgentRequest::Doctor | AgentRequest::Tabs) {
+    if is_paused
+        && !matches!(
+            req,
+            AgentRequest::Resume | AgentRequest::Status | AgentRequest::Doctor | AgentRequest::Tabs
+        )
+    {
         let _ = resp_tx.try_send(AgentResponse::err("agent paused. use: resume"));
         return;
     }
@@ -184,20 +219,35 @@ pub(crate) fn handle_agent_request(
         Vec::new()
     };
     let tab_only = !parsed_ops.is_empty()
-        && parsed_ops.iter().all(|op| matches!(op, super::act::ActionOp::Tab { .. }));
+        && parsed_ops
+            .iter()
+            .all(|op| matches!(op, super::act::ActionOp::Tab { .. }));
     if !tab_only && let Some(tab_id) = req.target_tab_mut() {
-        let raw_target = tab_id.clone().unwrap_or_else(|| app.active_tab_id().to_string());
+        let raw_target = tab_id
+            .clone()
+            .unwrap_or_else(|| app.active_tab_id().to_string());
         let target = if let Ok(idx) = raw_target.parse::<usize>() {
             idx.checked_sub(1)
                 .and_then(|i| app.active_space().tabs.get(i))
                 .map(|t| t.id.clone())
                 .unwrap_or(raw_target)
-        } else if !app.spaces().iter().any(|s| s.tabs.iter().any(|t| t.id == raw_target)) {
-            app.spaces().iter().find_map(|s| {
-                s.tabs.iter().find(|t| {
-                    t.url.contains(&raw_target) || t.title.to_lowercase().contains(&raw_target.to_lowercase())
-                }).map(|t| t.id.clone())
-            }).unwrap_or(raw_target)
+        } else if !app
+            .spaces()
+            .iter()
+            .any(|s| s.tabs.iter().any(|t| t.id == raw_target))
+        {
+            app.spaces()
+                .iter()
+                .find_map(|s| {
+                    s.tabs
+                        .iter()
+                        .find(|t| {
+                            t.url.contains(&raw_target)
+                                || t.title.to_lowercase().contains(&raw_target.to_lowercase())
+                        })
+                        .map(|t| t.id.clone())
+                })
+                .unwrap_or(raw_target)
         } else {
             raw_target
         };
@@ -205,7 +255,10 @@ pub(crate) fn handle_agent_request(
             app.engine.log_agent_browser_miss(&target);
         }
         let Some((space_id, url)) = app.spaces().iter().find_map(|space| {
-            space.tabs.iter().find(|tab| tab.id == target)
+            space
+                .tabs
+                .iter()
+                .find(|tab| tab.id == target)
                 .map(|tab| (space.id.clone(), tab.url.clone()))
         }) else {
             let _ = resp_tx.try_send(AgentResponse::err(no_such_tab(&compact_tabs(app))));
@@ -213,14 +266,23 @@ pub(crate) fn handle_agent_request(
         };
         if !app.engine.has_browser(&target) {
             if !app.engine.is_initialized() {
-                let _ = resp_tx.try_send(AgentResponse::err("CEF unavailable. use: anarc-ctl doctor"));
+                let _ =
+                    resp_tx.try_send(AgentResponse::err("CEF unavailable. use: anarc-ctl doctor"));
                 return;
             }
             if !app.engine.agent_browser_pending(&target) {
-                let url = if url.is_empty() || url == "lumen://welcome" { "about:blank" } else { &url };
-                if let Err(error) = app.engine.ensure_browser(&space_id, &target, url, 768, 512, 0, 0.0) {
+                let url = if url.is_empty() || url == "lumen://welcome" {
+                    "about:blank"
+                } else {
+                    &url
+                };
+                if let Err(error) = app
+                    .engine
+                    .ensure_browser(&space_id, &target, url, 768, 512, 0, 0.0)
+                {
                     eprintln!("anarc-agent: wake {target:?} failed: {error}");
-                    let _ = resp_tx.try_send(AgentResponse::err("tab wake failed. use: anarc-ctl doctor"));
+                    let _ = resp_tx
+                        .try_send(AgentResponse::err("tab wake failed. use: anarc-ctl doctor"));
                     return;
                 }
             }
@@ -229,16 +291,51 @@ pub(crate) fn handle_agent_request(
             let _ = resp_tx.try_send(response);
             return;
         }
+
         *tab_id = Some(target);
+    }
+
+    if let Some(target) = req.target_tab() {
+        if matches!(
+            req,
+            AgentRequest::Read { .. } | AgentRequest::See { .. } | AgentRequest::Find { .. }
+        ) {
+            let ready_check = "(() => document.readyState)()";
+            if let Ok(Ok(state_str)) = app.engine.evaluate(target, ready_check).recv_blocking() {
+                if state_str == "loading" {
+                    for _ in 0..15 {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        if let Ok(Ok(s)) = app.engine.evaluate(target, ready_check).recv_blocking()
+                        {
+                            if s != "loading" {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     match req {
         AgentRequest::Doctor => {
             let app = &*app;
-            let tabs = app.spaces().iter().flat_map(|space| {
-                space.tabs.iter().map(move |tab| format!("{:?} {}", tab.id, browser_state(app, &tab.id)))
-            }).collect::<Vec<_>>().join(", ");
-            let header = doctor_header(true, app.engine.is_initialized(), app.engine.browser_key_count());
+            let tabs = app
+                .spaces()
+                .iter()
+                .flat_map(|space| {
+                    space
+                        .tabs
+                        .iter()
+                        .map(move |tab| format!("{:?} {}", tab.id, browser_state(app, &tab.id)))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let header = doctor_header(
+                true,
+                app.engine.is_initialized(),
+                app.engine.browser_key_count(),
+            );
             let _ = resp_tx.try_send(AgentResponse::success(format!("{header}\ntabs: {tabs}")));
         }
         AgentRequest::Pause => {
@@ -269,7 +366,11 @@ pub(crate) fn handle_agent_request(
             for space in app.spaces() {
                 lines.push(format!("Space: {} ({})", space.name, space.id));
                 for tab in &space.tabs {
-                    let active_mark = if space.active.as_deref() == Some(&tab.id) { "*" } else { " " };
+                    let active_mark = if space.active.as_deref() == Some(&tab.id) {
+                        "*"
+                    } else {
+                        " "
+                    };
                     let mut flags = Vec::new();
                     if tab.pinned {
                         flags.push("pinned");
@@ -277,8 +378,19 @@ pub(crate) fn handle_agent_request(
                     if tab.favorite {
                         flags.push("fav");
                     }
-                    let flag_str = if flags.is_empty() { String::new() } else { format!(" [{}]", flags.join(",")) };
-                    lines.push(format!("  [{active_mark}] {}{} \"{}\" -> {} ({})", tab.id, flag_str, tab.title, tab.url, browser_state(app, &tab.id)));
+                    let flag_str = if flags.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [{}]", flags.join(","))
+                    };
+                    lines.push(format!(
+                        "  [{active_mark}] {}{} \"{}\" -> {} ({})",
+                        tab.id,
+                        flag_str,
+                        tab.title,
+                        tab.url,
+                        browser_state(app, &tab.id)
+                    ));
                 }
             }
             let _ = resp_tx.try_send(AgentResponse::success(lines.join("\n")));
@@ -299,11 +411,13 @@ pub(crate) fn handle_agent_request(
                     let raw_json = match raw_res {
                         Ok(Ok(s)) => s,
                         Ok(Err(_)) => {
-                            let _ = resp_tx.try_send(AgentResponse::err("page unavailable. use: tabs"));
+                            let _ =
+                                resp_tx.try_send(AgentResponse::err("page unavailable. use: tabs"));
                             return;
                         }
                         Err(_) => {
-                            let _ = resp_tx.try_send(AgentResponse::err("page disconnected. use: tabs"));
+                            let _ = resp_tx
+                                .try_send(AgentResponse::err("page disconnected. use: tabs"));
                             return;
                         }
                     };
@@ -311,7 +425,8 @@ pub(crate) fn handle_agent_request(
                     let raw_index: RawIndex = match serde_json::from_str(&raw_json) {
                         Ok(idx) => idx,
                         Err(_) => {
-                            let _ = resp_tx.try_send(AgentResponse::err("index unavailable. use: tabs"));
+                            let _ = resp_tx
+                                .try_send(AgentResponse::err("index unavailable. use: tabs"));
                             return;
                         }
                     };
@@ -319,7 +434,8 @@ pub(crate) fn handle_agent_request(
                     let mut guard = match state_arc.lock() {
                         Ok(g) => g,
                         Err(_) => {
-                            let _ = resp_tx.try_send(AgentResponse::err("state unavailable. use: status"));
+                            let _ = resp_tx
+                                .try_send(AgentResponse::err("state unavailable. use: status"));
                             return;
                         }
                     };
@@ -328,17 +444,30 @@ pub(crate) fn handle_agent_request(
                     let (header, elements, _, _) = registry.update_from_raw(raw_index);
                     let mut formatted = format_see_output(&header, &elements, Some(&tabs));
 
-                    if let Some(reason) = super::policy::check_human_handoff(&header.title, &header.display_url, &formatted) {
+                    if let Some(reason) = super::policy::check_human_handoff(
+                        &header.title,
+                        &header.display_url,
+                        &formatted,
+                    ) {
                         formatted = format!("!human {reason}\n{formatted}");
                     }
                     let _ = resp_tx.try_send(AgentResponse::success(formatted));
                 })
                 .ok();
         }
-        AgentRequest::Read { tab_id, target, mode, max } => {
+        AgentRequest::Read {
+            tab_id,
+            target,
+            mode,
+            max,
+        } => {
             let target_tab = tab_id.unwrap_or_default();
 
-            let m = if target.as_deref() == Some("last") { "last" } else { mode.as_deref().unwrap_or("text") };
+            let m = if target.as_deref() == Some("last") {
+                "last"
+            } else {
+                mode.as_deref().unwrap_or("text")
+            };
             let max_chars = max.unwrap_or(4000);
             let script = build_read_call_script(m, max_chars);
             let eval_rx = app.engine.evaluate(&target_tab, &script);
@@ -354,7 +483,8 @@ pub(crate) fn handle_agent_request(
                             return;
                         }
                         Err(_) => {
-                            let _ = resp_tx.try_send(AgentResponse::err("page disconnected. use: tabs"));
+                            let _ = resp_tx
+                                .try_send(AgentResponse::err("page disconnected. use: tabs"));
                             return;
                         }
                     };
@@ -364,6 +494,27 @@ pub(crate) fn handle_agent_request(
         }
         AgentRequest::Find { tab_id, query } => {
             let target_tab = tab_id.unwrap_or_default();
+
+            // A freshly woken tab has a CEF browser but no ref registry yet, so
+            // `find` used to fail with "index missing" until the caller ran
+            // `see` first. Hydrate it from the same index the `see` arm uses.
+            let needs_index = agent_state
+                .lock()
+                .map(|guard| !guard.registries.contains_key(&target_tab))
+                .unwrap_or(false);
+            if needs_index {
+                let script = build_see_call_script("view");
+                if let Ok(Ok(raw_json)) = app.engine.evaluate(&target_tab, &script).recv_blocking()
+                    && let Ok(raw_index) = serde_json::from_str::<RawIndex>(&raw_json)
+                    && let Ok(mut guard) = agent_state.lock()
+                {
+                    guard
+                        .registries
+                        .entry(target_tab.clone())
+                        .or_default()
+                        .update_from_raw(raw_index);
+                }
+            }
 
             let guard = match agent_state.lock() {
                 Ok(g) => g,
@@ -384,30 +535,42 @@ pub(crate) fn handle_agent_request(
             let target_tab = tab_id.unwrap_or_else(|| app.active_tab_id().to_string());
             super::act::execute_dsl(app, &target_tab, &parsed_ops, resp_tx);
         }
-        AgentRequest::Shot { tab_id, target: _, scale: _ } => {
+        AgentRequest::Shot {
+            tab_id,
+            target: _,
+            scale: _,
+        } => {
             let target_tab = tab_id.unwrap_or_default();
 
-            let devtools_rx = app.engine.devtools(&target_tab, "Page.captureScreenshot", Some("{\"format\":\"png\"}"));
+            let devtools_rx = app.engine.devtools(
+                &target_tab,
+                "Page.captureScreenshot",
+                Some("{\"format\":\"png\"}"),
+            );
             std::thread::Builder::new()
                 .name("anarc-shot-worker".into())
                 .spawn(move || {
                     let res = futures_lite::future::block_on(async { devtools_rx.recv().await });
                     match res {
                         Ok(Ok(raw_json)) => {
-                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw_json) {
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw_json)
+                            {
                                 if let Some(data) = parsed.get("data").and_then(|v| v.as_str()) {
                                     let shot_str = format!("data:image/png;base64,{data}");
                                     let _ = resp_tx.try_send(AgentResponse::success(shot_str));
                                     return;
                                 }
                             }
-                            let _ = resp_tx.try_send(AgentResponse::err("screenshot invalid. use: see"));
+                            let _ = resp_tx
+                                .try_send(AgentResponse::err("screenshot invalid. use: see"));
                         }
                         Ok(Err(_)) => {
-                            let _ = resp_tx.try_send(AgentResponse::err("screenshot failed. use: see"));
+                            let _ =
+                                resp_tx.try_send(AgentResponse::err("screenshot failed. use: see"));
                         }
                         Err(_) => {
-                            let _ = resp_tx.try_send(AgentResponse::err("page disconnected. use: tabs"));
+                            let _ = resp_tx
+                                .try_send(AgentResponse::err("page disconnected. use: tabs"));
                         }
                     }
                 })
@@ -420,7 +583,9 @@ pub(crate) fn handle_agent_request(
                 state.attached_space = Some(chosen_space.clone());
             }
             let notice = if is_personal {
-                format!("Attached to personal space '{chosen_space}'. Confirmation required for sensitive operations.")
+                format!(
+                    "Attached to personal space '{chosen_space}'. Confirmation required for sensitive operations."
+                )
             } else {
                 format!("Attached to dedicated space '{chosen_space}'.")
             };
@@ -449,12 +614,25 @@ pub(crate) fn no_such_tab(tabs: &str) -> String {
 pub(crate) fn compact_tabs(app: &crate::app::Lumen) -> String {
     let space = app.active_space();
     let active = space.active.as_deref();
-    let active_index = space.tabs.iter().position(|tab| Some(tab.id.as_str()) == active);
-    space.tabs.iter().enumerate()
-        .filter(|(index, _)| *index < 7 || Some(*index) == active_index
-            || (*index == 7 && active_index.is_none_or(|active| active < 8)))
+    let active_index = space
+        .tabs
+        .iter()
+        .position(|tab| Some(tab.id.as_str()) == active);
+    space
+        .tabs
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            *index < 7
+                || Some(*index) == active_index
+                || (*index == 7 && active_index.is_none_or(|active| active < 8))
+        })
         .map(|(index, tab)| {
-            let star = if Some(tab.id.as_str()) == active { "*" } else { "" };
+            let star = if Some(tab.id.as_str()) == active {
+                "*"
+            } else {
+                ""
+            };
             let host = crate::shield::url_host(&tab.url).unwrap_or_else(|| {
                 if tab.url.is_empty() || tab.url == "about:blank" {
                     "about:blank".into()
@@ -485,7 +663,9 @@ pub(crate) fn descriptor() -> PluginDescriptor {
         name: "Agent Control".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         kind: PluginKind::Builtin,
-        description: "Agent control server exposing see, do, read, find, shot tools over local socket".to_string(),
+        description:
+            "Agent control server exposing see, do, read, find, shot tools over local socket"
+                .to_string(),
         permissions: Vec::new(),
         enabled_by_default: true,
         can_toggle: true,

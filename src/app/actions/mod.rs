@@ -578,6 +578,9 @@ impl Lumen {
         self.peek_focused = false;
         self.show_suggestions = false;
         self.selected_suggestion = None;
+        // A stale edit flag would route the next Return to address navigation
+        // even after GPUI focus moved into the CEF canvas.
+        self.address_editing = false;
         self.close_app_page();
         self.plugins_menu_open = false;
         self.tab_context_menu = None;
@@ -682,7 +685,8 @@ pub(crate) fn ensure_live_share_daemon_running() {
     #[cfg(not(test))]
     {
         if let Ok(addr) = "127.0.0.1:7433".parse::<std::net::SocketAddr>()
-            && std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok()
+            && std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50))
+                .is_ok()
         {
             return;
         }
@@ -693,10 +697,21 @@ pub(crate) fn ensure_live_share_daemon_running() {
             Some(crate::paths::data_dir().join("plugins/live-share/daemon.py")),
             Some(std::path::PathBuf::from("plugins/live-share/daemon.py")),
             exe_dir.map(|p| p.join("plugins/live-share/daemon.py")),
-            exe_dir.and_then(|p| p.parent()).map(|p| p.join("plugins/live-share/daemon.py")),
-            exe_dir.and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.join("plugins/live-share/daemon.py")),
-            exe_dir.and_then(|p| p.parent()).and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.join("plugins/live-share/daemon.py")),
-            Some(std::path::PathBuf::from("/home/rover/Projects/kreon/anarc/plugins/live-share/daemon.py")),
+            exe_dir
+                .and_then(|p| p.parent())
+                .map(|p| p.join("plugins/live-share/daemon.py")),
+            exe_dir
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+                .map(|p| p.join("plugins/live-share/daemon.py")),
+            exe_dir
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+                .map(|p| p.join("plugins/live-share/daemon.py")),
+            Some(std::path::PathBuf::from(
+                "/home/rover/Projects/kreon/anarc/plugins/live-share/daemon.py",
+            )),
         ];
         for path in candidates.into_iter().flatten() {
             if path.is_file() {

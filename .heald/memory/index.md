@@ -6,6 +6,7 @@ title: "Memory Index"
 
 | Title | Type | Date | Tags | Summary |
 | :--- | :--- | :--- | :--- | :--- |
+| **Anarc MCP and Agent DSL Overhaul for High-Reliability Automation** (`anarc-mcp-and-agent-dsl-overhaul-for-high-reliability-automation.md`) | `decision` | 2026-11-21 | - | Resolved all 6 task-by-task agent bottlenecks: 1) Added d... |
 | **Consolidated: UI System & Theme** (`consolidated-ui-system-and-theme.md`) | `decision` | 2026-11-21 | consolidated, ui-system-&-theme | # Consolidated: UI System & Theme |
 | **Consolidated: Content & Media Creator** (`consolidated-content-and-media-creator.md`) | `decision` | 2026-11-21 | consolidated, content-&-media-creator | # Consolidated: Content & Media Creator |
 | **WhatsApp automated interaction: opened WhatsApp Web and sent hello to Peble** (`whatsapp-automated-interaction-opened-whatsapp-web-and-sent-hello-to-peble.md`) | `decision` | 2026-11-21 | - | Navigated to WhatsApp Web in Anarc (Tab 5), searched for ... |

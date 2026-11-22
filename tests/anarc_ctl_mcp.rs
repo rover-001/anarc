@@ -131,7 +131,7 @@ fn scrubbed_mcp_finds_home_fallback() {
 }
 
 #[test]
-fn scrubbed_mcp_reconnects_after_failure_and_retries_during_call() {
+fn explicit_socket_fails_fast_and_retries_on_next_call() {
     let mut mcp = Mcp::start(true);
     mcp.call(1);
     let reply = mcp.reply();
@@ -145,20 +145,13 @@ fn scrubbed_mcp_reconnects_after_failure_and_retries_during_call() {
 
     let mut logs = BufReader::new(mcp.child.stderr.take().unwrap());
     let mut line = String::new();
-    for attempt in 1..=3 {
-        line.clear();
-        logs.read_line(&mut line).unwrap();
-        assert!(line.contains(&format!("connect {attempt}/3")), "{line}");
-    }
-
-    mcp.call(2);
+    // An explicit --socket is a deliberate target, so it fails fast on one attempt.
     line.clear();
     logs.read_line(&mut line).unwrap();
-    assert!(
-        line.contains("connect 1/3") && line.contains("Err"),
-        "{line}"
-    );
+    assert!(line.contains("connect 1/1"), "{line}");
+
     let stub = mcp.bind_stub();
+    mcp.call(2);
     assert_stub_reply(mcp.reply(), 2);
     stub.join().unwrap();
 }

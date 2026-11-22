@@ -149,6 +149,7 @@ impl Lumen {
         self.peek_focused = true;
         self.show_suggestions = false;
         self.selected_suggestion = None;
+        self.address_editing = false;
         self.close_app_page();
         self.plugins_menu_open = false;
         self.tab_context_menu = None;

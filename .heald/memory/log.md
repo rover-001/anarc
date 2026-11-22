@@ -490,3 +490,15 @@ Opened YouTube in Anarc browser, pinned tab to pinned tabs, and fetched homepage
 ## Session 2026-11-21T14:16:07.260634232+00:00
 
 Renamed lumen to anarc across MCP configs, git worktrees (anarc-landing-page), plugin SDK (anarc-plugin-sdk), filters, install scripts, and removed legacy lumen tools and symlinks.
+
+## Session 2026-11-21T16:37:59.859721949+00:00
+
+Implemented all 6 Anarc MCP and Agent DSL architectural enhancements: dedicated upload tool, full keyboard modifier chords/keydown/keyup, schema-aligned navigate and tab select, Slate.js/contenteditable-safe append typing, persistent CSS/ARIA selectors with mutation fallback, and automated asleep tab wake-up/hydration.
+
+## Session 2026-11-22T04:55:13.101565123+00:00
+
+Fixed all 6 Anarc MCP/Discord automation bottlenecks in working tree. (1) Cold-state gate: plugin.rs now waits up to 2s for ENGINE_REQUEST_CHANNEL registration before emitting "engine unavailable". (2) Tab sleep: Find auto-hydrates the ref registry from live DOM when a freshly woken tab has no index. (3) Schema/DSL divergence: navigate + tab-select-by-ID already present in uncommitted overhaul; verified live. (4) Stale refs: resolve_target_coords validates cached centers via elementFromPoint and re-resolves live through shadow-DOM-aware live_coords_for_name. (5) Slate send: contenteditable typing now uses CDP Input.insertText (trusted) instead of execCommand/synthetic InputEvents; key Enter on editors routes through submit() with Send-button fallback; Enter CHAR event suppressed. (6) Focus desync: focus_browser/focus_peek_browser clear address_editing. Updated stale MCP reconnect test. Verified: cargo test 218+12+4 pass (baseline had 1 failure), release build + install, live fixture run of exact log scenario produced SENT:hi from anarc. Changes uncommitted; reverted cargo-fmt churn in 30 unrelated files.
+
+## Session 2026-11-22T04:58:34.488564527+00:00
+
+Live Discord verification of the 6 Anarc MCP fixes: logged into Discord in Anarc, opened Cooked Society > #₊‿︵lounge, found Slate editor i3, ran anarc-ctl do i3="hi"; key Enter -> ok 2 with new message elements in diff. Confirmed via read page and screenshot that ! Rover [COOK] posted "hi" at 10:28 AM and editor cleared. Exact previously failing scenario now works on real Discord/Slate.
