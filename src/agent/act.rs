@@ -15,6 +15,8 @@ pub enum ScrollDirection {
     Ref(String),
 }
 
+/// Tab actions for the agent DSL. `Favorite`/`Unfavorite` are aliases of
+/// `Pin`/`Unpin`: favorites and pins are the same sidebar section.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TabAction {
     New { url: Option<String> },

@@ -44,7 +44,7 @@ fn print_usage() {
            read [<ref>|page|last]            Read page content (modes: text, table, links, outline)\n\
            find <query>                 Find elements matching query (<= 5 refs)\n\
            tabs                         List open tabs and spaces\n\
-           tab <action> [target]        Tab control: pin, unpin, fav, unfav, close, new, select\n\
+           tab <action> [target]        Tab control: pin/unpin (fav/unfav aliases), close, new, select\n\
            doctor                       Diagnose agent control failures\n\
            version                      Show build version/time and source drift warning\n\
            start                        Launch Anarc detached and wait for its socket\n\
@@ -361,13 +361,13 @@ fn get_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "tab",
-            "description": format!("Manage tabs: pin, unpin, fav, unfav, close, new, select. {RECOVERY}"),
+            "description": format!("Manage tabs: pin, unpin, close, new, select. Favorites and pins are the same section: fav/unfav are aliases of pin/unpin. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "description": "Tab action: new, close, pin, unpin, fav, unfav, select",
+                        "description": "Tab action: new, close, pin, unpin, fav, unfav, select. fav/unfav are aliases of pin/unpin (one kept-tab section).",
                         "enum": ["new", "close", "pin", "unpin", "fav", "unfav", "select"]
                     },
                     "target": {

@@ -372,12 +372,10 @@ pub(crate) fn handle_agent_request(
                     } else {
                         " "
                     };
+                    // Favorites and pins are one section; report one flag.
                     let mut flags = Vec::new();
-                    if tab.pinned {
+                    if tab.is_pinned() {
                         flags.push("pinned");
-                    }
-                    if tab.favorite {
-                        flags.push("fav");
                     }
                     let flag_str = if flags.is_empty() {
                         String::new()

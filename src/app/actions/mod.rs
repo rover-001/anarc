@@ -18,7 +18,7 @@ use super::*;
 /// user navigates later. Legacy tabs predate that field, so their current URL
 /// is adopted once as the pinned destination.
 pub(in crate::app) fn seed_pinned_destination(tab: &mut Tab) {
-    if (tab.pinned || tab.favorite) && tab.pinned_url.is_none() {
+    if tab.is_pinned() && tab.pinned_url.is_none() {
         tab.pinned_url = Some(tab.url.clone());
         if tab.pinned_title.is_none() && !tab.title.is_empty() {
             tab.pinned_title = Some(tab.title.clone());
@@ -90,6 +90,13 @@ impl Lumen {
         make_tab_ids_unique(&mut spaces);
         for space in &mut spaces {
             for tab in &mut space.tabs {
+                // Favorites and pins are one section: normalize old saves that
+                // only set one of the two flags before any logic reads them.
+                if tab.is_pinned() {
+                    tab.set_pinned(true);
+                } else {
+                    tab.kept_group = None;
+                }
                 // Saves older than `pinned_url` (and tabs pinned before their
                 // URL settled) get their destination captured now, while the
                 // stored URL is still the page they represent. Capturing it on
@@ -99,7 +106,7 @@ impl Lumen {
         }
         for space in &mut spaces {
             for tab in &mut space.tabs {
-                if (tab.pinned || tab.favorite)
+                if tab.is_pinned()
                     && let Some(pinned_url) = &tab.pinned_url
                 {
                     tab.url = pinned_url.clone();
@@ -116,8 +123,7 @@ impl Lumen {
                 .iter()
                 .find(|tab| {
                     (tab.url == "about:blank" || tab.url == "lumen://welcome")
-                        && !tab.favorite
-                        && !tab.pinned
+                        && !tab.is_pinned()
                         && tab.folder.is_none()
                 })
                 .map(|tab| tab.id.clone());
@@ -272,6 +278,10 @@ impl Lumen {
             active_space,
             sidebar_collapsed,
             sidebar_hovered: false,
+            kept_drag_hovered_tab: None,
+            kept_drag_hover_after: false,
+            kept_drag_source_id: None,
+            kept_section_drag_hovered: false,
             sidebar_width,
             sidebar_resizing: false,
             sidebar_width_transition: None,

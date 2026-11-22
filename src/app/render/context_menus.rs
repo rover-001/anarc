@@ -38,7 +38,7 @@ impl Lumen {
                 .right(px(8.0 * UI_SCALE))
                 .w(px(300.0 * UI_SCALE))
                 .max_h(px(480.0 * UI_SCALE))
-                .bg(rgb(theme.surface))
+                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -79,7 +79,7 @@ impl Lumen {
                         .w_full()
                         .min_w_0()
                         .rounded_md()
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .flex()
                         .items_center()
                         .justify_between()
@@ -164,7 +164,7 @@ impl Lumen {
                         .w_full()
                         .min_w_0()
                         .rounded_md()
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -249,7 +249,7 @@ impl Lumen {
                     .top(px(TOPBAR_HEIGHT + 4.0 * UI_SCALE))
                     .right(px(8.0 * UI_SCALE))
                     .w(px(280.0 * UI_SCALE))
-                    .bg(rgb(theme.surface))
+                    .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                     .border_1()
                     .border_color(rgb(if is_active {
                         theme.accent
@@ -299,7 +299,7 @@ impl Lumen {
                                     .px_1()
                                     .py_0p5()
                                     .rounded_md()
-                                    .hover(move |s| s.bg(rgb(theme.surface_hover)))
+                                    .hover(move |s| s.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                                     .text_color(rgb(theme.muted))
                                     .text_xs()
                                     .child("✕")
@@ -375,7 +375,7 @@ impl Lumen {
                 .left(px(x))
                 .w(px(width))
                 .max_h(px(height))
-                .bg(rgb(theme.surface))
+                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -404,7 +404,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -427,7 +427,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -502,7 +502,7 @@ impl Lumen {
                 .bottom(px(48.0 * UI_SCALE))
                 .left(px(8.0 * UI_SCALE))
                 .w(px(224.0 * UI_SCALE))
-                .bg(rgb(theme.surface))
+                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -535,7 +535,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -595,8 +595,9 @@ impl Lumen {
                 .split
                 .as_ref()
                 .is_some_and(|pair| pair.first == target_id || pair.second == target_id);
-            let target_favorite = target_tab.is_some_and(|tab| tab.favorite);
-            let target_pinned = target_tab.is_some_and(|tab| tab.pinned);
+            // Favorites and pins are one section; `fav`/`pin` stay aliases.
+            let target_kept = target_tab.is_some_and(|tab| tab.is_pinned());
+            let target_grouped = target_tab.is_some_and(|tab| tab.kept_group.is_some());
             let target_folder = target_tab.and_then(|tab| tab.folder.clone());
             let target_folders = self
                 .active_space()
@@ -628,7 +629,7 @@ impl Lumen {
                 .w(px(menu.width))
                 .max_h(px(menu.height))
                 .overflow_y_scroll()
-                .bg(rgb(theme.surface))
+                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -664,7 +665,7 @@ impl Lumen {
                             .rounded_md()
                             .text_sm()
                             .text_color(rgb(theme.text))
-                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                            .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -685,36 +686,6 @@ impl Lumen {
                     );
                 }
             } else {
-                let favorite_id = target_id.clone();
-                panel = panel.child(
-                    div()
-                        .id("ctx-favorite")
-                        .px_2()
-                        .py_2()
-                        .rounded_md()
-                        .text_sm()
-                        .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
-                        .cursor_pointer()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(Icon::new(if target_favorite {
-                            IconName::StarOff
-                        } else {
-                            IconName::StarFill
-                        }))
-                        .child(if target_favorite {
-                            "Remove from favorites"
-                        } else {
-                            "Add to favorites"
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.favorite_tab(&favorite_id, !target_favorite);
-                            this.tab_context_menu = None;
-                            cx.notify();
-                        })),
-                );
                 let pin_id = target_id.clone();
                 panel = panel.child(
                     div()
@@ -724,28 +695,52 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(Icon::new(if target_pinned {
+                        .child(Icon::new(if target_kept {
                             IconName::PinOff
                         } else {
                             IconName::Pin
                         }))
-                        .child(if target_pinned {
+                        .child(if target_kept {
                             "Unpin tab"
                         } else {
                             "Pin tab"
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.pin_tab(&pin_id, !target_pinned);
+                            this.pin_tab(&pin_id, !target_kept);
                             this.tab_context_menu = None;
                             cx.notify();
                         })),
                 );
-                if (target_pinned || target_favorite)
+                if target_grouped {
+                    let detach_id = target_id.clone();
+                    panel = panel.child(
+                        div()
+                            .id("ctx-detach-kept")
+                            .px_2()
+                            .py_2()
+                            .rounded_md()
+                            .text_sm()
+                            .text_color(rgb(theme.text))
+                            .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Icon::new(IconName::PanelTop))
+                            .child("Move to own row")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.set_kept_group(&detach_id, None);
+                                this.tab_context_menu = None;
+                                cx.notify();
+                            })),
+                    );
+                }
+                if target_kept
                     && target_tab
                         .and_then(|t| t.pinned_url.as_deref())
                         .is_some_and(|p_url| target_tab.is_some_and(|t| t.url != p_url))
@@ -759,7 +754,7 @@ impl Lumen {
                             .rounded_md()
                             .text_sm()
                             .text_color(rgb(theme.text))
-                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                            .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -797,7 +792,7 @@ impl Lumen {
                             .rounded_md()
                             .text_sm()
                             .text_color(rgb(theme.text))
-                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                            .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -821,7 +816,7 @@ impl Lumen {
                             .rounded_md()
                             .text_sm()
                             .text_color(rgb(theme.text))
-                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                            .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -844,7 +839,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -872,7 +867,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -895,7 +890,7 @@ impl Lumen {
                             .rounded_md()
                             .text_sm()
                             .text_color(rgb(theme.text))
-                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                            .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -918,7 +913,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -940,7 +935,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -961,7 +956,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -985,7 +980,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -1014,7 +1009,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -1080,7 +1075,7 @@ impl Lumen {
                 .w(px(menu.width))
                 .max_h(px(menu.height))
                 .overflow_y_scroll()
-                .bg(rgb(theme.surface))
+                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -1110,7 +1105,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1133,7 +1128,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1184,7 +1179,7 @@ impl Lumen {
                 .left(px(menu.x))
                 .top(px(menu.y))
                 .w(px(180.0 * UI_SCALE))
-                .bg(rgb(theme.surface))
+                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_lg()
@@ -1203,7 +1198,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1253,7 +1248,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1276,7 +1271,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1301,7 +1296,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1324,7 +1319,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1347,7 +1342,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()

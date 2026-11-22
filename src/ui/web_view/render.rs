@@ -19,7 +19,7 @@ impl Render for WebViewport {
                     .id("web-view-viewport")
                     .relative()
                     .size_full()
-                    .bg(rgb(self.theme.surface))
+                    .bg(crate::ui::visual::translucent_surface(self.theme.surface, 0x30))
                     .rounded(px(CARD_RADIUS))
                     .overflow_hidden();
                 let surface = if mode == "6" {
@@ -261,7 +261,7 @@ impl Render for WebViewport {
             .relative()
             .track_focus(&self.focus_handle)
             .size_full()
-            .bg(rgb(self.drag_edge_color.unwrap_or(self.theme.surface)))
+            .bg(crate::ui::visual::translucent_surface(self.drag_edge_color.unwrap_or(self.theme.surface), 0x30))
             .rounded_tl(corner_radii.top_left)
             .rounded_tr(corner_radii.top_right)
             .rounded_br(corner_radii.bottom_right)
@@ -350,32 +350,21 @@ impl Render for WebViewport {
                                                 active.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                                 return;
                                             }}
-                                            let handled = false;
+                                            // Insert exactly once. A synthetic
+                                            // ClipboardEvent can be handled by the page
+                                            // and then fall through to execCommand,
+                                            // producing a second copy.
                                             try {{
-                                                const event = new ClipboardEvent('paste', {{
-                                                    clipboardData: new DataTransfer(),
-                                                    bubbles: true,
-                                                    cancelable: true
-                                                }});
-                                                event.clipboardData.setData('text/plain', text);
-                                                if (active) {{
-                                                    handled = !active.dispatchEvent(event);
-                                                }} else {{
-                                                    handled = !document.dispatchEvent(event);
-                                                }}
+                                                document.execCommand('insertText', false, text);
                                             }} catch (_) {{}}
-                                            if (!handled) {{
-                                                try {{
-                                                    document.execCommand('insertText', false, text);
-                                                }} catch (_) {{}}
-                                            }}
                                         }})();"#,
                                         serde_json::to_string(&text).unwrap_or_default()
                                     );
                                     this.engine.execute_script(&key_tab_id, &script);
                                 }
-                                this.engine.send_key_down(&key_tab_id, event);
-                                this.engine.paste(&key_tab_id);
+                                // Do NOT also forward Ctrl+V to CEF or call
+                                // frame.paste(): either path pastes the clipboard
+                                // again, which produced three copies per keypress.
                                 return true;
                             }
 

@@ -28,7 +28,7 @@ pub fn new_tab_button(theme: SpaceTheme) -> impl IntoElement {
         .text_color(rgb(theme.text))
         .cursor_pointer()
         .active(|style| style.opacity(0.92))
-        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
         .child(
             div()
                 .size(px(visual::SIDEBAR_ROW_ICON_SIZE))

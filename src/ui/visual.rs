@@ -68,11 +68,11 @@ pub fn interpolate_theme(from: SpaceTheme, to: SpaceTheme, progress: f32) -> Spa
 
 /// Derives every chrome color from the active space's accent.
 pub fn space_theme(accent: u32) -> SpaceTheme {
-    let surface = tint_rgb(0x191a1f, accent, 0.18);
+    let surface = tint_rgb(0x34363d, accent, 0.34);
     let border = tint_rgb(0x282b33, accent, 0.30);
     let hover_tint = tint_rgb(0xffffff, accent, 0.35);
     SpaceTheme {
-        base: tint_rgb(0x111216, accent, 0.24),
+        base: tint_rgb(0x24262d, accent, 0.16),
         surface,
         surface_hover: tint_rgb(surface, hover_tint, 0.12),
         border,
@@ -118,6 +118,49 @@ pub fn zoom_after_delta(saved_level: Option<f64>, delta: f64) -> f64 {
     }
 }
 
+/// WCAG relative luminance of a packed RGB color (sRGB-linearized).
+fn relative_luminance(color: u32) -> f64 {
+    let channel = |shift: u32| {
+        let value = f64::from((color >> shift) & 0xff) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+}
+
+/// WCAG contrast ratio between two packed RGB colors.
+fn contrast_ratio(a: u32, b: u32) -> f64 {
+    let a = relative_luminance(a);
+    let b = relative_luminance(b);
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// True when dark foreground text reads better on the derived chrome.
+///
+/// Translucent chrome fills are drawn over `base` at low alpha, so `base` is
+/// the dominant background behind placeholders and muted icons.
+fn chrome_is_light(theme: SpaceTheme) -> bool {
+    contrast_ratio(0x0b0c0f, theme.base) >= contrast_ratio(0xe6e7eb, theme.base)
+}
+
+/// Derive a muted color from the text color that still clears 3.5:1 against the
+/// chrome. Fixed muted tokens cannot stay readable across every intensity: at
+/// mid tones neither a fixed light nor a fixed dark gray has enough contrast.
+fn muted_for_chrome(text: u32, background: u32) -> u32 {
+    let mut muted = text;
+    for step in 1..=20 {
+        let candidate = tint_rgb(text, background, step as f32 / 20.0);
+        if contrast_ratio(candidate, background) < 3.5 {
+            break;
+        }
+        muted = candidate;
+    }
+    muted
+}
+
 /// Composite an RGB accent over an RGB background at the given opacity.
 pub fn tint_rgb(background: u32, accent: u32, opacity: f32) -> u32 {
     let opacity = opacity.clamp(0.0, 1.0);
@@ -127,6 +170,16 @@ pub fn tint_rgb(background: u32, accent: u32, opacity: f32) -> u32 {
         (bg + (fg - bg) * opacity).round() as u32
     };
     (channel(16) << 16) | (channel(8) << 8) | channel(0)
+}
+
+/// Lighten a theme surface so its low-alpha fill reads as a soft glow.
+pub fn light_surface_tint(color: u32) -> u32 {
+    tint_rgb(color, 0xffffff, 0.70)
+}
+
+/// Apply a subtle translucent theme surface over the space backdrop.
+pub fn translucent_surface(color: u32, alpha: u8) -> gpui_kit::Rgba {
+    gpui_kit::rgba((light_surface_tint(color) << 8) | u32::from(alpha))
 }
 
 #[cfg(test)]
@@ -191,6 +244,31 @@ mod tests {
                 contrast(theme.text, theme.surface) >= 4.5,
                 "surface contrast for {color:#08x}"
             );
+        }
+    }
+
+    #[test]
+    fn text_and_muted_keep_contrast_when_intensity_lightens_dark_chrome() {
+        // A dark-appearance space tinted hard with a light accent becomes light
+        // chrome; its placeholder and icon colors must follow the chrome, not
+        // the appearance toggle (regression: both stayed light and washed out).
+        for accent in [0x9aa6ff_u32, 0xf6ad55, 0xf687b3, 0xc084fc, 0xffffff] {
+            for intensity in [0.0_f32, 0.24, 0.6, 0.9, 1.0] {
+                for appearance in [0_u8, 1] {
+                    let mut space = crate::model::Space::new("s", "S", "compass", accent);
+                    space.theme_appearance = appearance;
+                    space.theme_intensity = intensity;
+                    let theme = theme_for_space(&space);
+                    assert!(
+                        contrast(theme.text, theme.base) >= 4.5,
+                        "text/base contrast for {accent:#08x} intensity {intensity} appearance {appearance}"
+                    );
+                    assert!(
+                        contrast(theme.muted, theme.base) >= 3.0,
+                        "muted/base contrast for {accent:#08x} intensity {intensity} appearance {appearance}"
+                    );
+                }
+            }
         }
     }
 
@@ -301,12 +379,17 @@ pub fn theme_for_space(space: &crate::model::Space) -> SpaceTheme {
         Some("light") => true,
         _ => space.theme_appearance == 1 || (space.theme_appearance == 0 && space.theme_auto_light),
     };
-    let base = if light { 0xf1f2f5 } else { 0x111216 };
+    // A lighter accent reads better on chrome surfaces (search field, new tab
+    // row, kept tiles) without changing the raw space color used elsewhere.
+    if !light {
+        theme.accent = tint_rgb(theme.accent, 0xffffff, 0.22);
+    }
+    let base = if light { 0xf1f2f5 } else { 0x24262d };
     theme.base = tint_rgb(base, theme.accent, space.theme_intensity);
     theme.surface = tint_rgb(
-        if light { 0xffffff } else { 0x191a1f },
+        if light { 0xffffff } else { 0x34363d },
         theme.accent,
-        space.theme_intensity * 0.75,
+        if light { 0.0 } else { 0.34 },
     );
     let hover_tint = if light {
         tint_rgb(0x000000, theme.accent, 0.25)
@@ -316,15 +399,18 @@ pub fn theme_for_space(space: &crate::model::Space) -> SpaceTheme {
     theme.surface_hover = tint_rgb(theme.surface, hover_tint, 0.10);
     theme.border = tint_rgb(theme.base, if light { 0x000000 } else { 0xffffff }, 0.16);
     theme.border_hover = tint_rgb(theme.border, theme.accent, 0.30);
-    theme.text = if light { 0x20232b } else { 0xe6e7eb };
-    theme.muted = if light { 0x575b65 } else { 0x9fa3ae };
+    // The appearance toggle alone cannot guarantee legibility: a high-intensity
+    // tint can turn dark chrome light (or vice versa). Derive foreground and
+    // muted colors from contrast against the resulting chrome so placeholders,
+    // icons and labels stay visible at every intensity.
+    let dark_foreground = chrome_is_light(theme);
+    theme.text = if dark_foreground { 0x0b0c0f } else { 0xe6e7eb };
+    theme.muted = muted_for_chrome(theme.text, theme.base);
     apply_pack_theme_tokens(theme, &pack_themes)
 }
 
 pub fn is_light_theme(theme: SpaceTheme) -> bool {
-    let channel = |c: u32, shift: u32| ((c >> shift) & 0xff) as f32 / 255.0;
-    let lum = |c: u32| 0.2126 * channel(c, 16) + 0.7152 * channel(c, 8) + 0.0722 * channel(c, 0);
-    lum(theme.surface) > 0.45 || lum(theme.base) > 0.45 || lum(theme.text) < 0.55
+    chrome_is_light(theme)
 }
 
 pub fn update_theme_caret(theme: SpaceTheme, cx: &mut gpui_kit::App) {
@@ -339,15 +425,23 @@ pub fn update_theme_caret(theme: SpaceTheme, cx: &mut gpui_kit::App) {
     } else {
         gpui_kit::rgb(0xffffff)
     };
+    let desired_foreground = gpui_kit::rgb(theme.text).into();
+    let desired_muted_foreground = gpui_kit::rgb(theme.muted).into();
     if cx.has_global::<gpui_kit::component::Theme>() {
         let current = gpui_kit::component::Theme::global(cx);
-        if current.mode == desired_mode && current.caret == desired_caret.into() {
+        if current.mode == desired_mode
+            && current.caret == desired_caret.into()
+            && current.colors.foreground == desired_foreground
+            && current.colors.muted_foreground == desired_muted_foreground
+        {
             return;
         }
     }
     gpui_kit::component::Theme::change(desired_mode, None, cx);
     gpui_kit::component::Theme::update(cx, |t| {
         t.caret = desired_caret.into();
+        t.colors.foreground = desired_foreground;
+        t.colors.muted_foreground = desired_muted_foreground;
     });
 }
 

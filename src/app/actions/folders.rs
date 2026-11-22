@@ -19,10 +19,10 @@ impl Lumen {
                 folder.expanded = true;
             }
             if let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id) {
-                tab.favorite = false;
-                tab.pinned = false;
+                tab.set_pinned(false);
                 tab.pinned_url = None;
                 tab.pinned_title = None;
+                tab.kept_group = None;
                 tab.folder = Some(folder_id.to_owned());
                 changed = true;
             }
@@ -65,10 +65,10 @@ impl Lumen {
         if let Some(tab_id) = target_tab
             && let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id)
         {
-            tab.favorite = false;
-            tab.pinned = false;
+            tab.set_pinned(false);
             tab.pinned_url = None;
             tab.pinned_title = None;
+            tab.kept_group = None;
             tab.folder = Some(id.clone());
         }
         self.save_state();

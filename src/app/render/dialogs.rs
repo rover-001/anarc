@@ -43,7 +43,7 @@ impl Lumen {
                 .when(sidebar_on_right, |this| this.right(px(8.0 * UI_SCALE)))
                 .when(!sidebar_on_right, |this| this.left(px(8.0 * UI_SCALE)))
                 .w(px(240.0 * UI_SCALE))
-                .bg(rgb(modal_theme.surface))
+                .bg(crate::ui::visual::translucent_surface(modal_theme.surface, 0x30))
                 .border_1()
                 .border_color(rgb(modal_theme.border))
                 .rounded_xl()
@@ -120,7 +120,7 @@ impl Lumen {
                                 .overflow_y_scroll()
                                 .p_1()
                                 .rounded_md()
-                                .bg(rgb(modal_theme.surface))
+                                .bg(crate::ui::visual::translucent_surface(modal_theme.surface, 0x30))
                                 .border_1()
                                 .border_color(rgb(modal_theme.border))
                                 .flex()
@@ -138,11 +138,17 @@ impl Lumen {
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .bg(rgb(if is_selected {
-                                            modal_theme.surface_hover
+                                        .bg(if is_selected {
+                                            crate::ui::visual::translucent_surface(
+                                                modal_theme.surface_hover,
+                                                0x55,
+                                            )
                                         } else {
-                                            modal_theme.surface
-                                        }))
+                                            crate::ui::visual::translucent_surface(
+                                                modal_theme.surface,
+                                                0x44,
+                                            )
+                                        })
                                         .border_1()
                                         .border_color(rgb(if is_selected {
                                             modal_theme.accent
@@ -150,12 +156,12 @@ impl Lumen {
                                             modal_theme.border
                                         }))
                                         .text_color(rgb(if is_selected {
-                                            0xffffff
+                                            modal_theme.text
                                         } else {
-                                            0x8b8f9a
+                                            modal_theme.muted
                                         }))
                                         .hover(|s| {
-                                            s.bg(rgb(modal_theme.surface_hover))
+                                            s.bg(crate::ui::visual::translucent_surface(modal_theme.surface_hover, 0x40))
                                                 .text_color(rgb(modal_theme.text))
                                         })
                                         .cursor_pointer()
@@ -189,7 +195,7 @@ impl Lumen {
                                 .px_3()
                                 .py_2()
                                 .rounded_lg()
-                                .bg(rgb(modal_theme.surface_hover))
+                                .bg(crate::ui::visual::translucent_surface(modal_theme.surface_hover, 0x40))
                                 .text_color(rgb(modal_theme.text))
                                 .text_sm()
                                 .cursor_pointer()
@@ -217,9 +223,9 @@ impl Lumen {
                                 .py_1()
                                 .rounded_md()
                                 .text_xs()
-                                .text_color(rgb(0xa1a4af))
+                                .text_color(rgb(modal_theme.muted))
                                 .hover(move |s| {
-                                    s.bg(rgb(modal_theme.surface_hover))
+                                    s.bg(crate::ui::visual::translucent_surface(modal_theme.surface_hover, 0x40))
                                         .text_color(rgb(modal_theme.text))
                                 })
                                 .cursor_pointer()
@@ -297,7 +303,7 @@ impl Lumen {
                 .top(px(modal.anchor_y - 12.0 * UI_SCALE))
                 .left(px(modal.anchor_x + 12.0 * UI_SCALE))
                 .w(px(224.0 * UI_SCALE))
-                .bg(rgb(theme.surface))
+                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -337,7 +343,7 @@ impl Lumen {
                                 .rounded_md()
                                 .border_1()
                                 .border_color(rgb(theme.border))
-                                .bg(rgb(theme.surface))
+                                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                                 .cursor_text()
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     if let Some(modal) = &this.folder_modal {
@@ -369,10 +375,10 @@ impl Lumen {
                                 .py_1()
                                 .rounded_md()
                                 .text_xs()
-                                .text_color(rgb(0xa1a4af))
+                                .text_color(rgb(theme.muted))
                                 .hover(move |style| {
                                     style
-                                        .bg(rgb(theme.surface_hover))
+                                        .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                                         .text_color(rgb(theme.text))
                                 })
                                 .cursor_pointer()

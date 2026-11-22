@@ -101,7 +101,7 @@ pub fn render(
                         .active(|style| style.opacity(0.88))
                         .hover(move |style| {
                             style
-                                .bg(rgb(theme.surface_hover))
+                                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                                 .text_color(rgb(theme.text))
                         })
                         .child(Icon::new(IconName::X))
@@ -783,11 +783,11 @@ fn settings_tab(
         .px_3()
         .py_1p5()
         .rounded_md()
-        .bg(rgb(if selected {
-            theme.accent
+        .bg(if selected {
+            rgb(theme.accent)
         } else {
-            theme.surface
-        }))
+            crate::ui::visual::translucent_surface(theme.surface, 0x30)
+        })
         .text_xs()
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(if selected { theme.base } else { theme.text }))
@@ -797,7 +797,7 @@ fn settings_tab(
             if selected {
                 style
             } else {
-                style.bg(rgb(theme.surface_hover))
+                style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
             }
         })
         .child(label)
@@ -815,7 +815,7 @@ fn setting_card(
         .w_full()
         .p_4()
         .rounded_xl()
-        .bg(rgb(theme.surface))
+        .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
         .border_1()
         .border_color(rgb(theme.border))
         .flex()
@@ -865,7 +865,7 @@ fn action_button(
         .px_3()
         .py_2()
         .rounded_md()
-        .bg(rgb(theme.surface_hover))
+        .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
         .text_xs()
         .text_color(rgb(theme.text))
         .hover(|style| style.bg(rgb(theme.border_hover)))
@@ -904,7 +904,7 @@ fn section(
         .w_full()
         .p_4()
         .rounded_xl()
-        .bg(rgb(theme.surface))
+        .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
         .border_1()
         .border_color(rgb(theme.border))
         .flex()
@@ -961,7 +961,7 @@ fn downloads_content(downloads: Vec<DownloadRecord>, theme: SpaceTheme) -> gpui_
                     .w_full()
                     .p_3()
                     .rounded_lg()
-                    .bg(rgb(theme.surface))
+                    .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                     .border_1()
                     .border_color(rgb(theme.border))
                     .flex()

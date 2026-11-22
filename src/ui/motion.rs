@@ -176,6 +176,11 @@ pub fn row_enter() -> SpringSpec {
     spec(0.30, 0.85)
 }
 
+/// Sidebar tiles reflowing around an insertion point during drag-and-drop.
+pub fn tab_reorder() -> SpringSpec {
+    spec(0.38, 0.82)
+}
+
 /// A row leaving a list: short and critically damped.
 pub fn row_exit() -> SpringSpec {
     spec(0.22, 1.0)

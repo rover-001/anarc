@@ -33,7 +33,20 @@ impl Engine {
     pub fn take_close_requests(&self) -> Vec<String> {
         self.events
             .lock()
-            .map(|mut events| std::mem::take(&mut events.close_requests))
+            .map(|mut events| {
+                let requests = std::mem::take(&mut events.close_requests);
+                let expected = &mut events.expected_close_requests;
+                requests
+                    .into_iter()
+                    .filter(|tab_id| match expected.get_mut(tab_id) {
+                        Some(count) if *count > 0 => {
+                            *count -= 1;
+                            false
+                        }
+                        _ => true,
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
     pub(crate) fn take_live_share_space_request(&self) -> Option<LiveShareSpaceRequest> {

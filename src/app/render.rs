@@ -348,9 +348,7 @@ impl Render for Lumen {
                                             title.filter(|title| !title.is_empty())
                                         {
                                             tab.title = title.clone();
-                                            if (tab.pinned || tab.favorite)
-                                                && tab.pinned_title.is_none()
-                                            {
+                                            if tab.is_pinned() && tab.pinned_title.is_none() {
                                                 tab.pinned_title = Some(title);
                                             }
                                         }
@@ -420,7 +418,7 @@ impl Render for Lumen {
                         && !t.is_empty()
                     {
                         tab.title = t.clone();
-                        if (tab.pinned || tab.favorite) && tab.pinned_title.is_none() {
+                        if tab.is_pinned() && tab.pinned_title.is_none() {
                             tab.pinned_title = Some(t);
                         }
                     }
@@ -607,7 +605,7 @@ impl Render for Lumen {
                     &active_tab_url,
                     active_width.max(1),
                     content_h,
-                    0xff000000 | theme.surface,
+                    0x26000000 | visual::light_surface_tint(theme.surface),
                     self.zoom_levels
                         .get(&url_host(&active_tab_url))
                         .copied()
@@ -636,7 +634,7 @@ impl Render for Lumen {
                             .frozen_size(&pair.first)
                             .map_or(left_width_dip.max(1), |(width, _)| width),
                         content_h,
-                        0xff000000 | theme.surface,
+                        0x26000000 | visual::light_surface_tint(theme.surface),
                         self.zoom_levels
                             .get(&url_host(&url))
                             .copied()
@@ -664,7 +662,7 @@ impl Render for Lumen {
                             .frozen_size(&pair.second)
                             .map_or(right_width_dip.max(1), |(width, _)| width),
                         content_h,
-                        0xff000000 | theme.surface,
+                        0x26000000 | visual::light_surface_tint(theme.surface),
                         self.zoom_levels
                             .get(&url_host(&url))
                             .copied()
@@ -772,7 +770,7 @@ impl Render for Lumen {
                 &peek.url,
                 layout.viewport_w,
                 layout.viewport_h,
-                0xff000000 | theme.surface,
+                0x26000000 | visual::light_surface_tint(theme.surface),
                 zoom,
             ) {
                 eprintln!("Lumen peek browser creation failed: {error}");

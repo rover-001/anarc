@@ -34,6 +34,10 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         active_space,
         sidebar_collapsed: false,
         sidebar_hovered: false,
+        kept_drag_hovered_tab: None,
+        kept_drag_hover_after: false,
+        kept_drag_source_id: None,
+        kept_section_drag_hovered: false,
         sidebar_width: 240.0 * UI_SCALE,
         sidebar_resizing: false,
         sidebar_width_transition: None,
@@ -362,7 +366,7 @@ fn closing_a_pinned_tab_request_keeps_it_pinned_and_unloads_it(cx: &mut gpui::Te
         .expect("open test window")
     });
     view.update(cx, |app, _| {
-        app.active_space_mut().tabs[0].pinned = true;
+        app.active_space_mut().tabs[0].set_pinned(true);
         app.active_space_mut().tabs[0].url = "https://example.com".into();
         app.close_section_tab("tab-1");
     });
@@ -375,6 +379,38 @@ fn closing_a_pinned_tab_request_keeps_it_pinned_and_unloads_it(cx: &mut gpui::Te
             .unwrap();
         assert!(tab.pinned);
         assert_eq!(tab.state, TabState::Discarded);
+    });
+}
+
+#[gpui::test]
+fn closing_a_pinned_tab_does_not_activate_another_pinned_tab(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.active_space_mut().tabs[1].url = "https://example.org".into();
+        app.pin_tab("tab-2", true);
+        app.active_space_mut().tabs[0].set_pinned(true);
+        app.active_space_mut().active = Some("tab-1".into());
+        app.close_active_tab();
+    });
+    view.read_with(cx, |app, _| {
+        let space = app.active_space();
+        let other_pinned = space.tabs.iter().find(|tab| tab.id == "tab-2").unwrap();
+        assert_eq!(
+            other_pinned.state,
+            TabState::Discarded,
+            "a second pinned tab must not be opened as the fallback"
+        );
+        assert_eq!(app.active_tab_id(), "tab-3");
     });
 }
 
@@ -437,7 +473,7 @@ fn unloading_a_favorite_tab_restores_its_pinned_destination(cx: &mut gpui::TestA
             .iter()
             .find(|tab| tab.id == "tab-1")
             .unwrap();
-        assert!(tab.favorite);
+        assert!(tab.is_pinned());
         assert_eq!(tab.url, "https://favorite.example/home");
         assert_eq!(tab.title, "Favorite Home");
     });
@@ -468,7 +504,7 @@ fn legacy_kept_tabs_adopt_their_saved_url_and_keep_it_after_navigation() {
 }
 
 #[gpui::test]
-fn transitioning_between_favorite_and_pinned_preserves_pinned_url(cx: &mut gpui::TestAppContext) {
+fn favorite_and_pin_are_aliases_preserving_pinned_url(cx: &mut gpui::TestAppContext) {
     let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -495,6 +531,7 @@ fn transitioning_between_favorite_and_pinned_preserves_pinned_url(cx: &mut gpui:
             .find(|tab| tab.id == "tab-1")
             .unwrap();
         assert!(tab.pinned);
+        assert!(tab.favorite);
         assert_eq!(tab.pinned_url.as_deref(), Some("https://original.example"));
     });
     // Unloading restores the original pinned link
@@ -731,7 +768,7 @@ fn split_with_context_flow_uses_the_clicked_tab_and_selected_target(cx: &mut gpu
 }
 
 #[gpui::test]
-fn favorite_pin_and_folder_sections_are_exclusive(cx: &mut gpui::TestAppContext) {
+fn kept_and_folder_sections_are_exclusive(cx: &mut gpui::TestAppContext) {
     let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -753,7 +790,7 @@ fn favorite_pin_and_folder_sections_are_exclusive(cx: &mut gpui::TestAppContext)
             .find(|tab| tab.id == "tab-2")
             .unwrap();
         assert!(tab.favorite);
-        assert!(!tab.pinned);
+        assert!(tab.pinned);
         assert!(tab.folder.is_none());
 
         app.pin_tab("tab-2", true);
@@ -764,8 +801,19 @@ fn favorite_pin_and_folder_sections_are_exclusive(cx: &mut gpui::TestAppContext)
             .find(|tab| tab.id == "tab-2")
             .unwrap();
         assert!(tab.pinned);
+        assert!(tab.favorite);
+
+        app.favorite_tab("tab-2", false);
+        let tab = app
+            .active_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "tab-2")
+            .unwrap();
+        assert!(!tab.pinned);
         assert!(!tab.favorite);
 
+        app.favorite_tab("tab-2", true);
         let folder_id = app.create_folder("Work", Some("tab-2")).unwrap();
         let tab = app
             .active_space()
@@ -788,6 +836,124 @@ fn favorite_pin_and_folder_sections_are_exclusive(cx: &mut gpui::TestAppContext)
             .find(|tab| tab.id == "tab-2")
             .unwrap();
         assert!(tab.folder.is_none());
+    });
+}
+
+#[gpui::test]
+fn dropping_a_regular_tab_on_a_kept_tab_joins_the_same_row(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.pin_tab("tab-1", true);
+        // Drag tab-2 onto tab-1 (drop before the target).
+        app.drop_tab_in_target_section("tab-2", "tab-1", false);
+    });
+    view.read_with(cx, |app, _| {
+        let tabs = &app.active_space().tabs;
+        assert_eq!(tabs.len(), 2);
+        assert!(tabs.iter().all(|tab| tab.is_pinned()));
+        assert_eq!(tabs[0].id, "tab-2");
+        assert_eq!(tabs[1].id, "tab-1");
+        assert_eq!(tabs[0].kept_group.as_deref(), Some("tab-1"));
+        assert_eq!(tabs[1].kept_group.as_deref(), Some("tab-1"));
+    });
+}
+
+#[gpui::test]
+fn dropping_on_a_slot_beside_an_ungrouped_tab_forms_a_two_tab_group(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.pin_tab("tab-1", true);
+        // The hover slot beside an ungrouped tab carries group = None. Dropping
+        // tab-2 there must still create a group shared by both tabs.
+        app.drop_kept_tab_in_slot("tab-2", "tab-1", None, false);
+    });
+    view.read_with(cx, |app, _| {
+        let tabs = &app.active_space().tabs;
+        assert_eq!(tabs.len(), 2);
+        assert!(tabs.iter().all(|tab| tab.is_pinned()));
+        assert!(tabs
+            .iter()
+            .all(|tab| tab.kept_group.as_deref() == Some("tab-1")));
+    });
+}
+
+#[gpui::test]
+fn dropping_on_the_lower_strip_keeps_a_single_web_per_row(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.pin_tab("tab-1", true);
+        // First drop joins the group via the box body.
+        app.drop_tab_in_target_section("tab-2", "tab-1", false);
+        app.add_tab();
+        // Second drop on the lower strip gives tab-3 its own full-width row.
+        app.drop_tab_in_target_section("tab-3", "tab-1", true);
+    });
+    view.read_with(cx, |app, _| {
+        let tabs = &app.active_space().tabs;
+        assert!(tabs.iter().all(|tab| tab.is_pinned()));
+        let tab_1 = tabs.iter().find(|tab| tab.id == "tab-1").unwrap();
+        let tab_2 = tabs.iter().find(|tab| tab.id == "tab-2").unwrap();
+        let tab_3 = tabs.iter().find(|tab| tab.id == "tab-3").unwrap();
+        assert_eq!(tab_1.kept_group.as_deref(), Some("tab-1"));
+        assert_eq!(tab_2.kept_group.as_deref(), Some("tab-1"));
+        assert_eq!(tab_3.kept_group, None);
+    });
+}
+
+#[gpui::test]
+fn detaching_a_grouped_tab_keeps_it_pinned_in_its_own_row(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.pin_tab("tab-1", true);
+        app.drop_tab_in_target_section("tab-2", "tab-1", false);
+        // Drop on the section background / use "Move to own row".
+        app.set_kept_group("tab-2", None);
+    });
+    view.read_with(cx, |app, _| {
+        let tabs = &app.active_space().tabs;
+        let detached = tabs.iter().find(|tab| tab.id == "tab-2").unwrap();
+        assert!(detached.is_pinned());
+        assert_eq!(detached.kept_group, None);
     });
 }
 
