@@ -399,7 +399,13 @@ impl Engine {
             let _ = tx.try_send(Err("DevTools lock error".into()));
             return rx;
         };
-        mgr.execute_method(tab_id, &host, method, params, devtools::DEFAULT_DEVTOOLS_TIMEOUT)
+        mgr.execute_method(
+            tab_id,
+            &host,
+            method,
+            params,
+            devtools::DEFAULT_DEVTOOLS_TIMEOUT,
+        )
     }
 
     pub fn input_click(
@@ -421,15 +427,31 @@ impl Engine {
         self.send_mouse_move(tab_id, x, y, false, &mods, None);
     }
 
-    pub fn input_type(&self, tab_id: &str, text: &str) -> async_channel::Receiver<Result<String, String>> {
+    pub fn input_type(
+        &self,
+        tab_id: &str,
+        text: &str,
+    ) -> async_channel::Receiver<Result<String, String>> {
         let params = serde_json::json!({ "text": text });
         let p_str = serde_json::to_string(&params).unwrap_or_default();
         self.devtools(tab_id, "Input.insertText", Some(&p_str))
     }
 
-    pub fn input_key(&self, tab_id: &str, key: &str, modifiers: &gpui_kit::Modifiers, key_down: bool) {
-        if let Some(entry) = self.browsers.get(tab_id) && let Some(host) = entry.browser.host() {
-            let focus_on_editable_field = entry.state.lock().map(|s| s.focus_on_editable_field).unwrap_or(false);
+    pub fn input_key(
+        &self,
+        tab_id: &str,
+        key: &str,
+        modifiers: &gpui_kit::Modifiers,
+        key_down: bool,
+    ) {
+        if let Some(entry) = self.browsers.get(tab_id)
+            && let Some(host) = entry.browser.host()
+        {
+            let focus_on_editable_field = entry
+                .state
+                .lock()
+                .map(|s| s.focus_on_editable_field)
+                .unwrap_or(false);
             let char_val = if key.len() == 1 {
                 key.chars().next().map(|c| c as u16).unwrap_or(0)
             } else if key.eq_ignore_ascii_case("enter") || key.eq_ignore_ascii_case("return") {
@@ -438,14 +460,39 @@ impl Engine {
                 0
             };
             if key_down {
-                let down_ev = cef_key_event(key, modifiers, KeyEventType::RAWKEYDOWN, char_val, focus_on_editable_field);
+                let down_ev = cef_key_event(
+                    key,
+                    modifiers,
+                    KeyEventType::RAWKEYDOWN,
+                    char_val,
+                    focus_on_editable_field,
+                );
                 host.send_key_event(Some(&down_ev));
-                if char_val != 0 && !modifiers.control && !modifiers.platform {
-                    let char_ev = cef_key_event(key, modifiers, KeyEventType::CHAR, char_val, focus_on_editable_field);
+                // A CHAR event for Enter inserts a newline in contenteditable
+                // editors even after their keydown handler sent the message.
+                if char_val != 0
+                    && !key.eq_ignore_ascii_case("enter")
+                    && !key.eq_ignore_ascii_case("return")
+                    && !modifiers.control
+                    && !modifiers.platform
+                {
+                    let char_ev = cef_key_event(
+                        key,
+                        modifiers,
+                        KeyEventType::CHAR,
+                        char_val,
+                        focus_on_editable_field,
+                    );
                     host.send_key_event(Some(&char_ev));
                 }
             } else {
-                let up_ev = cef_key_event(key, modifiers, KeyEventType::KEYUP, 0, focus_on_editable_field);
+                let up_ev = cef_key_event(
+                    key,
+                    modifiers,
+                    KeyEventType::KEYUP,
+                    0,
+                    focus_on_editable_field,
+                );
                 host.send_key_event(Some(&up_ev));
             }
         }
@@ -458,7 +505,10 @@ impl Engine {
 
     pub fn take_agent_requests(
         &self,
-    ) -> Vec<(crate::agent::protocol::AgentRequest, async_channel::Sender<crate::agent::protocol::AgentResponse>)> {
+    ) -> Vec<(
+        crate::agent::protocol::AgentRequest,
+        async_channel::Sender<crate::agent::protocol::AgentResponse>,
+    )> {
         let mut requests = Vec::new();
         while let Ok(item) = self.agent_receiver.try_recv() {
             requests.push(item);

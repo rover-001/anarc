@@ -22,9 +22,15 @@ impl SocketTarget {
 
     fn path(&self) -> PathBuf {
         #[cfg(unix)]
-        { self.resolve().resolved }
+        {
+            self.resolve().resolved
+        }
         #[cfg(not(unix))]
-        { self.explicit.clone().unwrap_or_else(|| PathBuf::from("anarc-agent.sock")) }
+        {
+            self.explicit
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("anarc-agent.sock"))
+        }
     }
 }
 
@@ -62,25 +68,42 @@ fn print_usage() {
 }
 
 #[cfg(unix)]
-fn connect_socket(target: &SocketTarget, mcp: bool, doctor: bool) -> Result<(UnixStream, PathBuf), String> {
+fn connect_socket(
+    target: &SocketTarget,
+    mcp: bool,
+    doctor: bool,
+) -> Result<(UnixStream, PathBuf), String> {
     use std::io::ErrorKind;
     use std::time::Duration;
 
-    let tries = if target.explicit.is_some() { 1 } else if mcp { 5 } else { 3 };
+    let tries = if target.explicit.is_some() {
+        1
+    } else if mcp {
+        5
+    } else {
+        3
+    };
     for attempt in 1..=tries {
         let discovery = target.resolve();
         let path = discovery.resolved;
         let result = UnixStream::connect(&path);
         if mcp {
-            eprintln!("[anarc-mcp] connect {attempt}/{tries} path={path:?} instance={:?} env={:?} result={:?}",
-                target.instance, discovery.environment, result.as_ref().map(|_| ()));
+            eprintln!(
+                "[anarc-mcp] connect {attempt}/{tries} path={path:?} instance={:?} env={:?} result={:?}",
+                target.instance,
+                discovery.environment,
+                result.as_ref().map(|_| ())
+            );
         }
         let error = match result {
             Ok(stream) => return Ok((stream, path)),
             Err(error) => error,
         };
         let kind = error.kind();
-        if target.explicit.is_none() && matches!(kind, ErrorKind::NotFound | ErrorKind::ConnectionRefused) && attempt == 1 {
+        if target.explicit.is_none()
+            && matches!(kind, ErrorKind::NotFound | ErrorKind::ConnectionRefused)
+            && attempt == 1
+        {
             let _ = std::process::Command::new("systemctl")
                 .args(["--user", "start", "anarc.socket"])
                 .status();
@@ -97,8 +120,13 @@ fn connect_socket(target: &SocketTarget, mcp: bool, doctor: bool) -> Result<(Uni
             continue;
         }
 
-        if matches!(kind, ErrorKind::NotFound | ErrorKind::ConnectionRefused | ErrorKind::TimedOut | ErrorKind::WouldBlock)
-            && attempt < tries
+        if matches!(
+            kind,
+            ErrorKind::NotFound
+                | ErrorKind::ConnectionRefused
+                | ErrorKind::TimedOut
+                | ErrorKind::WouldBlock
+        ) && attempt < tries
         {
             std::thread::sleep(Duration::from_millis(300));
             continue;
@@ -114,11 +142,19 @@ fn connect_socket(target: &SocketTarget, mcp: bool, doctor: bool) -> Result<(Uni
                     "connection refused. use: check the Anarc instance and run anarc-ctl doctor"
                 }
             }
-            ErrorKind::PermissionDenied => "connection rejected: socket permission denied. use: run Anarc and the harness as the same user",
-            ErrorKind::TimedOut | ErrorKind::WouldBlock => "connection timed out. use: anarc-ctl doctor",
+            ErrorKind::PermissionDenied => {
+                "connection rejected: socket permission denied. use: run Anarc and the harness as the same user"
+            }
+            ErrorKind::TimedOut | ErrorKind::WouldBlock => {
+                "connection timed out. use: anarc-ctl doctor"
+            }
             _ => "connection failed. use: anarc-ctl doctor",
         };
-        return Err(if doctor { format!("socket: {path:?}\n{message}") } else { message.into() });
+        return Err(if doctor {
+            format!("socket: {path:?}\n{message}")
+        } else {
+            message.into()
+        });
     }
     Err("connection failed. use: anarc-ctl doctor".into())
 }
@@ -135,23 +171,31 @@ fn send_socket_request(
     let doctor = request_val.get("cmd").and_then(|cmd| cmd.as_str()) == Some("doctor");
     let (mut stream, socket_path) = connect_socket(target, mcp, doctor)?;
     let timeout = Some(Duration::from_secs(28));
-    stream.set_read_timeout(timeout).and_then(|()| stream.set_write_timeout(timeout))
+    stream
+        .set_read_timeout(timeout)
+        .and_then(|()| stream.set_write_timeout(timeout))
         .map_err(|_| "socket timeout configuration failed. use: anarc-ctl doctor")?;
-    let req_str = serde_json::to_string(request_val).map_err(|_| "invalid request. use: anarc-ctl doctor")?;
+    let req_str =
+        serde_json::to_string(request_val).map_err(|_| "invalid request. use: anarc-ctl doctor")?;
     let write_result = writeln!(stream, "{req_str}");
 
     let mut reader = BufReader::new(stream);
     let mut resp_line = String::new();
-    let bytes = reader.read_line(&mut resp_line).map_err(|error| match error.kind() {
-        ErrorKind::TimedOut | ErrorKind::WouldBlock => "connection timed out waiting for Anarc. use: anarc-ctl doctor",
-        _ => "reply failed. use: anarc-ctl doctor",
-    })?;
+    let bytes = reader
+        .read_line(&mut resp_line)
+        .map_err(|error| match error.kind() {
+            ErrorKind::TimedOut | ErrorKind::WouldBlock => {
+                "connection timed out waiting for Anarc. use: anarc-ctl doctor"
+            }
+            _ => "reply failed. use: anarc-ctl doctor",
+        })?;
     if bytes == 0 {
         return Err(if write_result.is_err() {
             "request failed. use: anarc-ctl doctor"
         } else {
             "connection closed before reply. use: anarc-ctl doctor"
-        }.into());
+        }
+        .into());
     }
 
     let parsed: serde_json::Value = match serde_json::from_str(resp_line.trim()) {
@@ -195,17 +239,17 @@ fn send_socket_request(
 // ---------------------------------------------------------------------------
 
 fn get_tool_definitions() -> serde_json::Value {
-    const RECOVERY: &str = "On any error run `doctor` first.";
+    const RECOVERY: &str = "Run doctor on error.";
     serde_json::json!([
         {
             "name": "see",
-            "description": format!("Compact interactive elements index (inputs, buttons, links). {RECOVERY}"),
+            "description": format!("Interactive elements index (inputs, buttons, links). {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "scope": {
                         "type": "string",
-                        "description": "Scope: view (default), all, main, <ref>, or + (next page)",
+                        "description": "Scope: view (default), all, main, <ref>, or +",
                         "enum": ["view", "all", "main", "+"]
                     },
                     "tab_id": {
@@ -216,13 +260,13 @@ fn get_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "do",
-            "description": format!("Browser actions: click, type, key, submit, navigate, scroll, wait stable. Tab actions: tab new [url], tab close [target], tab pin [target], tab unpin [target], tab fav [target], tab unfav [target], tab <N>. {RECOVERY}"),
+            "description": format!("Actions: click, type, fill, key, keydown, keyup, submit, navigate, upload, scroll, tab. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "ops": {
                         "type": "string",
-                        "description": "DSL ops (e.g. b1; i2=\"text\"; key Enter; scroll down; tab pin; tab fav; tab close; tab new https://example.com)"
+                        "description": "DSL ops (e.g. b1; i2=\"text\"; key Enter; navigate https://...; upload /path; tab select 2)"
                     },
                     "tab_id": {
                         "type": "string"
@@ -233,7 +277,7 @@ fn get_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "read",
-            "description": format!("Read page content. Target last reads the latest message. {RECOVERY}"),
+            "description": format!("Read page content. Target last reads latest message. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -256,7 +300,7 @@ fn get_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "find",
-            "description": format!("Find up to 5 elements matching text or keyword query. {RECOVERY}"),
+            "description": format!("Find up to 5 elements matching text or query. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -272,12 +316,12 @@ fn get_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "tabs",
-            "description": format!("List tabs and spaces, showing active status, pinned/favorite state, URLs, and titles. {RECOVERY}"),
+            "description": format!("List tabs and spaces, showing active, pinned, URLs, titles. {RECOVERY}"),
             "inputSchema": { "type": "object" }
         },
         {
             "name": "tab",
-            "description": format!("Manage browser tabs: pin, unpin, fav, unfav, close, new, select. {RECOVERY}"),
+            "description": format!("Manage tabs: pin, unpin, fav, unfav, close, new, select. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -288,7 +332,7 @@ fn get_tool_definitions() -> serde_json::Value {
                     },
                     "target": {
                         "type": "string",
-                        "description": "Tab index (e.g. '1', '2') or tab ID. Omit for active tab."
+                        "description": "Tab index (e.g. '1', '2') or tab ID. Omit for active."
                     },
                     "url": {
                         "type": "string",
@@ -299,13 +343,35 @@ fn get_tool_definitions() -> serde_json::Value {
             }
         },
         {
+            "name": "upload",
+            "description": format!("Upload local files to element or page file input. {RECOVERY}"),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "File paths to upload"
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Ref (e.g. 'i1', 'b2') or CSS selector. Omit to auto-target file input."
+                    },
+                    "tab_id": {
+                        "type": "string"
+                    }
+                },
+                "required": ["files"]
+            }
+        },
+        {
             "name": "doctor",
             "description": "Diagnose agent control failures. Run first on any error.",
             "inputSchema": { "type": "object" }
         },
         {
             "name": "shot",
-            "description": format!("Capture cropped element or viewport screenshot. {RECOVERY}"),
+            "description": format!("Capture element or viewport screenshot. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -395,9 +461,15 @@ fn handle_mcp_request(
             };
 
             let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+            let arguments = params
+                .get("arguments")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
 
-            let tab_id = arguments.get("tab_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let tab_id = arguments
+                .get("tab_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
             let socket_req = match tool_name {
                 "tabs" | "doctor" => serde_json::json!({"cmd": tool_name}),
@@ -435,19 +507,106 @@ fn handle_mcp_request(
                     "target": arguments.get("target").and_then(|v| v.as_str()),
                     "scale": arguments.get("scale").and_then(|v| v.as_f64()).map(|f| f as f32)
                 }),
+                "upload" => {
+                    let target = arguments
+                        .get("target")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let files = arguments
+                        .get("files")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    if files.is_empty() {
+                        return Some(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "error": { "code": -32602, "message": "missing upload files. use: upload with files array" }
+                        }));
+                    }
+                    let files_str = files
+                        .iter()
+                        .map(|f| format!("\"{f}\""))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let ops = if target.is_empty() {
+                        format!("upload {files_str}")
+                    } else {
+                        format!("upload {target} {files_str}")
+                    };
+                    serde_json::json!({
+                        "cmd": "do",
+                        "tab_id": tab_id,
+                        "ops": ops
+                    })
+                }
                 "tab" => {
-                    let action = arguments.get("action").and_then(|v| v.as_str()).unwrap_or("list");
-                    let target = arguments.get("target").and_then(|v| v.as_str()).unwrap_or("");
+                    let action = arguments
+                        .get("action")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("list");
+                    let target = arguments
+                        .get("target")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     let url = arguments.get("url").and_then(|v| v.as_str()).unwrap_or("");
                     let ops = match action {
-                        "new" => if url.is_empty() { "tab new".to_string() } else { format!("tab new {url}") },
-                        "close" | "remove" => if target.is_empty() { "tab close".to_string() } else { format!("tab close {target}") },
-                        "pin" => if target.is_empty() { "tab pin".to_string() } else { format!("tab pin {target}") },
-                        "unpin" => if target.is_empty() { "tab unpin".to_string() } else { format!("tab unpin {target}") },
-                        "fav" | "favorite" => if target.is_empty() { "tab fav".to_string() } else { format!("tab fav {target}") },
-                        "unfav" | "unfavorite" => if target.is_empty() { "tab unfav".to_string() } else { format!("tab unfav {target}") },
-                        "select" | "switch" => if target.is_empty() { "tab 1".to_string() } else { format!("tab {target}") },
-                        other => if target.is_empty() { format!("tab {other}") } else { format!("tab {other} {target}") },
+                        "new" => {
+                            if url.is_empty() {
+                                "tab new".to_string()
+                            } else {
+                                format!("tab new {url}")
+                            }
+                        }
+                        "close" | "remove" => {
+                            if target.is_empty() {
+                                "tab close".to_string()
+                            } else {
+                                format!("tab close {target}")
+                            }
+                        }
+                        "pin" => {
+                            if target.is_empty() {
+                                "tab pin".to_string()
+                            } else {
+                                format!("tab pin {target}")
+                            }
+                        }
+                        "unpin" => {
+                            if target.is_empty() {
+                                "tab unpin".to_string()
+                            } else {
+                                format!("tab unpin {target}")
+                            }
+                        }
+                        "fav" | "favorite" => {
+                            if target.is_empty() {
+                                "tab fav".to_string()
+                            } else {
+                                format!("tab fav {target}")
+                            }
+                        }
+                        "unfav" | "unfavorite" => {
+                            if target.is_empty() {
+                                "tab unfav".to_string()
+                            } else {
+                                format!("tab unfav {target}")
+                            }
+                        }
+                        "select" | "switch" => {
+                            if target.is_empty() {
+                                "tab 1".to_string()
+                            } else {
+                                format!("tab select {target}")
+                            }
+                        }
+                        other => {
+                            if target.is_empty() {
+                                format!("tab {other}")
+                            } else {
+                                format!("tab {other} {target}")
+                            }
+                        }
                     };
                     serde_json::json!({
                         "cmd": "do",
@@ -527,7 +686,11 @@ fn run_mcp_server(socket: SocketTarget, shot_as_path: bool) {
                     "id": null,
                     "error": { "code": -32700, "message": "invalid JSON. use: tools/list" }
                 });
-                let _ = writeln!(stdout_lock, "{}", serde_json::to_string(&err_resp).unwrap_or_default());
+                let _ = writeln!(
+                    stdout_lock,
+                    "{}",
+                    serde_json::to_string(&err_resp).unwrap_or_default()
+                );
                 let _ = stdout_lock.flush();
                 continue;
             }
@@ -568,7 +731,9 @@ fn handle_install(harness: Option<&str>, socket: &SocketTarget) {
     let json = serde_json::to_string_pretty(&json).unwrap_or_default();
     match harness.unwrap_or("print") {
         "claude" => println!("# Claude Code\nAdd to .mcp.json\n\n{json}"),
-        "antigravity" => println!("# Antigravity\nAdd to ~/.gemini/config/mcp_config.json or .agents/mcp_config.json\n\n{json}"),
+        "antigravity" => println!(
+            "# Antigravity\nAdd to ~/.gemini/config/mcp_config.json or .agents/mcp_config.json\n\n{json}"
+        ),
         "codex" => println!("# Codex CLI\nAdd to ~/.codex/config.toml\n\n{codex}"),
         "systemd" => {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/home/rover".into());
@@ -580,10 +745,17 @@ fn handle_install(harness: Option<&str>, socket: &SocketTarget) {
             let socket_content = "[Unit]\nDescription=Anarc Agent Control Socket\n\n[Socket]\nListenStream=%t/anarc/ctl.sock\nSocketMode=0600\n\n[Install]\nWantedBy=sockets.target\n";
             let _ = std::fs::write(user_dir.join("anarc.service"), service_content);
             let _ = std::fs::write(user_dir.join("anarc.socket"), socket_content);
-            let _ = std::process::Command::new("systemctl").args(["--user", "daemon-reload"]).status();
-            println!("Installed systemd units to {}\nRun: systemctl --user enable --now anarc.socket", user_dir.display());
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "daemon-reload"])
+                .status();
+            println!(
+                "Installed systemd units to {}\nRun: systemctl --user enable --now anarc.socket",
+                user_dir.display()
+            );
         }
-        _ => println!("# Claude Code and Antigravity (JSON)\n\n{json}\n\n# Codex CLI (TOML)\n\n{codex}"),
+        _ => println!(
+            "# Claude Code and Antigravity (JSON)\n\n{json}\n\n# Codex CLI (TOML)\n\n{codex}"
+        ),
     }
 }
 
@@ -615,7 +787,9 @@ fn main() {
                 }
             }
             "--instance" => {
-                socket.instance = args.get(i + 1).and_then(|value| value.parse().ok())
+                socket.instance = args
+                    .get(i + 1)
+                    .and_then(|value| value.parse().ok())
                     .filter(|slot| (1..=9).contains(slot));
                 if socket.instance.is_none() {
                     eprintln!("invalid instance. use: --instance <1–9>");
@@ -742,14 +916,62 @@ fn main() {
                 serde_json::json!({ "cmd": "tabs" })
             } else {
                 let ops = match action {
-                    "new" => if target.is_empty() { "tab new".to_string() } else { format!("tab new {target}") },
-                    "close" | "remove" => if target.is_empty() { "tab close".to_string() } else { format!("tab close {target}") },
-                    "pin" => if target.is_empty() { "tab pin".to_string() } else { format!("tab pin {target}") },
-                    "unpin" => if target.is_empty() { "tab unpin".to_string() } else { format!("tab unpin {target}") },
-                    "fav" | "favorite" => if target.is_empty() { "tab fav".to_string() } else { format!("tab fav {target}") },
-                    "unfav" | "unfavorite" => if target.is_empty() { "tab unfav".to_string() } else { format!("tab unfav {target}") },
-                    "select" | "switch" => if target.is_empty() { "tab 1".to_string() } else { format!("tab {target}") },
-                    other => if target.is_empty() { format!("tab {other}") } else { format!("tab {other} {target}") },
+                    "new" => {
+                        if target.is_empty() {
+                            "tab new".to_string()
+                        } else {
+                            format!("tab new {target}")
+                        }
+                    }
+                    "close" | "remove" => {
+                        if target.is_empty() {
+                            "tab close".to_string()
+                        } else {
+                            format!("tab close {target}")
+                        }
+                    }
+                    "pin" => {
+                        if target.is_empty() {
+                            "tab pin".to_string()
+                        } else {
+                            format!("tab pin {target}")
+                        }
+                    }
+                    "unpin" => {
+                        if target.is_empty() {
+                            "tab unpin".to_string()
+                        } else {
+                            format!("tab unpin {target}")
+                        }
+                    }
+                    "fav" | "favorite" => {
+                        if target.is_empty() {
+                            "tab fav".to_string()
+                        } else {
+                            format!("tab fav {target}")
+                        }
+                    }
+                    "unfav" | "unfavorite" => {
+                        if target.is_empty() {
+                            "tab unfav".to_string()
+                        } else {
+                            format!("tab unfav {target}")
+                        }
+                    }
+                    "select" | "switch" => {
+                        if target.is_empty() {
+                            "tab 1".to_string()
+                        } else {
+                            format!("tab select {target}")
+                        }
+                    }
+                    other => {
+                        if target.is_empty() {
+                            format!("tab {other}")
+                        } else {
+                            format!("tab {other} {target}")
+                        }
+                    }
                 };
                 serde_json::json!({
                     "cmd": "do",
@@ -757,6 +979,19 @@ fn main() {
                     "ops": ops
                 })
             }
+        }
+        "upload" => {
+            let ops = if filtered_args.len() > 1 {
+                format!("upload {}", filtered_args[1..].join(" "))
+            } else {
+                eprintln!("missing upload files. use: anarc-ctl upload <target> <files...>");
+                std::process::exit(1);
+            };
+            serde_json::json!({
+                "cmd": "do",
+                "tab_id": explicit_tab,
+                "ops": ops
+            })
         }
         "do" => {
             let ops = if filtered_args.len() > 1 {
@@ -824,7 +1059,8 @@ fn main() {
 }
 
 fn screenshot_data(reply: &str) -> Result<&str, String> {
-    reply.strip_prefix("data:image/png;base64,")
+    reply
+        .strip_prefix("data:image/png;base64,")
         .filter(|data| data.starts_with("iVBORw0KGgo"))
         .ok_or_else(|| "screenshot invalid. use: see".into())
 }
@@ -869,8 +1105,10 @@ fn save_screenshot(reply: &str) -> Result<String, String> {
     let invalid = "screenshot invalid. use: see";
     let png = decode_screenshot(screenshot_data(reply)?).ok_or(invalid)?;
     let (width, height) = png_dimensions(&png).ok_or(invalid)?;
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos()).unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
     let path = std::env::temp_dir().join(format!("anarc-{}-{now}.png", std::process::id()));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -879,30 +1117,45 @@ fn save_screenshot(reply: &str) -> Result<String, String> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options.open(&path).and_then(|mut file| file.write_all(&png))
+    options
+        .open(&path)
+        .and_then(|mut file| file.write_all(&png))
         .map_err(|_| "PNG write failed. use: see")?;
-    Ok(format!("saved {} {width}x{height} (image file: do not read_file/cat it)", path.display()))
+    Ok(format!(
+        "saved {} {width}x{height} (image file: do not read_file/cat it)",
+        path.display()
+    ))
 }
 
 fn read_stats() -> Result<String, String> {
-    let dir = std::env::var_os("ANARC_DATA_DIR").map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
-            .map(|home| PathBuf::from(home).join(".local/share/anarc")))
+    let dir = std::env::var_os("ANARC_DATA_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".local/share/anarc"))
+        })
         .unwrap_or_else(|| std::env::temp_dir().join(".local/share/anarc"));
     let log = match std::fs::File::open(dir.join("agent/log.jsonl")) {
         Ok(log) => log,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok("no calls recorded".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok("no calls recorded".into());
+        }
         Err(_) => return Err("stats unavailable. use: status".into()),
     };
     let mut groups = std::collections::BTreeMap::<String, (Vec<f64>, usize)>::new();
     for line in BufReader::new(log).lines() {
         let line = line.map_err(|_| "stats unreadable. use: status")?;
-        let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
         let (Some(op), Some(ok), Some(tokens)) = (
             record.get("op").and_then(|value| value.as_str()),
             record.get("ok").and_then(|value| value.as_bool()),
             record.get("est_tokens").and_then(|value| value.as_f64()),
-        ) else { continue };
+        ) else {
+            continue;
+        };
         let (samples, errors) = groups.entry(op.to_string()).or_default();
         samples.push(tokens);
         *errors += usize::from(!ok);
@@ -915,10 +1168,17 @@ fn read_stats() -> Result<String, String> {
         samples.sort_by(f64::total_cmp);
         let count = samples.len();
         let quantile = |percent: usize| {
-            samples.get((count * percent).div_ceil(100).saturating_sub(1)).copied().unwrap_or(0.0)
+            samples
+                .get((count * percent).div_ceil(100).saturating_sub(1))
+                .copied()
+                .unwrap_or(0.0)
         };
         let error_rate = 100.0 * errors as f64 / count as f64;
-        lines.push(format!("{op} {count} {:.1} {:.1} {error_rate:.1}%", quantile(50), quantile(95)));
+        lines.push(format!(
+            "{op} {count} {:.1} {:.1} {error_rate:.1}%",
+            quantile(50),
+            quantile(95)
+        ));
     }
     Ok(lines.join("\n"))
 }
@@ -933,8 +1193,11 @@ mod tests {
         let line = save_screenshot(reply)?;
         assert!(!line.contains("base64") && !line.contains("iVBOR"));
         assert!(line.ends_with("1x1 (image file: do not read_file/cat it)"));
-        let path = line.strip_prefix("saved ").and_then(|line| line.split_once(" 1x1"))
-            .map(|(path, _)| path).ok_or("missing test PNG path")?;
+        let path = line
+            .strip_prefix("saved ")
+            .and_then(|line| line.split_once(" 1x1"))
+            .map(|(path, _)| path)
+            .ok_or("missing test PNG path")?;
         let png = std::fs::read(path).map_err(|error| error.to_string())?;
         std::fs::remove_file(path).map_err(|error| error.to_string())?;
         assert_eq!(png_dimensions(&png), Some((1, 1)));
@@ -950,7 +1213,11 @@ mod tests {
         // 1 token ~= 4 characters, or whitespace/punctuation count
         let char_len = json_str.len();
         let token_estimate_by_char = char_len / 4;
-        let token_estimate_by_words = (json_str.split(|c: char| c.is_whitespace() || c == '"' || c == ',' || c == ':').filter(|s| !s.is_empty()).count() as f64 * 1.1) as usize;
+        let token_estimate_by_words = (json_str
+            .split(|c: char| c.is_whitespace() || c == '"' || c == ',' || c == ':')
+            .filter(|s| !s.is_empty())
+            .count() as f64
+            * 1.1) as usize;
 
         let max_estimate = token_estimate_by_char.max(token_estimate_by_words);
         eprintln!(
@@ -965,7 +1232,11 @@ mod tests {
 
         // Also assert each individual tool description is <= 60 tokens (~240 chars)
         let tool_array = tools.as_array().unwrap();
-        assert_eq!(tool_array.len(), 8, "Expected five core tools, tabs, tab, and doctor");
+        assert_eq!(
+            tool_array.len(),
+            9,
+            "Expected five core tools, tabs, tab, doctor, and upload"
+        );
         for tool in tool_array {
             let desc = tool.get("description").and_then(|d| d.as_str()).unwrap();
             let desc_tokens = desc.len() / 4;
@@ -981,7 +1252,10 @@ mod tests {
 
     #[test]
     fn mcp_protocol_errors_give_next_commands() {
-        let socket_path = SocketTarget { explicit: Some("/tmp/nonexistent-anarc-test.sock".into()), instance: None };
+        let socket_path = SocketTarget {
+            explicit: Some("/tmp/nonexistent-anarc-test.sock".into()),
+            instance: None,
+        };
         let requests = [
             serde_json::json!({"id": 1, "method": "unknown"}),
             serde_json::json!({"id": 2, "method": "tools/call"}),
@@ -989,15 +1263,21 @@ mod tests {
         ];
         for request in requests {
             let reply = handle_mcp_request(&request, &socket_path, false);
-            let error = reply.as_ref().and_then(|reply| reply.pointer("/error/message"))
-                .and_then(serde_json::Value::as_str).unwrap_or_default();
+            let error = reply
+                .as_ref()
+                .and_then(|reply| reply.pointer("/error/message"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
             assert!(error.ends_with("use: tools/list"), "{error}");
         }
     }
 
     #[test]
     fn test_mcp_mock_lifecycle_and_protocol_negotiation() {
-        let socket_path = SocketTarget { explicit: Some("/tmp/nonexistent-anarc-test.sock".into()), instance: None };
+        let socket_path = SocketTarget {
+            explicit: Some("/tmp/nonexistent-anarc-test.sock".into()),
+            instance: None,
+        };
 
         // 1. Initialize
         let init_req = serde_json::json!({
@@ -1013,7 +1293,10 @@ mod tests {
         let init_resp = handle_mcp_request(&init_req, &socket_path, false).unwrap();
         assert_eq!(init_resp.get("id").unwrap().as_i64(), Some(1));
         let res = init_resp.get("result").unwrap();
-        assert_eq!(res.get("protocolVersion").unwrap().as_str(), Some("2024-11-05"));
+        assert_eq!(
+            res.get("protocolVersion").unwrap().as_str(),
+            Some("2024-11-05")
+        );
         assert!(res.get("capabilities").unwrap().get("tools").is_some());
 
         // 2. Initialized notification
@@ -1023,7 +1306,10 @@ mod tests {
             "params": {}
         });
         let notif_resp = handle_mcp_request(&notif_req, &socket_path, false);
-        assert!(notif_resp.is_none(), "Notifications must not receive a response");
+        assert!(
+            notif_resp.is_none(),
+            "Notifications must not receive a response"
+        );
 
         // 3. Ping
         let ping_req = serde_json::json!({
@@ -1041,8 +1327,14 @@ mod tests {
             "method": "tools/list"
         });
         let list_resp = handle_mcp_request(&list_req, &socket_path, false).unwrap();
-        let tools = list_resp.get("result").unwrap().get("tools").unwrap().as_array().unwrap();
-        assert_eq!(tools.len(), 8);
+        let tools = list_resp
+            .get("result")
+            .unwrap()
+            .get("tools")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(tools.len(), 9);
 
         // 5. Tools call with Anarc offline - should return clean error message without hanging
         let call_req = serde_json::json!({

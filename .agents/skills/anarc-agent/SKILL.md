@@ -39,16 +39,19 @@ Compact index of what can be acted on.
 Execute batch actions using the `do` DSL.
 - **Args**: `ops` (semicolon or newline separated)
 - **Syntax**:
-  - `b1` : Click element `b1`
-  - `i1="text"` : Focus, clear, and type into input `i1`
-  - `i1+"text"` : Append text without clearing
+  - `b1` / `click b1` / `click css=button` / `click aria="Send"` : Click element
+  - `i1="text"` / `fill i1 text` / `fill css=input text` : Focus, clear, and type into input
+  - `i1+"text"` / `type append i1 text` / `type i1 text append=true` : Append text without wiping rich tokens (Slate.js/Draft.js)
+  - `type i1 text` : Type into input/contenteditable emitting standard `insertText` events
   - `i2=@secret:github` : Inject secret from local vault (value never enters context)
   - `b:"Sign in"` : Semantic selector resolved at runtime
-  - `key Enter` / `key ctrl+a` : Dispatch keypress or keyboard chord
-  - `go https://example.com` | `back` | `fwd` | `reload`
+  - `key Enter` / `key "Ctrl+v"` / `key Shift+Tab` : Dispatch keypress or keyboard chord
+  - `keydown Shift; key ArrowLeft; keyup Shift` : Hold and release modifiers
+  - `navigate https://example.com` / `go https://example.com` | `back` | `fwd` | `reload`
   - `scroll down` | `scroll up` | `scroll top` | `scroll end`
   - `hover b1` | `focus i1` | `drag b1 b2` | `xy X Y` (canvas fallback)
-  - `dialog ok` | `dialog cancel` | `tab new` | `tab N` | `tab close`
+  - `upload [target] /path/file` : Upload file to target or page `<input type=file>`
+  - `dialog ok` | `dialog cancel` | `tab new [url]` | `tab select <id|N>` | `tab close`
   - `submit` : Press Enter or click the nearest send button
   - `wait idle` | `wait 500` | `wait "Results"` | `wait stable [ms]` at the end of a batch
 - **Diff replies**:
@@ -70,3 +73,7 @@ Locate up to 5 elements matching text or keyword query.
 ### 5. `shot`
 Capture a viewport screenshot. CLI prints a PNG path. MCP returns an image, with `mcp --shot-as path` available for path output.
 - **Args**: `target` (ref or `view`), `scale` (0.1 to 1.0)
+
+### 6. `upload`
+Upload local files to target element or page file input without native OS dialog friction.
+- **Args**: `files` (array of file paths), `target` (optional ref e.g. `i1` or CSS selector e.g. `css=input[type=file]`), `tab_id` (optional)

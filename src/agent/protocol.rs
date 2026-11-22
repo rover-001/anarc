@@ -54,6 +54,16 @@ impl AgentRequest {
         }
     }
 
+    pub fn target_tab(&self) -> Option<&str> {
+        match self {
+            Self::See { tab_id, .. }
+            | Self::Read { tab_id, .. }
+            | Self::Find { tab_id, .. }
+            | Self::Do { tab_id, .. }
+            | Self::Shot { tab_id, .. } => tab_id.as_deref(),
+            _ => None,
+        }
+    }
 
     pub fn target_tab_mut(&mut self) -> Option<&mut Option<String>> {
         match self {

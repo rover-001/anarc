@@ -1089,6 +1089,7 @@ fn focusing_web_content_moves_focus_off_the_address_bar(cx: &mut gpui::TestAppCo
     });
     view.update(cx, |app, cx| {
         app.update_suggestions("youtube");
+        app.address_editing = true;
         cx.notify();
     });
 
@@ -1097,6 +1098,7 @@ fn focusing_web_content_moves_focus_off_the_address_bar(cx: &mut gpui::TestAppCo
         view.read_with(cx, |app, cx| {
             assert!(app.browser_focused);
             assert!(!app.show_suggestions);
+            assert!(!app.address_editing);
             assert_eq!(window.focused(cx), Some(app.browser_focus_handle.clone()));
             assert_ne!(
                 window.focused(cx),
