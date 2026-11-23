@@ -404,20 +404,89 @@ fn settings_content(
                 .child(sidebar_card)
                 .into_any_element()
         }
-        SettingsSection::Shortcuts => section(
-            "Keyboard shortcuts",
-            vec![
-                ("Ctrl + L", "Focus the address bar"),
-                ("Ctrl + T", "Open a tab"),
-                ("Ctrl + W", "Close the active tab or this settings window"),
-                ("Ctrl + K", "Open the command palette"),
-                ("Ctrl + S", "Collapse or expand the sidebar"),
-                ("Ctrl + Shift + S", "Split the active tab with another tab"),
-                ("Ctrl + + / − / 0", "Change or reset page zoom"),
-            ],
-            theme,
-        )
-        .into_any_element(),
+        SettingsSection::Shortcuts => div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(
+                section(
+                    "Tabs & spaces",
+                    vec![
+                        ("Ctrl + T", "New tab"),
+                        ("Ctrl + W", "Close tab or this panel"),
+                        ("Ctrl + Shift + T", "Reopen closed tab"),
+                        ("Ctrl + Tab", "Next tab"),
+                        ("Ctrl + Shift + Tab", "Previous tab"),
+                        ("Ctrl + 1 … 9", "Jump to tab (9 = last)"),
+                        ("Ctrl + Shift + S", "Split active tab"),
+                        ("Ctrl + Shift + W", "Exit split view"),
+                        ("Ctrl + Alt + ← / →", "Focus split pane"),
+                    ],
+                    theme,
+                ),
+            )
+            .child(
+                section(
+                    "Navigation & address bar",
+                    vec![
+                        ("Ctrl + L", "Focus address bar"),
+                        ("Enter", "Open typed URL or suggestion"),
+                        ("↑ / ↓", "Move address suggestion"),
+                        ("Esc", "Dismiss suggestions"),
+                        ("Alt + ← / →", "Back / forward"),
+                        ("Ctrl + R", "Reload"),
+                        ("Ctrl + Shift + R", "Hard reload"),
+                        ("Ctrl + V", "Paste into address bar"),
+                    ],
+                    theme,
+                ),
+            )
+            .child(
+                section(
+                    "Page & find",
+                    vec![
+                        ("Ctrl + F", "Find in page"),
+                        ("Enter / Shift + Enter", "Find next / previous"),
+                        ("Esc", "Close find bar"),
+                        ("Ctrl + C / X / V", "Copy / cut / paste selection"),
+                        ("Ctrl + A", "Select all"),
+                        ("Esc", "Stop page loading"),
+                    ],
+                    theme,
+                ),
+            )
+            .child(
+                section(
+                    "Tools & appearance",
+                    vec![
+                        ("Ctrl + K", "Command palette"),
+                        ("Ctrl + S", "Toggle sidebar"),
+                        ("Ctrl + Shift + B", "Toggle site shield"),
+                        ("Ctrl + Alt + R", "Reader mode"),
+                        ("Ctrl + = / − / 0", "Zoom in / out / reset"),
+                    ],
+                    theme,
+                ),
+            )
+            .child(
+                section(
+                    "Dialogs & overlays",
+                    vec![
+                        ("Esc", "Close palette, peek, or menu"),
+                        ("↑ / ↓", "Move palette selection"),
+                        ("Enter", "Run selected command"),
+                    ],
+                    theme,
+                ),
+            )
+            .child(
+                section(
+                    "Plugins",
+                    vec![("Ctrl + J", "Next tab (Vim keymap)")],
+                    theme,
+                ),
+            )
+            .into_any_element(),
         SettingsSection::Plugins => plugin_manager_content(
             theme,
             plugin_rows,
