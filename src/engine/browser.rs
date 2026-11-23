@@ -121,7 +121,7 @@ impl Engine {
             };
 
             let (count, _) = &*self.close_state;
-            *count.lock().unwrap() += 1;
+            *count.lock().map_err(|_| "CEF close counter unavailable")? += 1;
             let started = cef::browser_host_create_browser(
                 Some(&window_info),
                 Some(&mut client),
@@ -131,7 +131,7 @@ impl Engine {
                 request_ctx,
             );
             if started == 0 {
-                *count.lock().unwrap() -= 1;
+                *count.lock().map_err(|_| "CEF close counter unavailable")? -= 1;
                 return Err("CEF failed to start asynchronous browser creation".into());
             }
             self.pending_browsers.insert(id.to_owned(), shared);
@@ -189,6 +189,14 @@ impl Engine {
         }
     }
     pub fn close_browser(&mut self, tab_id: &str) {
+        // Record the expected CEF echo before asking CEF to close: `do_close`
+        // runs on another thread and may enqueue the request immediately.
+        if let Ok(mut events) = self.events.lock() {
+            *events
+                .expected_close_requests
+                .entry(tab_id.to_owned())
+                .or_insert(0) += 1;
+        }
         self.close_browser_entry(tab_id);
         self.lifecycle.closed(tab_id);
         self.resize_state.remove(tab_id);
@@ -244,6 +252,16 @@ impl Engine {
     }
     pub fn tab_state(&self, tab_id: &str) -> Option<TabState> {
         self.lifecycle.state(tab_id)
+    }
+    pub(crate) fn agent_browser_pending(&self, tab_id: &str) -> bool {
+        self.pending_browsers.contains_key(tab_id) || self.canceled_browsers.contains(tab_id)
+    }
+    pub(crate) fn browser_key_count(&self) -> usize {
+        self.browsers.len()
+    }
+    pub(crate) fn log_agent_browser_miss(&self, tab_id: &str) {
+        eprintln!("anarc-agent: browser miss key={tab_id:?} live={:?} pending={:?} canceled={:?}",
+            self.browsers.keys(), self.pending_browsers.keys(), self.canceled_browsers);
     }
     pub fn has_browser(&self, tab_id: &str) -> bool {
         self.browsers.contains_key(tab_id)

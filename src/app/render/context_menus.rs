@@ -14,8 +14,7 @@ impl Lumen {
         let mut overlays = Vec::new();
         if self.plugins_menu_open {
             let ad_blocker_enabled = self.engine.ad_blocker_enabled();
-            let live_share_active = self.plugins.is_active("com.anarc.live-share");
-            let active_count = (if ad_blocker_enabled { 1 } else { 0 }) + (if live_share_active { 1 } else { 0 });
+            let active_count = if ad_blocker_enabled { 1 } else { 0 };
             let dismiss = div()
                 .id("plugins-menu-dismiss")
                 .occlude()
@@ -39,7 +38,7 @@ impl Lumen {
                 .right(px(8.0 * UI_SCALE))
                 .w(px(300.0 * UI_SCALE))
                 .max_h(px(480.0 * UI_SCALE))
-                .bg(rgb(theme.surface))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -62,129 +61,16 @@ impl Lumen {
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme.muted))
+                                .text_color(rgb(visual::panel_muted(theme)))
                                 .child("Extensions"),
                         )
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(rgb(theme.muted))
+                                .text_color(rgb(visual::panel_muted(theme)))
                                 .child(format!("{active_count} active")),
                         ),
                 )
-                .child({
-                    div()
-                        .id("toggle-live-share")
-                        .px_2()
-                        .py_2()
-                        .w_full()
-                        .min_w_0()
-                        .rounded_md()
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
-                        .cursor_pointer()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_3()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.plugins_menu_open = false;
-                            if let Err(error) = this.open_plugin_panel("com.anarc.live-share") {
-                                eprintln!("Could not open live share: {error}");
-                            } else {
-                                this.focus_browser(window, cx);
-                            }
-                            cx.notify();
-                        }))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .min_w_0()
-                                .flex_1()
-                                .child(Icon::new(IconName::Share2).text_color(rgb(
-                                    if live_share_active {
-                                        0x76d7b2
-                                    } else {
-                                        theme.muted
-                                    },
-                                )))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .flex()
-                                        .flex_col()
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_1p5()
-                                                .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .font_weight(FontWeight::MEDIUM)
-                                                        .text_color(rgb(theme.text))
-                                                        .whitespace_nowrap()
-                                                        .child("Anarc Live Share"),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .px_1p5()
-                                                        .py_0p5()
-                                                        .rounded_sm()
-                                                        .bg(rgb(theme.accent))
-                                                        .text_color(rgb(theme.base))
-                                                        .text_xs()
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .child("Recommended"),
-                                                ),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(rgb(theme.muted))
-                                                .overflow_hidden()
-                                                .text_ellipsis()
-                                                .whitespace_nowrap()
-                                                .child("Live collaborative space sharing"),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .id("live-share-toggle-switch")
-                                .flex_shrink_0()
-                                .w(px(34.0 * UI_SCALE))
-                                .h(px(20.0 * UI_SCALE))
-                                .rounded_full()
-                                .bg(rgb(if live_share_active {
-                                    theme.accent
-                                } else {
-                                    theme.border
-                                }))
-                                .flex()
-                                .items_center()
-                                .justify_start()
-                                .px(px(2.0 * UI_SCALE))
-                                .child(
-                                    div()
-                                        .size(px(16.0 * UI_SCALE))
-                                        .rounded_full()
-                                        .bg(rgb(0xffffff))
-                                        .when(live_share_active, |thumb| {
-                                            thumb.ml(px(14.0 * UI_SCALE))
-                                        }),
-                                )
-                                .cursor_pointer()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    let current = this.plugins.is_active("com.anarc.live-share");
-                                    let _ = this.set_plugin_enabled("com.anarc.live-share", !current);
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                })),
-                        )
-                })
                 .child(
                     div()
                         .id("toggle-ad-blocker")
@@ -193,7 +79,7 @@ impl Lumen {
                         .w_full()
                         .min_w_0()
                         .rounded_md()
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .flex()
                         .items_center()
                         .justify_between()
@@ -229,7 +115,7 @@ impl Lumen {
                                         .child(
                                             div()
                                                 .text_xs()
-                                                .text_color(rgb(theme.muted))
+                                                .text_color(rgb(visual::panel_muted(theme)))
                                                 .overflow_hidden()
                                                 .text_ellipsis()
                                                 .whitespace_nowrap()
@@ -278,7 +164,7 @@ impl Lumen {
                         .w_full()
                         .min_w_0()
                         .rounded_md()
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -301,7 +187,7 @@ impl Lumen {
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(rgb(theme.muted))
+                                        .text_color(rgb(visual::panel_muted(theme)))
                                         .overflow_hidden()
                                         .text_ellipsis()
                                         .whitespace_nowrap()
@@ -363,7 +249,7 @@ impl Lumen {
                     .top(px(TOPBAR_HEIGHT + 4.0 * UI_SCALE))
                     .right(px(8.0 * UI_SCALE))
                     .w(px(280.0 * UI_SCALE))
-                    .bg(rgb(theme.surface))
+                    .bg(rgb(visual::panel_surface(theme.surface)))
                     .border_1()
                     .border_color(rgb(if is_active {
                         theme.accent
@@ -413,8 +299,8 @@ impl Lumen {
                                     .px_1()
                                     .py_0p5()
                                     .rounded_md()
-                                    .hover(move |s| s.bg(rgb(theme.surface_hover)))
-                                    .text_color(rgb(theme.muted))
+                                    .hover(move |s| s.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
+                                    .text_color(rgb(visual::panel_muted(theme)))
                                     .text_xs()
                                     .child("✕")
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -489,7 +375,7 @@ impl Lumen {
                 .left(px(x))
                 .w(px(width))
                 .max_h(px(height))
-                .bg(rgb(theme.surface))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -507,7 +393,7 @@ impl Lumen {
                         .py_1()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme.muted))
+                        .text_color(rgb(visual::panel_muted(theme)))
                         .child("Sidebar"),
                 )
                 .child(
@@ -518,7 +404,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -541,7 +427,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -616,7 +502,7 @@ impl Lumen {
                 .bottom(px(48.0 * UI_SCALE))
                 .left(px(8.0 * UI_SCALE))
                 .w(px(224.0 * UI_SCALE))
-                .bg(rgb(theme.surface))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -634,7 +520,7 @@ impl Lumen {
                         .py_1()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme.muted))
+                        .text_color(rgb(visual::panel_muted(theme)))
                         .flex()
                         .items_center()
                         .gap_2()
@@ -649,7 +535,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -663,9 +549,6 @@ impl Lumen {
                 );
 
             if can_delete {
-                let is_shared = target_space.name.starts_with("[Shared]")
-                    || target_space.id.starts_with("shared-");
-                let label = if is_shared { "Leave Shared Space" } else { "Delete Space" };
                 ctx_menu = ctx_menu.child(
                     div()
                         .id("ctx-delete-space")
@@ -679,8 +562,8 @@ impl Lumen {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(Icon::new(if is_shared { IconName::LogOut } else { IconName::Trash }))
-                        .child(label)
+                        .child(Icon::new(IconName::Trash))
+                        .child("Delete Space")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.delete_space(&target_id_del);
                             cx.notify();
@@ -712,8 +595,9 @@ impl Lumen {
                 .split
                 .as_ref()
                 .is_some_and(|pair| pair.first == target_id || pair.second == target_id);
-            let target_favorite = target_tab.is_some_and(|tab| tab.favorite);
-            let target_pinned = target_tab.is_some_and(|tab| tab.pinned);
+            // Favorites and pins are one section; `fav`/`pin` stay aliases.
+            let target_kept = target_tab.is_some_and(|tab| tab.is_pinned());
+            let target_grouped = target_tab.is_some_and(|tab| tab.kept_group.is_some());
             let target_folder = target_tab.and_then(|tab| tab.folder.clone());
             let target_folders = self
                 .active_space()
@@ -745,7 +629,7 @@ impl Lumen {
                 .w(px(menu.width))
                 .max_h(px(menu.height))
                 .overflow_y_scroll()
-                .bg(rgb(theme.surface))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -765,7 +649,7 @@ impl Lumen {
                         .py_1()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme.muted))
+                        .text_color(rgb(visual::panel_muted(theme)))
                         .child("Split with…"),
                 );
                 for (id, title, favicon) in tabs {
@@ -781,7 +665,7 @@ impl Lumen {
                             .rounded_md()
                             .text_sm()
                             .text_color(rgb(theme.text))
-                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                            .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -802,36 +686,6 @@ impl Lumen {
                     );
                 }
             } else {
-                let favorite_id = target_id.clone();
-                panel = panel.child(
-                    div()
-                        .id("ctx-favorite")
-                        .px_2()
-                        .py_2()
-                        .rounded_md()
-                        .text_sm()
-                        .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
-                        .cursor_pointer()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(Icon::new(if target_favorite {
-                            IconName::StarOff
-                        } else {
-                            IconName::StarFill
-                        }))
-                        .child(if target_favorite {
-                            "Remove from favorites"
-                        } else {
-                            "Add to favorites"
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.favorite_tab(&favorite_id, !target_favorite);
-                            this.tab_context_menu = None;
-                            cx.notify();
-                        })),
-                );
                 let pin_id = target_id.clone();
                 panel = panel.child(
                     div()
@@ -841,28 +695,52 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(Icon::new(if target_pinned {
+                        .child(Icon::new(if target_kept {
                             IconName::PinOff
                         } else {
                             IconName::Pin
                         }))
-                        .child(if target_pinned {
+                        .child(if target_kept {
                             "Unpin tab"
                         } else {
                             "Pin tab"
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.pin_tab(&pin_id, !target_pinned);
+                            this.pin_tab(&pin_id, !target_kept);
                             this.tab_context_menu = None;
                             cx.notify();
                         })),
                 );
-                if (target_pinned || target_favorite)
+                if target_grouped {
+                    let detach_id = target_id.clone();
+                    panel = panel.child(
+                        div()
+                            .id("ctx-detach-kept")
+                            .px_2()
+                            .py_2()
+                            .rounded_md()
+                            .text_sm()
+                            .text_color(rgb(theme.text))
+                            .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Icon::new(IconName::PanelTop))
+                            .child("Move to own row")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.set_kept_group(&detach_id, None);
+                                this.tab_context_menu = None;
+                                cx.notify();
+                            })),
+                    );
+                }
+                if target_kept
                     && target_tab
                         .and_then(|t| t.pinned_url.as_deref())
                         .is_some_and(|p_url| target_tab.is_some_and(|t| t.url != p_url))
@@ -876,7 +754,7 @@ impl Lumen {
                             .rounded_md()
                             .text_sm()
                             .text_color(rgb(theme.text))
-                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                            .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -897,7 +775,7 @@ impl Lumen {
                         .py_1()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme.muted))
+                        .text_color(rgb(visual::panel_muted(theme)))
                         .child("Folders"),
                 );
                 for (folder_id, folder_name) in &target_folders {
@@ -914,7 +792,7 @@ impl Lumen {
                             .rounded_md()
                             .text_sm()
                             .text_color(rgb(theme.text))
-                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                            .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -938,7 +816,7 @@ impl Lumen {
                             .rounded_md()
                             .text_sm()
                             .text_color(rgb(theme.text))
-                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                            .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -961,7 +839,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -989,7 +867,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -1012,7 +890,7 @@ impl Lumen {
                             .rounded_md()
                             .text_sm()
                             .text_color(rgb(theme.text))
-                            .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                            .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -1035,7 +913,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -1057,7 +935,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -1078,7 +956,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -1102,7 +980,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -1131,7 +1009,7 @@ impl Lumen {
                         .rounded_md()
                         .text_sm()
                         .text_color(rgb(theme.text))
-                        .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .cursor_pointer()
                         .flex()
                         .items_center()
@@ -1197,7 +1075,7 @@ impl Lumen {
                 .w(px(menu.width))
                 .max_h(px(menu.height))
                 .overflow_y_scroll()
-                .bg(rgb(theme.surface))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -1215,7 +1093,7 @@ impl Lumen {
                         .py_1()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme.muted))
+                        .text_color(rgb(visual::panel_muted(theme)))
                         .child(folder_name),
                 );
             let rename_id = folder_id.clone();
@@ -1227,7 +1105,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1250,7 +1128,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1301,7 +1179,7 @@ impl Lumen {
                 .left(px(menu.x))
                 .top(px(menu.y))
                 .w(px(180.0 * UI_SCALE))
-                .bg(rgb(theme.surface))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_lg()
@@ -1320,7 +1198,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1370,7 +1248,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1393,7 +1271,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1418,7 +1296,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1441,7 +1319,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -1464,7 +1342,7 @@ impl Lumen {
                     .rounded_md()
                     .text_sm()
                     .text_color(rgb(theme.text))
-                    .hover(move |style| style.bg(rgb(theme.surface_hover)))
+                    .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .cursor_pointer()
                     .flex()
                     .items_center()

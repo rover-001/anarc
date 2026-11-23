@@ -1,0 +1,13 @@
+[package]
+name = "anarc-plugin-sdk"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Rust guest bindings and helpers for Anarc WASM plugins"
+
+[features]
+default = ["component"]
+component = ["dep:wit-bindgen"]
+
+[dependencies]
+wit-bindgen = { version = "=0.57.1", optional = true }

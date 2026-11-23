@@ -414,7 +414,7 @@ impl Lumen {
 
         for mut external_space in loaded.spaces {
             for ext_tab in &mut external_space.tabs {
-                if (ext_tab.favorite || ext_tab.pinned)
+                if ext_tab.is_pinned()
                     && let Some(pinned) = &ext_tab.pinned_url
                 {
                     if !pinned.is_empty() {
@@ -451,8 +451,7 @@ impl Lumen {
                         a.id != b.id
                             || a.url != b.url
                             || a.title != b.title
-                            || a.favorite != b.favorite
-                            || a.pinned != b.pinned
+                            || a.is_pinned() != b.is_pinned()
                             || a.folder != b.folder
                     })
                 {

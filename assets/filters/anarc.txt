@@ -1,0 +1,46 @@
+! Title: Lumen starter filters
+! Description: Small, self-authored EasyList-format starter rules for Lumen.
+! License: CC0-1.0; rules authored for this project, no upstream list text included.
+||doubleclick.net^
+||googlesyndication.com^
+||googleadservices.com^
+||adnxs.com^
+||adsrvr.org^
+||adsafeprotected.com^
+||scorecardresearch.com^
+||youtube.com/pagead/*
+||youtube.com/api/stats/ads*
+||youtube.com/ptracking*
+||youtube.com/youtubei/v1/log_event*
+||youtube.com/youtubei/v1/player/ad*
+||youtube.com/get_midroll_info*
+||googleads.g.doubleclick.net^
+||static.doubleclick.net^
+||pubads.g.doubleclick.net^
+||adservice.google.com^
+||pagead2.googlesyndication.com^
+! HiAnime and anime streaming ad networks, popups, and banner injections
+||summasaprobe.com^
+||attainthreatfluffy.com^
+||backletseamen.com^
+||dependsmoscow.com^
+||digresssloked.com^
+||drapingleden.com^
+||euphonefiar.com^
+||filmishquila.com^
+||fixatessoused.com^
+||odorfulapheses.com^
+||prewhipmamamu.com^
+||rutategpd.com^
+||sacksgulleys.com^
+||sorosehottie.com^
+||zitzithquaff.top^
+||doo.lat/public/overroll_gasparin.js
+||iili.io/JvfIu1a.gif$image
+/embed-1/ajax/e-1/banners|$xhr
+/embed-1/e-1/banners|$xhr
+hianime.to,hianime.at,hianime.nz,hianimez.to##.pizza
+hianime.to,hianime.at,hianime.nz,hianimez.to##[href*="flix"]
+hianime.to,hianime.at,hianime.nz,hianimez.to###vidcloud-player > #overlay-container
+hianime.to,hianime.at,hianime.nz,hianimez.to##div[class*="close-container"]
+hianime.to,hianime.at,hianime.nz,hianimez.to##div[class*="substrate"]

@@ -30,6 +30,19 @@ impl ResizeDrag {
         self.pending_targets.clear();
     }
 
+    /// Starts a transition (sidebar reveal/collapse) where CEF keeps its current
+    /// size until the animation finishes. The OSR image is GPU-stretched to the
+    /// animating container in the meantime, so Blink only relayouts once at the
+    /// end instead of once per frame.
+    pub fn start_frozen(
+        &mut self,
+        current_sizes: Vec<BrowserSize>,
+        edge_colors: Vec<(String, u32)>,
+    ) {
+        self.start(Vec::new(), edge_colors);
+        self.frozen = Some(current_sizes);
+    }
+
     pub fn frozen_size(&self, tab_id: &str) -> Option<(i32, i32)> {
         self.frozen
             .as_ref()?

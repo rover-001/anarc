@@ -64,12 +64,27 @@ if [ -z "$BUNDLE_BIN" ] && [ "$SKIP_BUILD" -eq 0 ]; then
 fi
 
 if [ -z "$BUNDLE_BIN" ]; then
+    # Cargo may redirect artifacts via target-dir in ~/.cargo/config.toml.
+    CARGO_TARGET="$(cargo metadata --no-deps --format-version 1 2>/dev/null | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
     if [ -x "target/release/anarc" ]; then
         BUNDLE_BIN="target/release/anarc"
+    elif [ -n "$CARGO_TARGET" ] && [ -x "$CARGO_TARGET/release/anarc" ]; then
+        BUNDLE_BIN="$CARGO_TARGET/release/anarc"
     else
         BUNDLE_BIN="target/release/lumen"
     fi
     [ -x "$BUNDLE_BIN" ] || { echo "error: $BUNDLE_BIN not found; build first" >&2; exit 1; }
+fi
+
+# anarc-ctl is a second Cargo bin target built alongside anarc. Release bundles
+# may ship it next to this script; source checkouts have it under the build dir.
+ANARC_CTL_BIN=""
+if [ -x ./anarc-ctl ]; then
+    ANARC_CTL_BIN="./anarc-ctl"
+elif [ -x "target/release/anarc-ctl" ]; then
+    ANARC_CTL_BIN="target/release/anarc-ctl"
+elif [ -n "${CARGO_TARGET:-}" ] && [ -x "$CARGO_TARGET/release/anarc-ctl" ]; then
+    ANARC_CTL_BIN="$CARGO_TARGET/release/anarc-ctl"
 fi
 
 # CEF runtime: bundled dir, $CEF_PATH, or the copy the build script fetched.
@@ -78,6 +93,9 @@ if [ -z "$BUNDLE_CEF" ]; then
         BUNDLE_CEF="$CEF_PATH"
     else
         BUNDLE_CEF="$(find target/release/build target/debug/build -maxdepth 3 -type d -name "cef_${CEF_ARCH}" 2>/dev/null | head -1)"
+        if [ -z "$BUNDLE_CEF" ] && [ -n "${CARGO_TARGET:-}" ]; then
+            BUNDLE_CEF="$(find "$CARGO_TARGET/release/build" "$CARGO_TARGET/debug/build" -maxdepth 3 -type d -name "cef_${CEF_ARCH}" 2>/dev/null | head -1)"
+        fi
     fi
     [ -n "$BUNDLE_CEF" ] && [ -d "$BUNDLE_CEF" ] || {
         echo "error: CEF runtime not found." >&2
@@ -98,7 +116,21 @@ rm -f "$APP_DIR/bin/anarc.tmp" 2>/dev/null || true
 cp -f "$BUNDLE_BIN" "$APP_DIR/bin/anarc.tmp"
 chmod 755 "$APP_DIR/bin/anarc.tmp"
 mv -f "$APP_DIR/bin/anarc.tmp" "$APP_DIR/bin/anarc"
-ln -sf anarc "$APP_DIR/bin/lumen"
+
+# Install anarc-ctl too: harness configs written by `anarc-ctl install` invoke
+# `anarc-ctl mcp`, so the binary must be present on PATH. Symlink the PATH entry
+# so later installs of the app-dir binary are picked up without touching the
+# launcher wrapper at $BIN_DIR/anarc.
+if [ -n "$ANARC_CTL_BIN" ]; then
+    echo "==> Installing anarc-ctl to $APP_DIR/bin and $BIN_DIR"
+    rm -f "$APP_DIR/bin/anarc-ctl.tmp" 2>/dev/null || true
+    cp -f "$ANARC_CTL_BIN" "$APP_DIR/bin/anarc-ctl.tmp"
+    chmod 755 "$APP_DIR/bin/anarc-ctl.tmp"
+    mv -f "$APP_DIR/bin/anarc-ctl.tmp" "$APP_DIR/bin/anarc-ctl"
+    ln -sf "$APP_DIR/bin/anarc-ctl" "$BIN_DIR/anarc-ctl"
+else
+    echo "warning: anarc-ctl binary not found; harness MCP configs need it on PATH" >&2
+fi
 
 # CEF runtime: copy only runtime files (skip cmake/, include/, CMakeLists, etc.)
 echo "==> Installing CEF runtime to $CEF_DIR"
@@ -155,18 +187,36 @@ fi
 exec "$APP_DIR/bin/anarc" "\$@"
 EOF
 chmod 755 "$BIN_DIR/anarc"
-ln -sf anarc "$BIN_DIR/lumen"
 
 # --- Desktop entry + icon ---------------------------------------------------
 if [ "$NO_DESKTOP" -eq 0 ]; then
     mkdir -p "$ICON_DIR" "$PIXMAPS_DIR" "$DESKTOP_DIR"
+    SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
     LOGO=""
-    for candidate in ./anarc_logo.png ./assets/anarc_logo.png ../assets/anarc_logo.png; do
+    for candidate in "$SCRIPT_DIR/assets/anarc_logo.png" "$SCRIPT_DIR/anarc_logo.png" ./assets/anarc_logo.png ../assets/anarc_logo.png; do
         [ -f "$candidate" ] && LOGO="$candidate" && break
     done
     if [ -n "$LOGO" ]; then
-        cp "$LOGO" "$ICON_DIR/anarc.png"
         cp "$LOGO" "$PIXMAPS_DIR/anarc.png"
+        # Install every standard hicolor size so desktop environments pick the
+        # new logo at any scale instead of caching an old 256-only entry.
+        ICON_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
+        if command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1; then
+            RESIZER=$(command -v magick >/dev/null 2>&1 && echo magick || echo convert)
+            for size in 16 32 48 64 128 256; do
+                mkdir -p "$ICON_ROOT/${size}x${size}/apps"
+                "$RESIZER" "$LOGO" -background none -resize "${size}x${size}" \
+                    "$ICON_ROOT/${size}x${size}/apps/anarc.png"
+            done
+        else
+            for size in 16 32 48 64 128 256; do
+                mkdir -p "$ICON_ROOT/${size}x${size}/apps"
+                cp "$LOGO" "$ICON_ROOT/${size}x${size}/apps/anarc.png"
+            done
+        fi
+        # Keep the Windows icon resource beside the binary for bundle installs;
+        # the ico is also embedded into the exe at build time (build.rs).
+        [ -f "$SCRIPT_DIR/assets/anarc.ico" ] && cp "$SCRIPT_DIR/assets/anarc.ico" "$BIN_DIR/anarc.ico" || true
     fi
     cat > "$DESKTOP_DIR/anarc.desktop" <<EOF
 [Desktop Entry]

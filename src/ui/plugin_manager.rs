@@ -99,7 +99,7 @@ pub(crate) fn render_permission_review(
         .mx_auto()
         .p_5()
         .rounded_xl()
-        .bg(rgb(theme.surface))
+        .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
         .border_1()
         .border_color(rgb(theme.border))
         .flex()
@@ -181,7 +181,7 @@ pub(crate) fn render_permission_review(
                         .px_3()
                         .py_2()
                         .rounded_md()
-                        .bg(rgb(theme.surface_hover))
+                        .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                         .text_xs()
                         .text_color(rgb(theme.muted))
                         .child(install_label)
@@ -209,12 +209,10 @@ pub(crate) fn render(
 ) -> gpui_kit::AnyElement {
     let mut sorted_rows = rows.to_vec();
     sorted_rows.sort_by_key(|row| {
-        if row.descriptor.id == "com.anarc.live-share" {
+        if row.descriptor.kind == crate::plugin::PluginKind::Core {
             0
-        } else if row.descriptor.kind == crate::plugin::PluginKind::Core {
-            1
         } else {
-            2
+            1
         }
     });
     let mut list = div().w_full().flex().flex_col().gap_2();
@@ -318,11 +316,11 @@ fn plugin_row(
             .px_3()
             .py_1p5()
             .rounded_md()
-            .bg(rgb(if enabled {
-                theme.accent
+            .bg(if enabled {
+                rgb(theme.accent)
             } else {
-                theme.surface_hover
-            }))
+                crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)
+            })
             .text_xs()
             .font_weight(gpui_kit::FontWeight::MEDIUM)
             .text_color(rgb(if enabled { theme.base } else { theme.text }))
@@ -346,7 +344,7 @@ fn plugin_row(
             .px_3()
             .py_1p5()
             .rounded_md()
-            .bg(rgb(theme.surface_hover))
+            .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
             .text_xs()
             .font_weight(gpui_kit::FontWeight::MEDIUM)
             .text_color(rgb(theme.muted))
@@ -369,7 +367,7 @@ fn plugin_row(
         .debug_selector(|| format!("plugin-card-{plugin_id}"))
         .p_4()
         .rounded_xl()
-        .bg(rgb(theme.surface))
+        .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
         .border_1()
         .border_color(rgb(theme.border))
         .flex()
@@ -406,19 +404,6 @@ fn plugin_row(
                                             row.descriptor.name.clone()
                                         }),
                                 )
-                                .when(row.descriptor.id == "com.anarc.live-share", |d| {
-                                    d.child(
-                                        div()
-                                            .px_1p5()
-                                            .py_0p5()
-                                            .rounded_sm()
-                                            .bg(rgb(theme.accent))
-                                            .text_color(rgb(theme.base))
-                                            .text_xs()
-                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                            .child("Top Recommended"),
-                                    )
-                                })
                                 .child(
                                     div()
                                         .text_xs()
@@ -456,7 +441,7 @@ fn plugin_row(
                                 .px_3()
                                 .py_1p5()
                                 .rounded_md()
-                                .bg(rgb(theme.surface_hover))
+                                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                                 .text_xs()
                                 .font_weight(gpui_kit::FontWeight::MEDIUM)
                                 .text_color(rgb(theme.text))
@@ -480,7 +465,7 @@ fn plugin_row(
                                 .px_3()
                                 .py_1p5()
                                 .rounded_md()
-                                .bg(rgb(theme.surface_hover))
+                                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                                 .text_xs()
                                 .font_weight(gpui_kit::FontWeight::MEDIUM)
                                 .text_color(rgb(theme.text))
@@ -547,7 +532,7 @@ fn action_button(
         .px_3()
         .py_1p5()
         .rounded_md()
-        .bg(rgb(theme.surface_hover))
+        .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
         .text_xs()
         .font_weight(gpui_kit::FontWeight::MEDIUM)
         .text_color(rgb(theme.text))

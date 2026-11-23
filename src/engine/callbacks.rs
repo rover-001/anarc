@@ -1804,6 +1804,18 @@ cef::wrap_dialog_handler! {
             let extensions = extract_cef_string_list(accept_extensions);
             let wake = self.ui_update_wake.clone();
 
+            if let Some(paths) = crate::agent::act::take_pending_upload_files() {
+                if !paths.is_empty() {
+                    let mut list = CefStringList::new();
+                    for path in paths {
+                        list.append(&path);
+                    }
+                    callback.cont(Some(&mut list));
+                    let _ = wake.try_send(());
+                    return 1;
+                }
+            }
+
             std::thread::spawn(move || {
                 let selected = run_file_picker(
                     mode,

@@ -12,14 +12,19 @@ pub struct Tab {
     pub pinned_title: Option<String>,
     #[serde(default)]
     pub favicon_path: Option<String>,
+    /// Pinned/favorite state. Both flags are aliases of one kept-tab concept;
+    /// `is_pinned`/`set_pinned` are the only accessors new code should use.
     #[serde(default)]
     pub pinned: bool,
-    /// Favorite tabs live in the Arc-style grid at the top of the sidebar.
     #[serde(default)]
     pub favorite: bool,
     /// Folder that owns this tab in the sidebar, if any.
     #[serde(default)]
     pub folder: Option<String>,
+    /// Kept tabs with the same group share a row of favicon boxes. `None`
+    /// means the tab owns a full-width single-tab row instead.
+    #[serde(default)]
+    pub kept_group: Option<String>,
     #[serde(default)]
     pub last_active: u64,
     #[serde(default)]
@@ -40,10 +45,23 @@ impl Tab {
             pinned: false,
             favorite: false,
             folder: None,
+            kept_group: None,
             last_active: 0,
             scroll_y: 0.0,
             state: TabState::Discarded,
         }
+    }
+
+    /// Favorites and pinned tabs are the same section. Reads use `||` so old
+    /// saved tabs that only set one flag keep working.
+    pub fn is_pinned(&self) -> bool {
+        self.pinned || self.favorite
+    }
+
+    /// Writes both flags so the alias never diverges in new saves.
+    pub fn set_pinned(&mut self, pinned: bool) {
+        self.pinned = pinned;
+        self.favorite = pinned;
     }
 }
 

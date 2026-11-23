@@ -86,7 +86,11 @@ pub fn render_space_icon(name: &str) -> Icon {
 }
 
 pub fn space_icon_button(icon: &str, is_active: bool, theme: SpaceTheme) -> impl IntoElement {
-    let bg_color = if is_active { theme.surface } else { theme.base };
+    let bg_color = if is_active {
+        crate::ui::visual::translucent_surface(theme.surface, 0x30)
+    } else {
+        rgb(theme.base)
+    };
     let border_color = if is_active {
         theme.border_hover
     } else {
@@ -100,14 +104,14 @@ pub fn space_icon_button(icon: &str, is_active: bool, theme: SpaceTheme) -> impl
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgb(bg_color))
+        .bg(bg_color)
         .border_1()
         .border_color(rgb(border_color))
         .text_color(rgb(text_color))
         .active(|style| style.opacity(0.92))
         .hover(move |style| {
             style
-                .bg(rgb(theme.surface_hover))
+                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                 .text_color(rgb(theme.text))
         })
         .cursor_pointer()
@@ -141,7 +145,7 @@ pub fn add_space_button(theme: SpaceTheme) -> impl IntoElement {
         .active(|style| style.opacity(0.92))
         .hover(move |style| {
             style
-                .bg(rgb(theme.surface_hover))
+                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                 .text_color(rgb(theme.text))
         })
         .cursor_pointer()
@@ -160,7 +164,7 @@ pub fn settings_button(theme: SpaceTheme) -> impl IntoElement {
         .active(|style| style.opacity(0.92))
         .hover(move |style| {
             style
-                .bg(rgb(theme.surface_hover))
+                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                 .text_color(rgb(theme.text))
         })
         .cursor_pointer()
@@ -184,7 +188,7 @@ pub fn downloads_button(theme: SpaceTheme, is_downloading: bool) -> impl IntoEle
         .active(|style| style.opacity(0.92))
         .hover(move |style| {
             style
-                .bg(rgb(theme.surface_hover))
+                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                 .text_color(rgb(theme.text))
         })
         .cursor_pointer()
@@ -220,7 +224,7 @@ pub fn plugins_button(theme: SpaceTheme) -> impl IntoElement {
         .active(|style| style.opacity(0.92))
         .hover(move |style| {
             style
-                .bg(rgb(theme.surface_hover))
+                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                 .text_color(rgb(theme.text))
         })
         .cursor_pointer()

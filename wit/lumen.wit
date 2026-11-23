@@ -6,6 +6,7 @@ interface host {
         title: string,
         url: string,
         active: bool,
+        // Favorites and pins are one kept-tab section.
         pinned: bool,
     }
 

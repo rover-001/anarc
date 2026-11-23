@@ -18,7 +18,7 @@ use super::*;
 /// user navigates later. Legacy tabs predate that field, so their current URL
 /// is adopted once as the pinned destination.
 pub(in crate::app) fn seed_pinned_destination(tab: &mut Tab) {
-    if (tab.pinned || tab.favorite) && tab.pinned_url.is_none() {
+    if tab.is_pinned() && tab.pinned_url.is_none() {
         tab.pinned_url = Some(tab.url.clone());
         if tab.pinned_title.is_none() && !tab.title.is_empty() {
             tab.pinned_title = Some(tab.title.clone());
@@ -90,6 +90,13 @@ impl Lumen {
         make_tab_ids_unique(&mut spaces);
         for space in &mut spaces {
             for tab in &mut space.tabs {
+                // Favorites and pins are one section: normalize old saves that
+                // only set one of the two flags before any logic reads them.
+                if tab.is_pinned() {
+                    tab.set_pinned(true);
+                } else {
+                    tab.kept_group = None;
+                }
                 // Saves older than `pinned_url` (and tabs pinned before their
                 // URL settled) get their destination captured now, while the
                 // stored URL is still the page they represent. Capturing it on
@@ -99,7 +106,7 @@ impl Lumen {
         }
         for space in &mut spaces {
             for tab in &mut space.tabs {
-                if (tab.pinned || tab.favorite)
+                if tab.is_pinned()
                     && let Some(pinned_url) = &tab.pinned_url
                 {
                     tab.url = pinned_url.clone();
@@ -116,8 +123,7 @@ impl Lumen {
                 .iter()
                 .find(|tab| {
                     (tab.url == "about:blank" || tab.url == "lumen://welcome")
-                        && !tab.favorite
-                        && !tab.pinned
+                        && !tab.is_pinned()
                         && tab.folder.is_none()
                 })
                 .map(|tab| tab.id.clone());
@@ -272,6 +278,10 @@ impl Lumen {
             active_space,
             sidebar_collapsed,
             sidebar_hovered: false,
+            kept_drag_hovered_tab: None,
+            kept_drag_hover_after: false,
+            kept_drag_source_id: None,
+            kept_section_drag_hovered: false,
             sidebar_width,
             sidebar_resizing: false,
             sidebar_width_transition: None,
@@ -469,6 +479,7 @@ impl Lumen {
         &mut self,
         window: &Window,
         split_divider: bool,
+        freeze: bool,
     ) {
         let pair = self.current_split_pair();
         let bounds = window.bounds();
@@ -516,7 +527,11 @@ impl Lumen {
                 )
             })
             .collect();
-        self.resize_drag.start(sizes.clone(), edge_colors);
+        if freeze {
+            self.resize_drag.start_frozen(sizes.clone(), edge_colors);
+        } else {
+            self.resize_drag.start(sizes.clone(), edge_colors);
+        }
         for size in sizes {
             resize_debug(format_args!(
                 "drag_start kind={} tab={} size={}x{}",
@@ -530,7 +545,13 @@ impl Lumen {
     pub(crate) fn active_tab_id(&self) -> &str {
         self.active_space().active.as_deref().unwrap_or_default()
     }
-    pub(in crate::app) fn save_state(&self) {
+    pub(crate) fn process_agent_requests(&mut self) {
+        let requests = self.engine.take_agent_requests();
+        for (req, resp_tx) in requests {
+            crate::agent::plugin::handle_agent_request(self, req, resp_tx);
+        }
+    }
+    pub(crate) fn save_state(&self) {
         #[cfg(not(test))]
         {
             let mut spaces_to_save = self.spaces.clone();
@@ -572,6 +593,9 @@ impl Lumen {
         self.peek_focused = false;
         self.show_suggestions = false;
         self.selected_suggestion = None;
+        // A stale edit flag would route the next Return to address navigation
+        // even after GPUI focus moved into the CEF canvas.
+        self.address_editing = false;
         self.close_app_page();
         self.plugins_menu_open = false;
         self.tab_context_menu = None;
@@ -664,7 +688,7 @@ impl Lumen {
             self.save_state();
         }
     }
-    pub(in crate::app) fn active_space_mut(&mut self) -> &mut Space {
+    pub(crate) fn active_space_mut(&mut self) -> &mut Space {
         self.spaces
             .iter_mut()
             .find(|space| space.id == self.active_space)
@@ -676,7 +700,8 @@ pub(crate) fn ensure_live_share_daemon_running() {
     #[cfg(not(test))]
     {
         if let Ok(addr) = "127.0.0.1:7433".parse::<std::net::SocketAddr>()
-            && std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok()
+            && std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50))
+                .is_ok()
         {
             return;
         }
@@ -687,10 +712,21 @@ pub(crate) fn ensure_live_share_daemon_running() {
             Some(crate::paths::data_dir().join("plugins/live-share/daemon.py")),
             Some(std::path::PathBuf::from("plugins/live-share/daemon.py")),
             exe_dir.map(|p| p.join("plugins/live-share/daemon.py")),
-            exe_dir.and_then(|p| p.parent()).map(|p| p.join("plugins/live-share/daemon.py")),
-            exe_dir.and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.join("plugins/live-share/daemon.py")),
-            exe_dir.and_then(|p| p.parent()).and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.join("plugins/live-share/daemon.py")),
-            Some(std::path::PathBuf::from("/home/rover/Projects/kreon/anarc/plugins/live-share/daemon.py")),
+            exe_dir
+                .and_then(|p| p.parent())
+                .map(|p| p.join("plugins/live-share/daemon.py")),
+            exe_dir
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+                .map(|p| p.join("plugins/live-share/daemon.py")),
+            exe_dir
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+                .map(|p| p.join("plugins/live-share/daemon.py")),
+            Some(std::path::PathBuf::from(
+                "/home/rover/Projects/kreon/anarc/plugins/live-share/daemon.py",
+            )),
         ];
         for path in candidates.into_iter().flatten() {
             if path.is_file() {

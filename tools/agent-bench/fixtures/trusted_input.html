@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Trusted input fixture</title>
+<main>
+  <div contenteditable="true" role="textbox" aria-label="Message">initial text</div>
+  <button>Send</button>
+  <p role="article" id="reply">Ready</p>
+  <button id="stream">Stream</button>
+  <form>
+    <label>Card number <input autocomplete="cc-number"></label>
+    <button>Pay $40</button>
+  </form>
+</main>
+<script>
+const editor = document.querySelector('[contenteditable]');
+const reply = document.querySelector('#reply');
+function send(path) {
+  reply.textContent = path + ': ' + editor.innerText.trim();
+  editor.textContent = '';
+}
+editor.addEventListener('keydown', event => {
+  if (!event.isTrusted || event.key !== 'Enter') return;
+  event.preventDefault();
+  if (!editor.innerText.startsWith('fallback')) send('Enter');
+});
+document.querySelector('button').addEventListener('click', event => {
+  if (event.isTrusted) send('Button');
+});
+document.querySelector('#stream').addEventListener('click', event => {
+  if (!event.isTrusted) return;
+  reply.textContent = 'stream';
+  let step = 0;
+  const timer = setInterval(() => {
+    reply.textContent += ` ${++step}`;
+    if (step === 10) {
+      clearInterval(timer);
+      reply.textContent += ' complete';
+    }
+  }, 300);
+});
+</script>

@@ -40,7 +40,7 @@ impl Lumen {
             let was_already_active = space.active.as_deref() == Some(tab_id);
             if let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id) {
                 seed_pinned_destination(tab);
-                if (tab.pinned || tab.favorite)
+                if tab.is_pinned()
                     && let Some(pinned_url) = tab.pinned_url.clone()
                     && tab.url != pinned_url
                 {
@@ -80,9 +80,20 @@ impl Lumen {
         }
     }
 
-    /// Favorites take precedence over pinning and folders so each tab lives in
-    /// exactly one sidebar section.
-    pub(in crate::app) fn favorite_tab(&mut self, tab_id: &str, favorite: bool) {
+    /// Favorites and pins are the same kept-tab section. `favorite_tab` is kept
+    /// as an alias of `pin_tab` for the agent/CLI/MCP surface.
+    pub(crate) fn favorite_tab(&mut self, tab_id: &str, favorite: bool) {
+        self.set_tab_kept(tab_id, favorite);
+    }
+
+    /// Pins (or unpins) a tab in the single kept-tab section at the top of the
+    /// sidebar. Both `pinned` and `favorite` are written so the alias never
+    /// diverges in saved state.
+    pub(crate) fn pin_tab(&mut self, tab_id: &str, pinned: bool) {
+        self.set_tab_kept(tab_id, pinned);
+    }
+
+    fn set_tab_kept(&mut self, tab_id: &str, kept: bool) {
         let mut changed = false;
         if let Some(space) = self
             .spaces
@@ -90,9 +101,8 @@ impl Lumen {
             .find(|space| space.id == self.active_space)
             && let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id)
         {
-            tab.favorite = favorite;
-            if favorite {
-                tab.pinned = false;
+            tab.set_pinned(kept);
+            if kept {
                 tab.folder = None;
                 if tab.pinned_url.is_none() {
                     tab.pinned_url = Some(tab.url.clone());
@@ -100,9 +110,10 @@ impl Lumen {
                 if tab.pinned_title.is_none() && !tab.title.is_empty() {
                     tab.pinned_title = Some(tab.title.clone());
                 }
-            } else if !tab.pinned {
+            } else {
                 tab.pinned_url = None;
                 tab.pinned_title = None;
+                tab.kept_group = None;
             }
             changed = true;
         }
@@ -111,29 +122,18 @@ impl Lumen {
         }
     }
 
-    /// Pinned tabs render directly below the favorites grid.
-    pub(in crate::app) fn pin_tab(&mut self, tab_id: &str, pinned: bool) {
+    /// Drag targets decide the shape: dropping on a box body joins its group,
+    /// dropping on the lower strip gives the tab its own full-width row.
+    pub(crate) fn set_kept_group(&mut self, tab_id: &str, group: Option<String>) {
         let mut changed = false;
         if let Some(space) = self
             .spaces
             .iter_mut()
             .find(|space| space.id == self.active_space)
             && let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id)
+            && tab.kept_group != group
         {
-            tab.pinned = pinned;
-            if pinned {
-                tab.favorite = false;
-                tab.folder = None;
-                if tab.pinned_url.is_none() {
-                    tab.pinned_url = Some(tab.url.clone());
-                }
-                if tab.pinned_title.is_none() && !tab.title.is_empty() {
-                    tab.pinned_title = Some(tab.title.clone());
-                }
-            } else if !tab.favorite {
-                tab.pinned_url = None;
-                tab.pinned_title = None;
-            }
+            tab.kept_group = group;
             changed = true;
         }
         if changed {
@@ -141,29 +141,29 @@ impl Lumen {
         }
     }
 
-    /// Dragging a tab out of a favorite/pinned/folder section and dropping it
-    /// on the regular tab list returns it to the plain section.
-    pub(in crate::app) fn clear_tab_section(&mut self, tab_id: &str) {
+    /// Dragging a tab out of the kept/folder section and dropping it on the
+    /// regular tab list returns it to the plain section.
+    pub(crate) fn clear_tab_section(&mut self, tab_id: &str) {
         let mut changed = false;
         if let Some(space) = self
             .spaces
             .iter_mut()
             .find(|space| space.id == self.active_space)
             && let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id)
-            && (tab.favorite || tab.pinned || tab.folder.is_some())
+            && (tab.is_pinned() || tab.folder.is_some())
         {
-            tab.favorite = false;
-            tab.pinned = false;
+            tab.set_pinned(false);
             tab.pinned_url = None;
             tab.pinned_title = None;
             tab.folder = None;
+            tab.kept_group = None;
             changed = true;
         }
         if changed {
             self.save_state();
         }
     }
-    pub(in crate::app) fn reorder_tab_relative(
+    pub(crate) fn reorder_tab_relative(
         &mut self,
         tab_id: &str,
         target_id: &str,
@@ -183,7 +183,7 @@ impl Lumen {
                     .tabs
                     .iter()
                     .find(|tab| tab.id == id)
-                    .map(|tab| (tab.favorite, tab.pinned, tab.folder.clone()))
+                    .map(|tab| (tab.is_pinned(), tab.folder.clone()))
             };
             if section(tab_id).is_none() || section(tab_id) != section(target_id) {
                 return;
@@ -230,25 +230,62 @@ impl Lumen {
         target_id: &str,
         after: bool,
     ) {
+        self.kept_drag_source_id = None;
+        self.kept_drag_hovered_tab = None;
+        self.kept_drag_hover_after = false;
+        self.kept_section_drag_hovered = false;
         let target_section = self
             .active_space()
             .tabs
             .iter()
             .find(|tab| tab.id == target_id)
-            .map(|tab| (tab.favorite, tab.pinned, tab.folder.clone()));
-        let Some((favorite, pinned, folder)) = target_section else {
+            .map(|tab| (tab.is_pinned(), tab.folder.clone(), tab.kept_group.clone()));
+        let Some((kept, folder, group)) = target_section else {
             return;
         };
         if let Some(folder_id) = folder {
             self.move_tab_to_folder(tab_id, &folder_id);
-        } else if favorite {
-            self.favorite_tab(tab_id, true);
-        } else if pinned {
+        } else if kept {
             self.pin_tab(tab_id, true);
+            // Body drop: join the target's box group (creating one if needed).
+            // Lower-strip drop: keep the tab in its own full-width row.
+            let joined_group = if after {
+                None
+            } else {
+                Some(group.unwrap_or_else(|| target_id.to_owned()))
+            };
+            self.set_kept_group(tab_id, joined_group.clone());
+            if let Some(group) = joined_group {
+                self.set_kept_group(target_id, Some(group));
+            }
         } else {
             self.clear_tab_section(tab_id);
         }
         self.reorder_tab_relative(tab_id, target_id, after);
+    }
+
+    /// Drop a kept tab onto the hover-expanded before/after slot beside `anchor`.
+    ///
+    /// A slot beside an ungrouped tab must create a two-tab group: using the
+    /// anchor's id as the group key joins both tabs. Previously the slot only
+    /// set the dragged tab's group to `None`, so the first group could never be
+    /// formed (adding a third tab worked because existing groups carry an id).
+    pub(crate) fn drop_kept_tab_in_slot(
+        &mut self,
+        tab_id: &str,
+        anchor: &str,
+        group: Option<String>,
+        after: bool,
+    ) {
+        self.kept_drag_source_id = None;
+        self.kept_drag_hovered_tab = None;
+        self.kept_drag_hover_after = false;
+        self.kept_section_drag_hovered = false;
+        self.pin_tab(tab_id, true);
+        let joined_group = group.or_else(|| Some(anchor.to_owned()));
+        self.set_kept_group(tab_id, joined_group.clone());
+        self.set_kept_group(anchor, joined_group);
+        self.reorder_tab_relative(tab_id, anchor, after);
     }
     pub(crate) fn add_tab(&mut self) {
         self.close_peek();
@@ -288,7 +325,7 @@ impl Lumen {
             .tabs
             .iter()
             .find(|tab| tab.id == active_id)
-            .is_some_and(|tab| tab.favorite || tab.pinned);
+            .is_some_and(|tab| tab.is_pinned());
 
         if is_kept {
             self.unload_kept_tab(&active_id);
@@ -296,7 +333,7 @@ impl Lumen {
             self.close_tab_by_id(&active_id);
         }
     }
-    pub(in crate::app) fn close_tab_by_id(&mut self, tab_id: &str) -> bool {
+    pub(crate) fn close_tab_by_id(&mut self, tab_id: &str) -> bool {
         let Some(space) = self
             .spaces
             .iter_mut()
@@ -349,7 +386,7 @@ impl Lumen {
                 .chain((0..index.min(space.tabs.len())).rev())
                 .find_map(|candidate| {
                     let tab = &space.tabs[candidate];
-                    (!tab.favorite && !tab.pinned && tab.folder.is_none()).then(|| tab.id.clone())
+                    (!tab.is_pinned() && tab.folder.is_none()).then(|| tab.id.clone())
                 });
             if let Some(next_regular) = next_regular {
                 space.active = Some(next_regular.clone());
@@ -389,7 +426,7 @@ impl Lumen {
             .tabs
             .iter()
             .find(|tab| tab.id == tab_id)
-            .is_some_and(|tab| tab.favorite || tab.pinned);
+            .is_some_and(|tab| tab.is_pinned());
         if is_kept_page {
             self.unload_kept_tab(tab_id);
         } else {
@@ -408,7 +445,7 @@ impl Lumen {
             return;
         };
         let folder_id = space.tabs[index].folder.clone();
-        if folder_id.is_none() && !space.tabs[index].favorite && !space.tabs[index].pinned {
+        if folder_id.is_none() && !space.tabs[index].is_pinned() {
             return;
         }
 
@@ -428,7 +465,7 @@ impl Lumen {
         }
         self.engine.close_browser(tab_id);
         space.tabs[index].state = TabState::Discarded;
-        if space.tabs[index].pinned || space.tabs[index].favorite {
+        if space.tabs[index].is_pinned() {
             seed_pinned_destination(&mut space.tabs[index]);
             if let Some(pinned_url) = space.tabs[index].pinned_url.clone() {
                 space.tabs[index].url = pinned_url;
@@ -463,11 +500,21 @@ impl Lumen {
                         .iter()
                         .any(|tab| tab.id == *other && tab.state != TabState::Discarded)
                 })
+                // Unloading a pinned tab must never activate another pinned
+                // page: doing so reopens it on the next render and cascades
+                // into more tabs when Ctrl+W is pressed repeatedly. Prefer a
+                // live regular tab, then an existing blank tab, then create
+                // one new blank tab.
                 .or_else(|| {
                     space
                         .tabs
                         .iter()
-                        .find(|tab| tab.id != tab_id && tab.state != TabState::Discarded)
+                        .find(|tab| {
+                            tab.id != tab_id
+                                && tab.state != TabState::Discarded
+                                && !tab.is_pinned()
+                                && tab.folder.is_none()
+                        })
                         .map(|tab| tab.id.clone())
                 })
                 .or_else(|| {
@@ -479,20 +526,6 @@ impl Lumen {
                                 && tab.folder.is_none()
                                 && (tab.url == "about:blank" || tab.url == "lumen://welcome")
                         })
-                        .map(|tab| tab.id.clone())
-                })
-                .or_else(|| {
-                    space
-                        .tabs
-                        .iter()
-                        .find(|tab| tab.id != tab_id && !tab.favorite && !tab.pinned && tab.folder.is_none())
-                        .map(|tab| tab.id.clone())
-                })
-                .or_else(|| {
-                    space
-                        .tabs
-                        .iter()
-                        .find(|tab| tab.id != tab_id)
                         .map(|tab| tab.id.clone())
                 });
             space.active = next_active.or_else(|| {

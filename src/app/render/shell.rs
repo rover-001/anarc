@@ -42,6 +42,14 @@ impl Lumen {
             .iter()
             .find(|tab| Some(&tab.id) == active_tab_id.as_ref());
         let active_tab_url = active_tab.map(|tab| tab.url.clone()).unwrap_or_default();
+        let address_focused = window.focused(cx) == Some(self.address.read(cx).focus_handle(cx));
+        let address_value = self.address.read(cx).value().to_string();
+        let show_address_preview =
+            !address_focused && !self.address_editing && !address_value.is_empty();
+        let address_preview = address_value
+            .strip_prefix("https://")
+            .unwrap_or(&address_value)
+            .to_owned();
         let split_pair = crate::plugins::split_view_enabled()
             .then(|| self.current_split_pair())
             .flatten();
@@ -221,7 +229,7 @@ impl Lumen {
                                         .when(can_go_back, |btn| {
                                             btn.cursor_pointer().active(|s| s.opacity(0.92)).hover(
                                                 move |s| {
-                                                    s.bg(rgb(theme.surface_hover))
+                                                    s.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                                                         .text_color(rgb(theme.text))
                                                 },
                                             )
@@ -259,7 +267,7 @@ impl Lumen {
                                         .when(can_go_forward, |btn| {
                                             btn.cursor_pointer().active(|s| s.opacity(0.92)).hover(
                                                 move |s| {
-                                                    s.bg(rgb(theme.surface_hover))
+                                                    s.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                                                         .text_color(rgb(theme.text))
                                                 },
                                             )
@@ -277,6 +285,37 @@ impl Lumen {
                                             Icon::new(IconName::ArrowRight)
                                                 .size(px(16.0 * UI_SCALE)),
                                         )
+                                })
+                                .child({
+                                    div()
+                                        .id("reload-btn")
+                                        .size(px(NAV_BUTTON_SIZE))
+                                        .rounded_lg()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(rgb(theme.muted))
+                                        .cursor_pointer()
+                                        .active(|s| s.opacity(0.92))
+                                        .hover(move |s| {
+                                            s.bg(crate::ui::visual::translucent_surface(
+                                                theme.surface_hover,
+                                                0x40,
+                                            ))
+                                            .text_color(rgb(theme.text))
+                                        })
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.close_app_page();
+                                            this.address_editing = false;
+                                            this.show_suggestions = false;
+                                            this.selected_suggestion = None;
+                                            this.reload_active(false);
+                                            this.focus_browser(window, cx);
+                                            cx.notify();
+                                        }))
+                                        .child(
+                                            Icon::new(IconName::RotateCw).size(px(15.0 * UI_SCALE)),
+                                        )
                                 }),
                         )
                         .child(
@@ -287,7 +326,7 @@ impl Lumen {
                                 .px_3()
                                 .rounded_lg()
                                 .overflow_hidden()
-                                .bg(rgb(theme.surface))
+                                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                                 .flex()
                                 .items_center()
                                 .gap_2()
@@ -305,17 +344,42 @@ impl Lumen {
                                 }))
                                 .child(
                                     div()
-                                        .text_color(rgb(0x777b85))
+                                        .text_color(rgb(theme.muted))
                                         .flex()
                                         .items_center()
                                         .justify_center()
                                         .child(Icon::new(IconName::Search)),
                                 )
                                 .child(
-                                    Input::new(&self.address)
-                                        .id("address-bar")
+                                    div()
+                                        .relative()
                                         .flex_1()
-                                        .appearance(false),
+                                        .child(
+                                            Input::new(&self.address)
+                                                .id("address-bar")
+                                                .w_full()
+                                                .appearance(false)
+                                                .text_color(if show_address_preview {
+                                                    gpui_kit::rgba(0x00000000)
+                                                } else {
+                                                    rgb(theme.text)
+                                                }),
+                                        )
+                                        .when(show_address_preview, |field| {
+                                            field.child(
+                                                div()
+                                                    .absolute()
+                                                    .inset_0()
+                                                    .flex()
+                                                    .items_center()
+                                                    .overflow_hidden()
+                                                    .whitespace_nowrap()
+                                                    .text_ellipsis()
+                                                    .text_sm()
+                                                    .text_color(rgb(theme.text))
+                                                    .child(address_preview.clone()),
+                                            )
+                                        }),
                                 )
                                 .child({
                                     let copy_url = active_tab_url.clone();
@@ -331,7 +395,7 @@ impl Lumen {
                                         .cursor_pointer()
                                         .hover(|style| {
                                             style
-                                                .bg(rgb(theme.surface_hover))
+                                                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                                                 .text_color(rgb(theme.text))
                                         })
                                         .active(|style| style.opacity(0.82))
@@ -405,7 +469,7 @@ impl Lumen {
                                             .cursor_pointer()
                                             .text_color(rgb(theme.muted))
                                             .hover(move |style| {
-                                                style.bg(rgb(theme.surface_hover)).text_color(rgb(theme.text))
+                                                style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)).text_color(rgb(theme.text))
                                             })
                                             .active(|style| style.opacity(0.8))
                                             .on_click(cx.listener(|_, _, window, _| {
@@ -424,7 +488,7 @@ impl Lumen {
                                             .cursor_pointer()
                                             .text_color(rgb(theme.muted))
                                             .hover(move |style| {
-                                                style.bg(rgb(theme.surface_hover)).text_color(rgb(theme.text))
+                                                style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)).text_color(rgb(theme.text))
                                             })
                                             .active(|style| style.opacity(0.8))
                                             .on_click(cx.listener(|_, _, window, _| {
@@ -557,7 +621,7 @@ impl Lumen {
                     .mx(px(CONTENT_BEZEL_X))
                     .mb(px(CONTENT_BEZEL_BOTTOM))
                     .rounded(px(visual::active_card_radius()))
-                    .bg(rgb(theme.surface))
+                    .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                     .overflow_hidden()
                     .child(if let Some(split_pair) = split_pair.as_ref() {
                         div()
@@ -592,7 +656,7 @@ impl Lumen {
                                         cx.listener(|this, _, _window, cx| {
                                             this.split_resizing = true;
                                             #[cfg(not(test))]
-                                            this.begin_browser_resize_drag(_window, true);
+                                            this.begin_browser_resize_drag(_window, true, false);
                                             cx.notify();
                                         }),
                                     )
@@ -707,7 +771,7 @@ impl Lumen {
                         CONTENT_BEZEL_X
                     }))
                     .rounded(px(visual::active_card_radius()))
-                    .bg(rgb(theme.surface))
+                    .bg(rgb(theme.base))
                     .overflow_hidden()
                     .child(content),
             );
@@ -734,14 +798,13 @@ impl Lumen {
                         cx.listener(|this, _, _window, cx| {
                             this.sidebar_resizing = true;
                             #[cfg(not(test))]
-                            this.begin_browser_resize_drag(_window, false);
+                            this.begin_browser_resize_drag(_window, false, false);
                             cx.notify();
                         }),
                     ),
             );
         }
 
-        let address_focused = window.focused(cx) == Some(self.address.read(cx).focus_handle(cx));
         let suggestions_open =
             self.show_suggestions && address_focused && !self.suggestions.is_empty();
         if suggestions_open {
@@ -811,7 +874,7 @@ impl Lumen {
                 .top(px(topbar_height + 4.0 * UI_SCALE))
                 .left(px(suggestion_left))
                 .w(px(suggestion_width))
-                .bg(rgb(theme.surface))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -835,10 +898,10 @@ impl Lumen {
                         .items_center()
                         .gap_3()
                         .cursor_pointer()
-                        .hover(|s| s.bg(rgb(theme.surface_hover)))
+                        .hover(|s| s.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                         .when(
                             closing_suggestions.is_none() && self.selected_suggestion == Some(idx),
-                            |row| row.bg(rgb(theme.surface_hover)),
+                            |row| row.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)),
                         )
                         .child(
                             div()
@@ -913,7 +976,7 @@ impl Lumen {
                     .px_3()
                     .rounded_lg()
                     .overflow_hidden()
-                    .bg(rgb(theme.surface))
+                    .bg(rgb(visual::panel_surface(theme.surface)))
                     .border_1()
                     .border_color(rgb(theme.border))
                     .child(
@@ -988,7 +1051,7 @@ impl Lumen {
                 .max_h(px(520.0 * UI_SCALE))
                 .overflow_hidden()
                 .rounded_xl()
-                .bg(rgb(theme.surface))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .shadow_lg()
@@ -1084,7 +1147,7 @@ impl Lumen {
                     .text_color(rgb(theme.muted))
                     .hover(move |style| {
                         style
-                            .bg(rgb(theme.surface_hover))
+                            .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                             .text_color(rgb(theme.text))
                     })
                     .active(|style| style.opacity(0.9))
@@ -1101,7 +1164,7 @@ impl Lumen {
                 .w(px(layout.card_w))
                 .h(px(layout.card_h))
                 .rounded(px(CARD_RADIUS))
-                .bg(rgb(theme.surface))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .shadow_2xl()
@@ -1122,7 +1185,7 @@ impl Lumen {
                         .items_center()
                         .gap_2()
                         .px(px(10.0 * UI_SCALE))
-                        .bg(rgb(theme.surface))
+                        .bg(rgb(visual::panel_surface(theme.surface)))
                         .rounded_t(px(inner_radius))
                         .border_b_1()
                         .border_color(rgb(theme.border))

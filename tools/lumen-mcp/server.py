@@ -1002,8 +1002,11 @@ def tool_browser_spaces(space_id: Optional[str] = None) -> Dict[str, Any]:
                 "id": t.get("id"),
                 "title": t.get("title", ""),
                 "url": t.get("url", ""),
-                "pinned": t.get("pinned", False),
-                "favorite": t.get("favorite", False),
+                # Favorites and pins are one kept-tab section. Emit both keys
+                # for backwards compatibility with older MCP clients.
+                "pinned": bool(t.get("pinned", False) or t.get("favorite", False)),
+                "favorite": bool(t.get("pinned", False) or t.get("favorite", False)),
+                "kept_group": t.get("kept_group"),
                 "state": t.get("state", "Loaded"),
             }
             for t in sp.get("tabs", [])
