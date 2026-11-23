@@ -1,0 +1,24 @@
+[plugin]
+id = "example.midnight"
+name = "Midnight Tokens"
+version = "1.0.0"
+api = "1"
+kind = "pack"
+description = "A dark accent token preset."
+
+[pack.theme]
+mode = "dark"
+
+[pack.theme.tokens]
+base = "#0f1014"
+surface = "#17181d"
+accent = "#9aa6ff"
+text = "#e6e7eb"
+muted = "#8a8d98"
+card_radius = 16
+ui_scale = 0.85
+font_family = "Inter"
+
+[pack.theme.motion]
+spring_stiffness = 380
+spring_damping = 32

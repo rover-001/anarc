@@ -1,0 +1,13 @@
+[plugin]
+id = "example.search-pack"
+name = "GitHub Search"
+version = "1.0.0"
+api = "1"
+kind = "pack"
+description = "Adds a GitHub search engine template."
+
+[[pack.search_engine]]
+id = "gh"
+name = "GitHub"
+url = "https://github.com/search?q=%s"
+keyword = "!gh"
