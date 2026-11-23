@@ -1,7 +1,7 @@
 //! Plugins settings view. The app owns plugin lifecycle and persistence; this
 //! module only renders rows and reports user actions to that host.
 
-use std::{collections::HashSet, rc::Rc};
+use std::{cell::Cell, collections::HashSet, rc::Rc};
 
 use gpui_kit::{App, ClickEvent, IntoElement, Window, div, prelude::*, px, rgb};
 
@@ -317,8 +317,12 @@ fn plugin_row(
     let plugin_id = id.clone();
     let requested_state = !row.enabled;
     let can_toggle = row.descriptor.can_toggle;
+    // Child controls run their click handler before the card's bubbling handler.
+    // This flag keeps clicks on the switch / Open / Remove from also expanding.
+    let handled_by_control = Rc::new(Cell::new(false));
     let control = if can_toggle {
         let callback = on_toggle.clone();
+        let handled = handled_by_control.clone();
         let toggle_id = format!("plugin-toggle-{id}");
         let debug_id = format!("plugin-toggle-{id}");
         div()
@@ -329,6 +333,7 @@ fn plugin_row(
                 row.enabled,
                 theme,
                 move |event, window, app| {
+                    handled.set(true);
                     callback(id.clone(), requested_state, event, window, app)
                 },
             ))
@@ -355,13 +360,26 @@ fn plugin_row(
     let configuration = details
         .configuration
         .unwrap_or_else(|| "No configurable settings".to_owned());
-    let details_id = plugin_id.clone();
-    let details_debug_id = plugin_id.clone();
     let details_callback_id = plugin_id.clone();
+    let handled_by_card = handled_by_control.clone();
 
     div()
         .w_full()
+        .id(format!("plugin-card-click-{plugin_id}"))
         .debug_selector(|| format!("plugin-card-{plugin_id}"))
+        .cursor_pointer()
+        .hover(|style| {
+            style.bg(crate::ui::visual::translucent_surface(
+                theme.surface_hover,
+                0x48,
+            ))
+        })
+        .on_click(move |event, window, app| {
+            if handled_by_card.replace(false) {
+                return;
+            }
+            on_toggle_details(details_callback_id.clone(), event, window, app);
+        })
         .p_4()
         .rounded_xl()
         .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
@@ -416,8 +434,10 @@ fn plugin_row(
                         .gap_2()
                         .flex_shrink_0()
                         .debug_selector(|| format!("plugin-actions-{plugin_id}"))
+                        .child(control)
                         .child(if row.descriptor.kind == crate::plugin::PluginKind::Panel && row.enabled {
                             let callback = on_open.clone();
+                            let handled = handled_by_control.clone();
                             let plugin_id = plugin_id.clone();
                             div()
                                 .id(format!("plugin-open-{plugin_id}"))
@@ -435,33 +455,16 @@ fn plugin_row(
                                 .hover(move |style| style.bg(rgb(theme.accent)).text_color(rgb(theme.base)))
                                 .child("Open")
                                 .on_click(move |event, window, app| {
+                                    handled.set(true);
                                     callback(plugin_id.clone(), event, window, app);
                                 })
                                 .into_any_element()
                         } else {
                             div().into_any_element()
                         })
-                        .child(control)
-                        .child(
-                            div()
-                                .id(format!("plugin-details-toggle-{details_id}"))
-                                .debug_selector(move || format!("plugin-details-{details_debug_id}"))
-                                .size(px(20.0 * UI_SCALE))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded_md()
-                                .text_xs()
-                                .text_color(rgb(theme.muted))
-                                .cursor_pointer()
-                                .hover(|style| style.bg(rgb(theme.border_hover)))
-                                .child(if expanded { "▾" } else { "▸" })
-                                .on_click(move |event, window, app| {
-                                    on_toggle_details(details_callback_id.clone(), event, window, app);
-                                }),
-                        )
                         .child(if can_remove(row) {
                             let callback = on_remove.clone();
+                            let handled = handled_by_control.clone();
                             div()
                                 .id(format!("plugin-remove-{plugin_id}"))
                                 .px_3()
@@ -477,6 +480,7 @@ fn plugin_row(
                                 .hover(|style| style.bg(rgb(0xef4444)).text_color(rgb(0xffffff)))
                                 .child("Remove")
                                 .on_click(move |event, window, app| {
+                                    handled.set(true);
                                     callback(plugin_id.clone(), event, window, app);
                                 })
                                 .into_any_element()
