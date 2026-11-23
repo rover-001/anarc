@@ -2047,9 +2047,11 @@ fn focus_field(
             return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)];
         }})()"#
     );
-    evaluate_action(app, tab_id, &script)
-        .ok()
-        .and_then(|json| serde_json::from_str::<Option<(i32, i32)>>(&json).ok().flatten())
+    evaluate_action(app, tab_id, &script).ok().and_then(|json| {
+        serde_json::from_str::<Option<(i32, i32)>>(&json)
+            .ok()
+            .flatten()
+    })
 }
 
 /// Dispatch a direct DOM click. SPAs with delegated synthetic handlers can
@@ -2118,7 +2120,9 @@ fn check_occlusion(
             return Err("ref covered by banner. use: see".into());
         }
         if let Some(label) = res.strip_prefix("!overlay:") {
-            return Err(format!("ref covered by sticky/fixed overlay \"{label}\". use: see"));
+            return Err(format!(
+                "ref covered by sticky/fixed overlay \"{label}\". use: see"
+            ));
         }
     }
     Ok(())
@@ -2180,7 +2184,10 @@ mod tests {
         for (script, target) in [
             ("clickjs b1", "b1"),
             ("domclick b1", "b1"),
-            ("clickjs css=a[href^='/messaging/']", "css=a[href^='/messaging/']"),
+            (
+                "clickjs css=a[href^='/messaging/']",
+                "css=a[href^='/messaging/']",
+            ),
         ] {
             let ops = parse_dsl(script).unwrap();
             assert_eq!(

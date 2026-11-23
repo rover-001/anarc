@@ -564,7 +564,7 @@ pub const SIDEBAR_HEADER_GAP: f32 = 8.0;
 /// Extra top inset for sidebar rows so the first favicon/tile row lines up with
 /// the content card's top edge. The card sits below the top bar plus its own
 /// chrome inset; the sidebar's header band alone leaves the icons too high.
-pub const SIDEBAR_ROW_TOP_OFFSET: f32 = 2.0;
+pub const SIDEBAR_ROW_TOP_OFFSET: f32 = 4.0;
 
 /// Height of the space-name band (or the collapsed spacer).
 pub fn sidebar_header_height() -> f32 {
