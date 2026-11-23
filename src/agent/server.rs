@@ -57,11 +57,10 @@ pub fn is_running() -> bool {
 }
 
 fn get_systemd_listener() -> Option<UnixListener> {
-    if let Ok(listen_pid) = std::env::var("LISTEN_PID") {
-        if listen_pid.parse::<u32>().ok() != Some(std::process::id()) {
+    if let Ok(listen_pid) = std::env::var("LISTEN_PID")
+        && listen_pid.parse::<u32>().ok() != Some(std::process::id()) {
             return None;
         }
-    }
     let fds: i32 = std::env::var("LISTEN_FDS").ok()?.parse().ok()?;
     if fds >= 1 {
         use std::os::unix::io::FromRawFd;
@@ -158,11 +157,10 @@ pub fn start_server(
 
 pub fn stop_server() {
     RUNNING.store(false, Ordering::SeqCst);
-    if let Ok(mut guard) = ACTIVE_SOCKET.lock() {
-        if let Some((path, _owner)) = guard.take() {
+    if let Ok(mut guard) = ACTIVE_SOCKET.lock()
+        && let Some((path, _owner)) = guard.take() {
             let _ = remove_file(path);
         }
-    }
 }
 
 fn handle_connection(
@@ -255,7 +253,7 @@ pub fn parse_client_command(input: &str) -> Result<AgentRequest, &'static str> {
 
     // Support plain CLI command strings like "see view", "read page text", "find search", "tabs"
     let parts: Vec<&str> = input.split_whitespace().collect();
-    let cmd = parts.get(0).copied().unwrap_or("");
+    let cmd = parts.first().copied().unwrap_or("");
 
     Ok(match cmd {
         "see" => {

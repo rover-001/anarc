@@ -15,14 +15,13 @@ impl Engine {
         if !self.initialized {
             return Ok(());
         }
-        if let Some(entry) = self.browsers.get(id) {
-            if entry.space_id != space_id {
+        if let Some(entry) = self.browsers.get(id)
+            && entry.space_id != space_id {
                 if let Some(host) = entry.browser.host() {
                     host.close_browser(1);
                 }
                 self.browsers.remove(id);
             }
-        }
         if !self.browsers.contains_key(id) && !self.pending_browsers.contains_key(id) {
             let shared = Arc::new(Mutex::new(new_shared_state(
                 space_id,

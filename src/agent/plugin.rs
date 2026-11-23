@@ -33,12 +33,12 @@ fn doctor_header(painted: bool, initialized: bool, browsers: usize) -> String {
     )
 }
 
-static ENGINE_REQUEST_CHANNEL: Mutex<
-    Option<(
-        async_channel::Sender<(AgentRequest, async_channel::Sender<AgentResponse>)>,
-        async_channel::Sender<()>,
-    )>,
-> = Mutex::new(None);
+type EngineAgentChannel = (
+    async_channel::Sender<(AgentRequest, async_channel::Sender<AgentResponse>)>,
+    async_channel::Sender<()>,
+);
+
+static ENGINE_REQUEST_CHANNEL: Mutex<Option<EngineAgentChannel>> = Mutex::new(None);
 
 pub(crate) fn register_engine_agent_channel(
     req_tx: async_channel::Sender<(AgentRequest, async_channel::Sender<AgentResponse>)>,
@@ -55,12 +55,7 @@ pub(crate) fn register_engine_agent_channel(
 /// The agent socket starts during plugin mount, before `Engine::new()` runs. A
 /// request arriving in that window would otherwise be rejected as "engine
 /// unavailable", which forces callers into a `status`/`doctor` handshake.
-fn wait_for_engine_channel(
-    timeout: std::time::Duration,
-) -> Option<(
-    async_channel::Sender<(AgentRequest, async_channel::Sender<AgentResponse>)>,
-    async_channel::Sender<()>,
-)> {
+fn wait_for_engine_channel(timeout: std::time::Duration) -> Option<EngineAgentChannel> {
     let deadline = std::time::Instant::now() + timeout;
     loop {
         if let Ok(guard) = ENGINE_REQUEST_CHANNEL.lock()
@@ -89,11 +84,10 @@ pub(crate) fn forward_request_to_engine(
     );
 
     if requires_paint && !WINDOW_PAINTED.load(Ordering::Acquire) {
-        if let Ok(guard) = ENGINE_REQUEST_CHANNEL.lock() {
-            if let Some((_, ref w_tx)) = *guard {
+        if let Ok(guard) = ENGINE_REQUEST_CHANNEL.lock()
+            && let Some((_, ref w_tx)) = *guard {
                 let _ = w_tx.try_send(());
             }
-        }
         for _ in 0..60 {
             if WINDOW_PAINTED.load(Ordering::Acquire) {
                 break;
@@ -296,27 +290,23 @@ pub(crate) fn handle_agent_request(
         *tab_id = Some(target);
     }
 
-    if let Some(target) = req.target_tab() {
-        if matches!(
+    if let Some(target) = req.target_tab()
+        && matches!(
             req,
             AgentRequest::Read { .. } | AgentRequest::See { .. } | AgentRequest::Find { .. }
         ) {
             let ready_check = "(() => document.readyState)()";
-            if let Ok(Ok(state_str)) = app.engine.evaluate(target, ready_check).recv_blocking() {
-                if state_str == "loading" {
+            if let Ok(Ok(state_str)) = app.engine.evaluate(target, ready_check).recv_blocking()
+                && state_str == "loading" {
                     for _ in 0..15 {
                         std::thread::sleep(std::time::Duration::from_millis(100));
                         if let Ok(Ok(s)) = app.engine.evaluate(target, ready_check).recv_blocking()
-                        {
-                            if s != "loading" {
+                            && s != "loading" {
                                 break;
                             }
-                        }
                     }
                 }
-            }
         }
-    }
 
     match req {
         AgentRequest::Doctor => {
@@ -596,13 +586,11 @@ pub(crate) fn handle_agent_request(
                     match res {
                         Ok(Ok(raw_json)) => {
                             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw_json)
-                            {
-                                if let Some(data) = parsed.get("data").and_then(|v| v.as_str()) {
+                                && let Some(data) = parsed.get("data").and_then(|v| v.as_str()) {
                                     let shot_str = format!("data:image/png;base64,{data}");
                                     let _ = resp_tx.try_send(AgentResponse::success(shot_str));
                                     return;
                                 }
-                            }
                             let _ = resp_tx
                                 .try_send(AgentResponse::err("screenshot invalid. use: see"));
                         }
@@ -688,17 +676,6 @@ pub(crate) fn compact_tabs(app: &crate::app::Anarc) -> String {
         .join(", ")
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn missing_tab_includes_selection_hint() {
-        assert_eq!(
-            super::no_such_tab("1* chatgpt.com, 2 about:blank"),
-            "no such tab. tabs: 1* chatgpt.com, 2 about:blank. use: do \"tab 1\""
-        );
-    }
-}
-
 pub(crate) fn descriptor() -> PluginDescriptor {
     PluginDescriptor {
         id: AGENT_PLUGIN_ID.to_string(),
@@ -716,4 +693,15 @@ pub(crate) fn descriptor() -> PluginDescriptor {
 
 pub(crate) fn register(host: &mut PluginHost) {
     host.register(descriptor(), || Box::new(AgentPlugin::new()));
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn missing_tab_includes_selection_hint() {
+        assert_eq!(
+            super::no_such_tab("1* chatgpt.com, 2 about:blank"),
+            "no such tab. tabs: 1* chatgpt.com, 2 about:blank. use: do \"tab 1\""
+        );
+    }
 }

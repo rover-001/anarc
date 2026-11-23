@@ -240,11 +240,10 @@ impl Anarc {
         self.close_app_page();
         self.plugins_menu_open = false;
         self.active_space = id.to_owned();
-        if let Some(space) = self.spaces.iter_mut().find(|s| s.id == id) {
-            if space.active.as_ref().map_or(true, |act| !space.tabs.iter().any(|t| t.id == *act)) {
+        if let Some(space) = self.spaces.iter_mut().find(|s| s.id == id)
+            && space.active.as_ref().is_none_or(|act| !space.tabs.iter().any(|t| t.id == *act)) {
                 space.active = space.tabs.first().map(|t| t.id.clone());
             }
-        }
         let target_theme = crate::ui::visual::theme_for_space(self.active_space());
         crate::ui::visual::update_theme_caret(target_theme, cx);
         if previous_space != id {
@@ -429,14 +428,12 @@ impl Anarc {
             for ext_tab in &mut external_space.tabs {
                 if ext_tab.is_pinned()
                     && let Some(pinned) = &ext_tab.pinned_url
-                {
-                    if !pinned.is_empty() {
+                    && !pinned.is_empty() {
                         let p_lower = pinned.to_ascii_lowercase();
                         if !p_lower.contains("workspace.google.") && !p_lower.contains("/signin") {
                             ext_tab.url = pinned.clone();
                         }
                     }
-                }
             }
             if let Some(local_space) = self.spaces.iter_mut().find(|s| s.id == external_space.id) {
                 if local_space.color != external_space.color
@@ -469,8 +466,8 @@ impl Anarc {
                     })
                 {
                     for ext_tab in &external_space.tabs {
-                        if let Some(loc_tab) = local_space.tabs.iter().find(|t| t.id == ext_tab.id) {
-                            if loc_tab.url != ext_tab.url
+                        if let Some(loc_tab) = local_space.tabs.iter().find(|t| t.id == ext_tab.id)
+                            && loc_tab.url != ext_tab.url
                                 && !ext_tab.url.is_empty()
                                 && ext_tab.url != "about:blank"
                             {
@@ -496,17 +493,16 @@ impl Anarc {
                                     self.engine.navigate(&ext_tab.id, &ext_tab.url);
                                 }
                             }
-                        }
                     }
                     local_space.tabs = external_space.tabs;
-                    if local_space.active.as_ref().map_or(true, |act| !local_space.tabs.iter().any(|t| t.id == *act)) {
+                    if local_space.active.as_ref().is_none_or(|act| !local_space.tabs.iter().any(|t| t.id == *act)) {
                         local_space.active = local_space.tabs.first().map(|t| t.id.clone());
                     }
                     if local_space.id == "shared-space" {
                         let cookies_file = crate::paths::config_dir().join("shared-cookies.json");
-                        if cookies_file.is_file() {
-                            if let Ok(content) = std::fs::read_to_string(&cookies_file) {
-                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if cookies_file.is_file()
+                            && let Ok(content) = std::fs::read_to_string(&cookies_file)
+                                && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                                     let arr_opt = if val.is_array() {
                                         Some(val)
                                     } else {
@@ -522,8 +518,6 @@ impl Anarc {
                                         }
                                     }
                                 }
-                            }
-                        }
                     }
                     changed = true;
                 }
@@ -602,7 +596,7 @@ impl Anarc {
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 for c in cookies {
-                    let _ = (
+                    (
                         c.get("name").and_then(|v| v.as_str()).unwrap_or(""),
                         c.get("value").and_then(|v| v.as_str()).unwrap_or(""),
                         c.get("domain").and_then(|v| v.as_str()).unwrap_or(""),

@@ -246,11 +246,10 @@ pub fn record_local_keystroke(key: &str, is_ctrl_or_alt: bool, peer_ips: &[Strin
     let mut typing_to_send = None;
     if let Ok(mut typing) = state.local_typing.lock() {
         let now = Instant::now();
-        if let Some((_, ts)) = typing.as_ref() {
-            if now.duration_since(*ts) > Duration::from_millis(4000) {
+        if let Some((_, ts)) = typing.as_ref()
+            && now.duration_since(*ts) > Duration::from_millis(4000) {
                 *typing = None;
             }
-        }
 
         match key.to_lowercase().as_str() {
             "escape" => {
@@ -357,11 +356,10 @@ pub fn get_active_peer_cursors() -> Vec<PeerCursor> {
         })
         .map(|c| {
             let mut cursor = c.clone();
-            if let Some(updated) = cursor.typing_updated {
-                if now.duration_since(updated) > Duration::from_millis(3500) {
+            if let Some(updated) = cursor.typing_updated
+                && now.duration_since(updated) > Duration::from_millis(3500) {
                     cursor.typing_text = None;
                 }
-            }
             cursor
         })
         .collect()

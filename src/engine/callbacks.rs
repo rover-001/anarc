@@ -1100,12 +1100,11 @@ cef::wrap_life_span_handler! {
                     || c_lower.contains("google.com/about")
                     || c_lower.contains("live.com")
                     || c_lower.contains("apple.com");
-                if is_landing_page {
-                    if let Some(frame) = _frame {
+                if is_landing_page
+                    && let Some(frame) = _frame {
                         frame.load_url(target_url);
                         return 1;
                     }
-                }
             }
 
             // Sign-in popups have to keep a live `window.opener`: identity
@@ -1818,8 +1817,8 @@ cef::wrap_dialog_handler! {
             let extensions = extract_cef_string_list(accept_extensions);
             let wake = self.ui_update_wake.clone();
 
-            if let Some(paths) = crate::agent::act::take_pending_upload_files() {
-                if !paths.is_empty() {
+            if let Some(paths) = crate::agent::act::take_pending_upload_files()
+                && !paths.is_empty() {
                     let mut list = CefStringList::new();
                     for path in paths {
                         list.append(&path);
@@ -1828,7 +1827,6 @@ cef::wrap_dialog_handler! {
                     let _ = wake.try_send(());
                     return 1;
                 }
-            }
 
             std::thread::spawn(move || {
                 let selected = run_file_picker(

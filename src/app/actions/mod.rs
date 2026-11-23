@@ -613,11 +613,10 @@ impl Anarc {
             let mut spaces_to_save = self.spaces.clone();
             if let Some(loaded) = persist::load_state() {
                 for s in &mut spaces_to_save {
-                    if let Some(ext) = loaded.spaces.iter().find(|e| e.id == s.id) {
-                        if s.peer_ips.is_empty() && !ext.peer_ips.is_empty() {
+                    if let Some(ext) = loaded.spaces.iter().find(|e| e.id == s.id)
+                        && s.peer_ips.is_empty() && !ext.peer_ips.is_empty() {
                             s.peer_ips = ext.peer_ips.clone();
                         }
-                    }
                 }
                 for ext in loaded.spaces {
                     if (ext.name.starts_with("[Shared]") || ext.id.starts_with("shared-"))

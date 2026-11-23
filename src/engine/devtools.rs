@@ -74,11 +74,10 @@ wrap_dev_tools_message_observer! {
                     .unwrap_or_else(|| "CDP method execution failed".into());
                 Err(s)
             };
-            if let Ok(mut map) = self.callbacks.lock() {
-                if let Some(tx) = map.remove(&(message_id as i32)) {
+            if let Ok(mut map) = self.callbacks.lock()
+                && let Some(tx) = map.remove(&(message_id as i32)) {
                     let _ = tx.try_send(res);
                 }
-            }
         }
 
         fn on_dev_tools_event(
@@ -182,14 +181,13 @@ impl DevToolsManager {
             .name(format!("cdp-timeout-{message_id}"))
             .spawn(move || {
                 std::thread::sleep(timeout);
-                if let Ok(mut map) = pending.lock() {
-                    if let Some(ch) = map.remove(&message_id) {
+                if let Ok(mut map) = pending.lock()
+                    && let Some(ch) = map.remove(&message_id) {
                         let _ = ch.try_send(Err(format!(
                             "DevTools timeout: call {message_id} to tab '{target_tab}' timed out after {:?}",
                             timeout
                         )));
                     }
-                }
             })
             .ok();
 
@@ -286,13 +284,12 @@ impl DevToolsManager {
     }
 
     pub fn cleanup_tab(&mut self, tab_id: &str) {
-        if let Some(session) = self.sessions.remove(tab_id) {
-            if let Ok(mut map) = session.callbacks.lock() {
+        if let Some(session) = self.sessions.remove(tab_id)
+            && let Ok(mut map) = session.callbacks.lock() {
                 for (_, tx) in map.drain() {
                     let _ = tx.try_send(Err(format!("tab closed: tab '{tab_id}' was closed")));
                 }
             }
-        }
     }
 }
 
@@ -326,16 +323,14 @@ pub fn parse_evaluate_result(raw_json: &str) -> Result<String, String> {
                 return Ok(val.to_string());
             }
         }
-        if let Some(unserializable) = res.get("unserializableValue") {
-            if let Some(s) = unserializable.as_str() {
+        if let Some(unserializable) = res.get("unserializableValue")
+            && let Some(s) = unserializable.as_str() {
                 return Ok(s.to_string());
             }
-        }
-        if let Some(type_str) = res.get("type").and_then(|t| t.as_str()) {
-            if type_str == "undefined" {
+        if let Some(type_str) = res.get("type").and_then(|t| t.as_str())
+            && type_str == "undefined" {
                 return Ok(String::new());
             }
-        }
     }
 
     Ok(raw_json.to_string())
@@ -374,19 +369,17 @@ pub fn sanitize_cookie_for_cdp(c: &serde_json::Value) -> Option<serde_json::Valu
     let is_secure = secure || name.starts_with("__Secure-") || name.starts_with("__Host-");
     map.insert("secure".into(), serde_json::Value::Bool(is_secure));
     map.insert("httpOnly".into(), serde_json::Value::Bool(http_only));
-    if let Some(ss) = c.get("sameSite").and_then(|s| s.as_str()) {
-        if matches!(ss, "Strict" | "Lax" | "None") {
+    if let Some(ss) = c.get("sameSite").and_then(|s| s.as_str())
+        && matches!(ss, "Strict" | "Lax" | "None") {
             map.insert("sameSite".into(), serde_json::Value::String(ss.into()));
             if ss == "None" {
                 map.insert("secure".into(), serde_json::Value::Bool(true));
             }
         }
-    }
-    if let Some(exp) = c.get("expires").and_then(|e| e.as_f64()) {
-        if exp > 0.0 {
+    if let Some(exp) = c.get("expires").and_then(|e| e.as_f64())
+        && exp > 0.0 {
             map.insert("expires".into(), serde_json::json!(exp));
         }
-    }
     Some(serde_json::Value::Object(map))
 }
 

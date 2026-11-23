@@ -1004,8 +1004,8 @@ impl Render for WebViewport {
                 );
 
                 // Peer live typing bubble
-                if let Some(ref text) = cursor.typing_text {
-                    if !text.is_empty() {
+                if let Some(ref text) = cursor.typing_text
+                    && !text.is_empty() {
                         badge_column = badge_column.child(
                             div()
                                 .flex()
@@ -1030,7 +1030,6 @@ impl Render for WebViewport {
                                 .child(div().w(px(1.5)).h(px(11.0)).bg(p_color)),
                         );
                     }
-                }
 
                 let overlay = div()
                     .absolute()

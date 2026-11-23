@@ -152,7 +152,7 @@ pub fn execute_find(
         }
     }
 
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|(_, score)| std::cmp::Reverse(*score));
 
     if scored.is_empty() {
         return format!("find: no elements match \"{query}\"");

@@ -59,9 +59,9 @@ impl PlaybookRegistry {
             return reg;
         };
 
-        if let Ok(content) = std::fs::read_to_string(&playbook_path) {
-            if let Ok(parsed) = toml::from_str::<toml::Value>(&content) {
-                if let Some(sites_arr) = parsed.get("agent_site").and_then(|v| v.as_array()) {
+        if let Ok(content) = std::fs::read_to_string(&playbook_path)
+            && let Ok(parsed) = toml::from_str::<toml::Value>(&content)
+                && let Some(sites_arr) = parsed.get("agent_site").and_then(|v| v.as_array()) {
                     for site_val in sites_arr {
                         if let Ok(site_cfg) = site_val.clone().try_into::<AgentSiteConfig>() {
                             for m in &site_cfg.r#macro {
@@ -71,8 +71,6 @@ impl PlaybookRegistry {
                         }
                     }
                 }
-            }
-        }
 
         reg
     }
@@ -112,11 +110,10 @@ impl PlaybookRegistry {
 }
 
 pub fn get_or_init_registry() -> PlaybookRegistry {
-    if let Ok(guard) = GLOBAL_REGISTRY.lock() {
-        if let Some(ref reg) = *guard {
+    if let Ok(guard) = GLOBAL_REGISTRY.lock()
+        && let Some(ref reg) = *guard {
             return reg.clone();
         }
-    }
 
     let loaded = PlaybookRegistry::load_from_packs_or_file();
     if let Ok(mut guard) = GLOBAL_REGISTRY.lock() {
@@ -135,11 +132,10 @@ pub fn start_recording(name: &str) {
 }
 
 pub fn record_action(op: &str) {
-    if let Ok(mut guard) = RECORDING_SESSION.lock() {
-        if let Some((_, ref mut ops)) = *guard {
+    if let Ok(mut guard) = RECORDING_SESSION.lock()
+        && let Some((_, ref mut ops)) = *guard {
             ops.push(op.to_string());
         }
-    }
 }
 
 #[allow(dead_code)]
@@ -163,11 +159,10 @@ pub fn stop_recording() -> Option<PlaybookMacro> {
     };
 
     // Save to global registry
-    if let Ok(mut guard) = GLOBAL_REGISTRY.lock() {
-        if let Some(ref mut reg) = *guard {
+    if let Ok(mut guard) = GLOBAL_REGISTRY.lock()
+        && let Some(ref mut reg) = *guard {
             reg.macros.insert(name, macro_obj.clone());
         }
-    }
 
     // Persist to playbooks.toml
     let playbook_path = if let Ok(data_dir) = std::env::var("ANARC_DATA_DIR") {

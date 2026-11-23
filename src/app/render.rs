@@ -141,9 +141,9 @@ impl Render for Anarc {
                                         this.sync_host_cookies_if_needed(false);
                                     } else if this.spaces.iter().any(|s| s.id == "shared-space" && s.tabs.iter().any(|t| t.id == tab_id)) {
                                         let cookies_file = crate::paths::config_dir().join("shared-cookies.json");
-                                        if cookies_file.is_file() {
-                                            if let Ok(content) = std::fs::read_to_string(&cookies_file) {
-                                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                                        if cookies_file.is_file()
+                                            && let Ok(content) = std::fs::read_to_string(&cookies_file)
+                                                && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                                                     let arr_opt = if val.is_array() {
                                                         Some(val)
                                                     } else {
@@ -166,20 +166,17 @@ impl Render for Anarc {
                                                                      .find(|s| s.id == "shared-space")
                                                                      .and_then(|s| s.tabs.iter().find(|t| t.id == tab_id))
                                                                      .map(|t| t.pinned_url.as_deref().unwrap_or(&t.url).to_string());
-                                                                 if let Some(target) = target_url {
-                                                                     if !target.is_empty() && target != url && !target.contains("workspace.google.com") {
+                                                                 if let Some(target) = target_url
+                                                                     && !target.is_empty() && target != url && !target.contains("workspace.google.com") {
                                                                          this.pending_auth_recovery.insert(
                                                                              tab_id.to_string(),
                                                                              (target, std::time::Instant::now() + std::time::Duration::from_millis(250)),
                                                                          );
                                                                      }
-                                                                 }
                                                              }
                                                         }
                                                     }
                                                 }
-                                            }
-                                        }
                                     }
                                 }
                                 let mode = match event.as_str() {
@@ -199,9 +196,9 @@ impl Render for Anarc {
                                 this.active_zoom_target = None;
                                 if this.active_space().id == "shared-space" {
                                     let cookies_file = crate::paths::config_dir().join("shared-cookies.json");
-                                    if cookies_file.is_file() {
-                                        if let Ok(content) = std::fs::read_to_string(&cookies_file) {
-                                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                                    if cookies_file.is_file()
+                                        && let Ok(content) = std::fs::read_to_string(&cookies_file)
+                                            && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                                                 let arr_opt = if val.is_array() {
                                                     Some(val)
                                                 } else {
@@ -215,8 +212,6 @@ impl Render for Anarc {
                                                     }
                                                 }
                                             }
-                                        }
-                                    }
                                 }
                                 cx.notify();
                             }

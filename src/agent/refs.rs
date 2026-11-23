@@ -149,7 +149,7 @@ impl RefRegistry {
             };
 
             let bounds = if let Some(b) = raw_el.box_bounds {
-                let x = b.get(0).copied().unwrap_or(raw_el.x);
+                let x = b.first().copied().unwrap_or(raw_el.x);
                 let y = b.get(1).copied().unwrap_or(raw_el.y);
                 let w = b.get(2).copied().unwrap_or(0);
                 let h = b.get(3).copied().unwrap_or(0);
@@ -196,7 +196,7 @@ impl RefRegistry {
             }
         }
 
-        for (id, _) in &self.previous_elements {
+        for id in self.previous_elements.keys() {
             if !current_map.contains_key(id) {
                 diff.removed.push(id.clone());
             }
@@ -223,11 +223,10 @@ impl RefRegistry {
         // 2. Fallback: match by prior element metadata across generation shift
         if let Some(prev) = self.previous_elements.get(ref_id) {
             // 2a. Match by persistent fingerprint
-            if let Some(new_id) = self.ref_by_fingerprint.get(&prev.fingerprint) {
-                if let Some(cur) = self.current_elements.get(new_id) {
+            if let Some(new_id) = self.ref_by_fingerprint.get(&prev.fingerprint)
+                && let Some(cur) = self.current_elements.get(new_id) {
                     return Some(cur);
                 }
-            }
             // 2b. Match by kind and identical name
             let prev_name_lower = prev.name.to_lowercase();
             for cur in self.current_elements.values() {
@@ -241,7 +240,7 @@ impl RefRegistry {
                     .filter(|cur| cur.kind == prev.kind && cur.name.to_lowercase().contains(&prev_name_lower))
                     .collect();
                 if candidates.len() == 1 {
-                    return Some(candidates[0]);
+                    return candidates.first().copied();
                 }
             }
         }
@@ -299,7 +298,7 @@ mod tests {
 
         let (header1, els1, _, _) = reg.update_from_raw(raw1);
         assert_eq!(header1.generation, 1);
-        assert_eq!(els1.get(0).map(|e| e.id.as_str()), Some("i1"));
+        assert_eq!(els1.first().map(|e| e.id.as_str()), Some("i1"));
         assert_eq!(els1.get(1).map(|e| e.id.as_str()), Some("b1"));
 
         // Second snapshot, same elements plus a new one
@@ -346,7 +345,7 @@ mod tests {
 
         let (_, els2, diff, _) = reg.update_from_raw(raw2);
         // Existing elements kept their ref ids:
-        assert_eq!(els2.get(0).map(|e| e.id.as_str()), Some("i1"));
+        assert_eq!(els2.first().map(|e| e.id.as_str()), Some("i1"));
         assert_eq!(els2.get(1).map(|e| e.id.as_str()), Some("i2"));
         assert_eq!(els2.get(2).map(|e| e.id.as_str()), Some("b1"));
 

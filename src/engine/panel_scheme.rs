@@ -94,11 +94,10 @@ cef::wrap_scheme_handler_factory! {
             let url = CefStringUtf16::from(&request.url()).to_string();
             let method = CefStringUtf16::from(&request.method()).to_string();
             let parsed = PanelRequest::parse(&url);
-            if let Ok(p) = &parsed {
-                if p.plugin_id == "com.anarc.live-share" {
+            if let Ok(p) = &parsed
+                && p.plugin_id == "com.anarc.live-share" {
                     crate::app::ensure_live_share_daemon_running();
                 }
-            }
             if url.contains("__anarc_start_service") {
                 crate::app::ensure_live_share_daemon_running();
                 let resp = PanelResponse {
@@ -115,8 +114,7 @@ cef::wrap_scheme_handler_factory! {
             // Reverse-proxy: anarc-plugin://com.anarc.live-share/api-proxy/<path>
             // → http://127.0.0.1:7433/<path>  (same-process, no browser CORS)
             const PROXY_PREFIX: &str = "anarc-plugin://com.anarc.live-share/api-proxy";
-            if url.starts_with(PROXY_PREFIX) {
-                let daemon_path = &url[PROXY_PREFIX.len()..];
+            if let Some(daemon_path) = url.strip_prefix(PROXY_PREFIX) {
                 let daemon_path = if daemon_path.is_empty() { "/" } else { daemon_path };
                 let resp = live_share_proxy_request(&method, daemon_path, request);
                 return Some(PanelResourceHandler::new(Arc::new(resp), Arc::new(Mutex::new(0))));

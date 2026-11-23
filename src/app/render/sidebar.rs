@@ -1,5 +1,10 @@
 use super::*;
 
+/// (tab id, title, favicon) reused by the sidebar tab lists.
+type SidebarTab = (String, String, Option<std::sync::Arc<gpui_kit::RenderImage>>);
+/// A kept tab row: an optional group label plus its member tabs.
+type KeptTabRow = (Option<String>, Vec<SidebarTab>);
+
 impl Anarc {
     pub(super) fn render_sidebar(
         &mut self,
@@ -11,11 +16,7 @@ impl Anarc {
         // active space instead of deep-cloning all of its tabs each time.
         let active_space = self.active_space();
         let active_tab_id = active_space.active.clone();
-        let tabs: Vec<(
-            String,
-            String,
-            Option<std::sync::Arc<gpui_kit::RenderImage>>,
-        )> = active_space
+        let tabs: Vec<SidebarTab> = active_space
             .tabs
             .iter()
             .map(|tab| {
@@ -220,14 +221,7 @@ impl Anarc {
                         .child(Icon::new(IconName::StarFill).size(px(14.0 * UI_SCALE))),
                 );
             } else if !kept_tabs.is_empty() {
-                let mut rows: Vec<(
-                    Option<String>,
-                    Vec<(
-                        String,
-                        String,
-                        Option<std::sync::Arc<gpui_kit::RenderImage>>,
-                    )>,
-                )> = Vec::new();
+                let mut rows: Vec<KeptTabRow> = Vec::new();
                 let mut seen_groups: Vec<String> = Vec::new();
                 for (id, title, favicon) in &kept_tabs {
                     match tab_group(id) {

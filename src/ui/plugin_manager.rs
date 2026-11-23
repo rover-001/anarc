@@ -18,6 +18,15 @@ pub(crate) type ActionCallback = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 pub(crate) type PluginActionCallback = Rc<dyn Fn(String, &ClickEvent, &mut Window, &mut App)>;
 pub(crate) type DetailsCallback = Rc<dyn Fn(String, &ClickEvent, &mut Window, &mut App)>;
 
+/// Callbacks a plugin row reports through; bundled to keep `plugin_row` within
+/// clippy's argument limit while leaving the single call site's behavior intact.
+struct PluginRowCallbacks {
+    on_toggle: ToggleCallback,
+    on_remove: PluginActionCallback,
+    on_open: PluginActionCallback,
+    on_toggle_details: DetailsCallback,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InstallSource {
     Folder,
@@ -234,11 +243,13 @@ pub(crate) fn render(
             row,
             detail,
             theme,
-            on_toggle.clone(),
-            on_remove.clone(),
-            on_open.clone(),
             expanded.contains(&row.descriptor.id),
-            on_toggle_details.clone(),
+            PluginRowCallbacks {
+                on_toggle: on_toggle.clone(),
+                on_remove: on_remove.clone(),
+                on_open: on_open.clone(),
+                on_toggle_details: on_toggle_details.clone(),
+            },
         ));
     }
 
@@ -310,12 +321,15 @@ fn plugin_row(
     row: &PluginRow,
     details: PluginDetails,
     theme: SpaceTheme,
-    on_toggle: ToggleCallback,
-    on_remove: PluginActionCallback,
-    on_open: PluginActionCallback,
     expanded: bool,
-    on_toggle_details: DetailsCallback,
+    callbacks: PluginRowCallbacks,
 ) -> impl IntoElement {
+    let PluginRowCallbacks {
+        on_toggle,
+        on_remove,
+        on_open,
+        on_toggle_details,
+    } = callbacks;
     let id = row.descriptor.id.clone();
     let plugin_id = id.clone();
     let requested_state = !row.enabled;

@@ -843,8 +843,8 @@ fn source_files(root: &std::path::Path) -> Vec<PathBuf> {
         ])
         .current_dir(root)
         .output();
-    if let Ok(output) = tracked {
-        if output.status.success() {
+    if let Ok(output) = tracked
+        && output.status.success() {
             return output
                 .stdout
                 .split(|&byte| byte == 0)
@@ -852,7 +852,6 @@ fn source_files(root: &std::path::Path) -> Vec<PathBuf> {
                 .map(|name| root.join(String::from_utf8_lossy(name).as_ref() as &str))
                 .collect();
         }
-    }
     let mut files = Vec::new();
     for name in ["Cargo.toml", "Cargo.lock", "install.sh", "build.rs"] {
         let path = root.join(name);
@@ -1262,7 +1261,7 @@ fn screenshot_data(reply: &str) -> Result<&str, String> {
 
 fn decode_screenshot(data: &str) -> Option<Vec<u8>> {
     let bytes = data.trim_end_matches('=').as_bytes();
-    if data.len() % 4 != 0 || data.len() - bytes.len() > 2 || bytes.len() % 4 == 1 {
+    if !data.len().is_multiple_of(4) || data.len() - bytes.len() > 2 || bytes.len() % 4 == 1 {
         return None;
     }
     let mut png = Vec::with_capacity(bytes.len().saturating_mul(3) / 4);

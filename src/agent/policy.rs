@@ -1,17 +1,12 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum NavigationMode {
+    #[default]
     SameSite,
     Free,
     Ask,
-}
-
-impl Default for NavigationMode {
-    fn default() -> Self {
-        Self::SameSite
-    }
 }
 
 impl NavigationMode {
@@ -35,8 +30,16 @@ impl Default for PolicyConfig {
     fn default() -> Self {
         Self {
             navigation_mode: NavigationMode::SameSite,
-            confirm_intents: ["purchase", "payment", "delete", "permission_grant", "transfer"]
-                .into_iter().map(str::to_string).collect(),
+            confirm_intents: [
+                "purchase",
+                "payment",
+                "delete",
+                "permission_grant",
+                "transfer",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
             confirm_allow: HashSet::new(),
         }
     }
@@ -45,23 +48,31 @@ impl Default for PolicyConfig {
 impl PolicyConfig {
     pub fn load() -> Self {
         let config = crate::plugin::PluginConfig::load().ok();
-        let table = config.as_ref()
+        let table = config
+            .as_ref()
             .and_then(|config| config.plugins.get(super::plugin::AGENT_PLUGIN_ID))
             .map(|entry| &entry.config);
         Self::from_table(table)
     }
 
     fn from_table(table: Option<&toml::Table>) -> Self {
-        let Some(table) = table else { return Self::default() };
+        let Some(table) = table else {
+            return Self::default();
+        };
         let read_list = |key| {
             table.get(key).and_then(toml::Value::as_array).map(|list| {
-                list.iter().filter_map(toml::Value::as_str)
-                    .map(|entry| entry.trim().to_ascii_lowercase()).collect()
+                list.iter()
+                    .filter_map(toml::Value::as_str)
+                    .map(|entry| entry.trim().to_ascii_lowercase())
+                    .collect()
             })
         };
         Self {
-            navigation_mode: NavigationMode::from_str_opt(table.get("navigation").and_then(toml::Value::as_str)),
-            confirm_intents: read_list("confirm").unwrap_or_else(|| Self::default().confirm_intents),
+            navigation_mode: NavigationMode::from_str_opt(
+                table.get("navigation").and_then(toml::Value::as_str),
+            ),
+            confirm_intents: read_list("confirm")
+                .unwrap_or_else(|| Self::default().confirm_intents),
             confirm_allow: read_list("confirm_allow").unwrap_or_default(),
         }
     }
@@ -145,7 +156,8 @@ impl Confirmations {
     // The approval UI can call this after the user approves. There is no agent command for it.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn approve(&mut self, origin: &str, intent: &str) {
-        self.approved.insert((origin.to_string(), intent.to_string()));
+        self.approved
+            .insert((origin.to_string(), intent.to_string()));
     }
 
     pub fn required(&self, config: &PolicyConfig, origin: &str, intent: &str) -> bool {
@@ -154,10 +166,11 @@ impl Confirmations {
         }
         config.confirm_intents.contains(intent)
             && !config.confirm_allow.contains(&format!("{origin}:{intent}"))
-            && !crate::shield::url_host(origin).is_some_and(|host| {
-                config.confirm_allow.contains(&format!("{host}:{intent}"))
-            })
-            && !self.approved.contains(&(origin.to_string(), intent.to_string()))
+            && !crate::shield::url_host(origin)
+                .is_some_and(|host| config.confirm_allow.contains(&format!("{host}:{intent}")))
+            && !self
+                .approved
+                .contains(&(origin.to_string(), intent.to_string()))
     }
 }
 
@@ -203,7 +216,9 @@ pub const ACTION_CONTEXT: &str = r#"target => {
 }"#;
 
 pub fn confirmation_message(intent: &str) -> String {
-    format!("needs_confirm: waiting for user approval in Anarc (intent={intent}). Do not retry; call again after approval.")
+    format!(
+        "needs_confirm: waiting for user approval in Anarc (intent={intent}). Do not retry; call again after approval."
+    )
 }
 
 /// Check if page contents or title indicate a human handoff is required (CAPTCHA, 2FA, OTP, payment gateway)
@@ -233,7 +248,9 @@ pub fn check_human_handoff(title: &str, url: &str, raw_text: &str) -> Option<&'s
         return Some("needs_human: complete verification in Anarc. use: see");
     }
 
-    if (combined.contains("credit card") || combined.contains("card number") || combined.contains("cvv"))
+    if (combined.contains("credit card")
+        || combined.contains("card number")
+        || combined.contains("cvv"))
         && combined.contains("expiration")
     {
         return Some("needs_human: complete card entry in Anarc. use: see");
@@ -247,27 +264,34 @@ pub fn check_human_handoff(title: &str, url: &str, raw_text: &str) -> Option<&'s
 /// 1. Environment variable `ANARC_SECRET_<NAME>`
 /// 2. Local secrets file `$ANARC_DATA_DIR/agent/secrets.json`
 pub fn resolve_secret(secret_name: &str) -> Option<String> {
-    let env_key = format!("ANARC_SECRET_{}", secret_name.to_ascii_uppercase().replace('-', "_"));
-    if let Ok(val) = std::env::var(&env_key) {
-        if !val.is_empty() {
-            return Some(val);
-        }
+    let env_key = format!(
+        "ANARC_SECRET_{}",
+        secret_name.to_ascii_uppercase().replace('-', "_")
+    );
+    if let Ok(val) = std::env::var(&env_key)
+        && !val.is_empty()
+    {
+        return Some(val);
     }
 
     let secrets_path = if let Ok(data_dir) = std::env::var("ANARC_DATA_DIR") {
         PathBuf::from(data_dir).join("agent").join("secrets.json")
     } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".local").join("share").join("anarc").join("agent").join("secrets.json")
+        PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("anarc")
+            .join("agent")
+            .join("secrets.json")
     } else {
         return None;
     };
 
-    if let Ok(content) = std::fs::read_to_string(&secrets_path) {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(sec) = val.get(secret_name).and_then(|v| v.as_str()) {
-                return Some(sec.to_string());
-            }
-        }
+    if let Ok(content) = std::fs::read_to_string(&secrets_path)
+        && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
+        && let Some(sec) = val.get(secret_name).and_then(|v| v.as_str())
+    {
+        return Some(sec.to_string());
     }
 
     None
@@ -288,7 +312,11 @@ pub fn redact_secrets(input: &str) -> String {
                 let end = remaining
                     .find(|c: char| c.is_whitespace() || c == ';' || c == '"' || c == '\'')
                     .unwrap_or(remaining.len());
-                let matched: String = chars.get(i..i.saturating_add(end)).unwrap_or(&[]).iter().collect();
+                let matched: String = chars
+                    .get(i..i.saturating_add(end))
+                    .unwrap_or(&[])
+                    .iter()
+                    .collect();
                 out.push_str(&matched);
                 i = i.saturating_add(end);
                 continue;
@@ -309,13 +337,19 @@ mod tests {
     #[test]
     fn test_navigation_policy_samesite_and_subdomains() {
         let mode = NavigationMode::SameSite;
-        let res = check_navigation_policy("https://github.com/login", "https://github.com/settings", mode);
+        let res = check_navigation_policy(
+            "https://github.com/login",
+            "https://github.com/settings",
+            mode,
+        );
         assert!(matches!(res, NavigationCheck::Allowed));
 
-        let res2 = check_navigation_policy("https://sub.github.com/a", "https://github.com/b", mode);
+        let res2 =
+            check_navigation_policy("https://sub.github.com/a", "https://github.com/b", mode);
         assert!(matches!(res2, NavigationCheck::Allowed));
 
-        let res3 = check_navigation_policy("https://github.com/", "https://attacker.com/leak", mode);
+        let res3 =
+            check_navigation_policy("https://github.com/", "https://attacker.com/leak", mode);
         assert!(matches!(res3, NavigationCheck::CrossSiteWarning(_)));
     }
 
@@ -331,8 +365,10 @@ mod tests {
         assert!(approvals.required(&config, "https://elsewhere.example", "purchase"));
         assert!(approvals.required(&config, "https://shop.example", "delete"));
 
-        let table = toml::from_str("confirm = ['send']
-confirm_allow = ['chatgpt.com:send']")?;
+        let table = toml::from_str(
+            "confirm = ['send']
+confirm_allow = ['chatgpt.com:send']",
+        )?;
         let config = PolicyConfig::from_table(Some(&table));
         assert!(!approvals.required(&config, "https://chatgpt.com", "send"));
         assert!(approvals.required(&config, "https://another.example", "send"));
@@ -341,15 +377,27 @@ confirm_allow = ['chatgpt.com:send']")?;
 
     #[test]
     fn test_human_handoff_detection() {
-        let res = check_human_handoff("Security Verification", "https://example.com/captcha", "Please solve this recaptcha");
+        let res = check_human_handoff(
+            "Security Verification",
+            "https://example.com/captcha",
+            "Please solve this recaptcha",
+        );
         assert!(res.is_some());
         assert!(res.unwrap_or_default().contains("needs_human"));
 
-        let res2 = check_human_handoff("Two-factor authentication", "https://example.com/2fa", "Enter your 6-digit sms code");
+        let res2 = check_human_handoff(
+            "Two-factor authentication",
+            "https://example.com/2fa",
+            "Enter your 6-digit sms code",
+        );
         assert!(res2.is_some());
         assert!(res2.unwrap_or_default().contains("needs_human"));
 
-        let res3 = check_human_handoff("Dashboard", "https://example.com/dash", "Welcome back Rover");
+        let res3 = check_human_handoff(
+            "Dashboard",
+            "https://example.com/dash",
+            "Welcome back Rover",
+        );
         assert!(res3.is_none());
     }
 

@@ -239,10 +239,10 @@ fn parse_dsl_at_depth(input: &str, depth: usize) -> Result<Vec<ActionOp>, String
         }
 
         // Check for playbook macro expansion (@macro_name arg1 arg2...)
-        if let Some(stripped) = trimmed.strip_prefix('@') {
-            if !stripped.starts_with("secret:") {
+        if let Some(stripped) = trimmed.strip_prefix('@')
+            && !stripped.starts_with("secret:") {
                 let parts: Vec<&str> = stripped.split_whitespace().collect();
-                let macro_name = parts.get(0).copied().unwrap_or("");
+                let macro_name = parts.first().copied().unwrap_or("");
                 let raw_args: Vec<String> = parts
                     .get(1..)
                     .unwrap_or(&[])
@@ -255,7 +255,6 @@ fn parse_dsl_at_depth(input: &str, depth: usize) -> Result<Vec<ActionOp>, String
                 ops.extend(expanded_ops);
                 continue;
             }
-        }
 
         let op = parse_single_op(trimmed)?;
         ops.push(op);
@@ -355,7 +354,7 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
     // Drag: "drag b1 b2"
     if let Some(stripped) = s.strip_prefix("drag ") {
         let parts: Vec<&str> = stripped.split_whitespace().collect();
-        let from = parts.get(0).copied().unwrap_or("").to_string();
+        let from = parts.first().copied().unwrap_or("").to_string();
         let to = parts.get(1).copied().unwrap_or("").to_string();
         if from.is_empty() || to.is_empty() {
             return Err("missing drag refs. use: see".into());
@@ -369,7 +368,7 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
     // XY: "xy 100 200"
     if let Some(stripped) = s.strip_prefix("xy ") {
         let parts: Vec<&str> = stripped.split_whitespace().collect();
-        let x: i32 = parts.get(0).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let x: i32 = parts.first().and_then(|v| v.parse().ok()).unwrap_or(0);
         let y: i32 = parts.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
         return Ok(ActionOp::XY { x, y });
     }
@@ -391,7 +390,7 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
             });
         }
         let parts: Vec<&str> = rest.split_whitespace().collect();
-        let first = parts.get(0).copied().unwrap_or("");
+        let first = parts.first().copied().unwrap_or("");
         let mut first_chars = first.chars();
         let is_ref = first_chars.next().is_some_and(|c| c.is_ascii_lowercase())
             && !first_chars.as_str().is_empty()
@@ -428,10 +427,10 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
     // Upload: "up ref /path/file...", "upload ref /path/file...", "upload /path/file..."
     if let Some(stripped) = s.strip_prefix("upload ").or_else(|| s.strip_prefix("up ")) {
         let parts: Vec<&str> = stripped.split_whitespace().collect();
-        if parts.is_empty() {
-            return Err("missing upload ref and path. use: do \"upload i1 /path/file\"".into());
-        }
-        let first = parts[0];
+        let first = match parts.first() {
+            Some(first) => *first,
+            None => return Err("missing upload ref and path. use: do \"upload i1 /path/file\"".into()),
+        };
         let (r, raw_paths) = if first.starts_with('/')
             || first.starts_with("./")
             || first.starts_with('~')
@@ -640,8 +639,7 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
             }
         } else if let Some(quiescent) = w.strip_prefix("text-quiescent ") {
             let parts: Vec<&str> = quiescent.split_whitespace().collect();
-            let q_ms = parts
-                .get(0)
+            let q_ms = parts.first()
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(1000);
             let t_ms = parts
@@ -855,7 +853,7 @@ fn split_target_and_text(s: &str) -> (String, String) {
         }
     }
     let parts: Vec<&str> = trimmed.split_whitespace().collect();
-    let target = parts.get(0).copied().unwrap_or("").to_string();
+    let target = parts.first().copied().unwrap_or("").to_string();
     let text_start = target.len();
     let text = trimmed.get(text_start..).unwrap_or("").trim();
     (target, unquote(text))
@@ -1360,9 +1358,8 @@ fn execute_single_op(
                     .engine
                     .devtools(tab_id, "Runtime.evaluate", Some(&eval_params.to_string()))
                     .recv_blocking()
-                {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&obj_res) {
-                        if let Some(object_id) =
+                    && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&obj_res)
+                        && let Some(object_id) =
                             parsed.pointer("/result/objectId").and_then(|v| v.as_str())
                         {
                             let set_files_params = serde_json::json!({
@@ -1378,8 +1375,6 @@ fn execute_single_op(
                                 )
                                 .recv_blocking();
                         }
-                    }
-                }
             }
 
             // Click to trigger native file chooser if necessary (which LumenDialogHandler intercepts)
@@ -1469,8 +1464,8 @@ fn execute_single_op(
                     // successful eval alone can still report "loading", which
                     // caused `see` to index about:blank on freshly woken tabs.
                     for _ in 0..10 {
-                        if app.engine.has_browser(&id) {
-                            if let Ok(Ok(state)) = app
+                        if app.engine.has_browser(&id)
+                            && let Ok(Ok(state)) = app
                                 .engine
                                 .evaluate(&id, "document.readyState")
                                 .recv_blocking()
@@ -1478,7 +1473,6 @@ fn execute_single_op(
                             {
                                 break;
                             }
-                        }
                         std::thread::sleep(std::time::Duration::from_millis(50));
                     }
                 }
@@ -1706,11 +1700,10 @@ fn type_at(
             text_json = serde_json::json!(text),
             replace = replace
         );
-        if let Ok(res) = evaluate_action(app, tab, &fast_paste_script) {
-            if res == "ok" {
+        if let Ok(res) = evaluate_action(app, tab, &fast_paste_script)
+            && res == "ok" {
                 return Ok(());
             }
-        }
     }
 
     app.engine
@@ -1803,7 +1796,7 @@ fn resolve_ref_coords(
     let registry = guard
         .registries
         .get(tab_id)
-        .ok_or_else(|| "index missing. use: see")?;
+        .ok_or("index missing. use: see")?;
     let el = registry
         .resolve_ref_with_fallback(ref_id)
         .ok_or("stale ref. use: see")?;
@@ -1951,7 +1944,7 @@ fn resolve_semantic_coords(
     let registry = guard
         .registries
         .get(tab_id)
-        .ok_or_else(|| "index missing. use: see")?;
+        .ok_or("index missing. use: see")?;
 
     let label_lower = label.to_lowercase();
     for el in registry.current_elements.values() {
@@ -1960,11 +1953,10 @@ fn resolve_semantic_coords(
         }
     }
     for el in registry.previous_elements.values() {
-        if el.kind == kind && el.name.to_lowercase().contains(&label_lower) {
-            if let Some(cur) = registry.resolve_ref_with_fallback(&el.id) {
+        if el.kind == kind && el.name.to_lowercase().contains(&label_lower)
+            && let Some(cur) = registry.resolve_ref_with_fallback(&el.id) {
                 return Ok((cur.center.0, cur.center.1, cur.id.clone()));
             }
-        }
     }
     Err("ref missing. use: see".into())
 }
@@ -2153,7 +2145,7 @@ fn parse_chord_modifiers<'a>(chord: &'a str, mods: &mut gpui_kit::Modifiers) -> 
         mods.platform = true;
     }
 
-    if let Some(pos) = chord_trimmed.rfind(|c| c == '+' || c == '-') {
+    if let Some(pos) = chord_trimmed.rfind(['+', '-']) {
         chord_trimmed
             .get(pos.saturating_add(1)..)
             .unwrap_or(chord_trimmed)
@@ -2189,7 +2181,7 @@ mod tests {
                 "css=a[href^='/messaging/']",
             ),
         ] {
-            let ops = parse_dsl(script).unwrap();
+            let ops = parse_dsl(script).unwrap_or_default();
             assert_eq!(
                 ops,
                 vec![ActionOp::DomClick {
@@ -2251,7 +2243,7 @@ mod tests {
         let ops = parse_dsl(script).unwrap_or_default();
         assert_eq!(ops.len(), 10);
         assert_eq!(
-            ops.get(0),
+            ops.first(),
             Some(&ActionOp::Click {
                 ref_id: "b1".into()
             })
@@ -2325,7 +2317,7 @@ mod tests {
         let ops = parse_dsl(script).unwrap_or_default();
         assert_eq!(ops.len(), 2);
         assert_eq!(
-            ops.get(0),
+            ops.first(),
             Some(&ActionOp::ClearAndType {
                 ref_id: "i1".into(),
                 text: "line 1\nline 2; still line 2".into()
@@ -2345,7 +2337,7 @@ mod tests {
         let ops = parse_dsl(script).unwrap_or_default();
         assert_eq!(ops.len(), 1);
         assert_eq!(
-            ops.get(0),
+            ops.first(),
             Some(&ActionOp::Upload {
                 ref_id: "b1".into(),
                 file_paths: vec!["/tmp/test1.png".into(), "/tmp/test2.png".into()]
@@ -2417,82 +2409,82 @@ mod tests {
             tab select personal-tab-3;
             tab personal-tab-4;
         "#;
-        let ops = parse_dsl(script).unwrap();
+        let ops = parse_dsl(script).unwrap_or_default();
         assert_eq!(ops.len(), 12);
         assert_eq!(
-            ops[0],
-            ActionOp::Go {
+            ops.first(),
+            Some(&ActionOp::Go {
                 url: "https://example.com".into()
-            }
+            })
         );
         assert_eq!(
-            ops[1],
-            ActionOp::KeyDown {
+            ops.get(1),
+            Some(&ActionOp::KeyDown {
                 chord: "Shift".into()
-            }
+            })
         );
         assert_eq!(
-            ops[2],
-            ActionOp::Key {
+            ops.get(2),
+            Some(&ActionOp::Key {
                 chord: "ArrowLeft".into()
-            }
+            })
         );
         assert_eq!(
-            ops[3],
-            ActionOp::KeyUp {
+            ops.get(3),
+            Some(&ActionOp::KeyUp {
                 chord: "Shift".into()
-            }
+            })
         );
         assert_eq!(
-            ops[4],
-            ActionOp::Key {
+            ops.get(4),
+            Some(&ActionOp::Key {
                 chord: "Ctrl+v".into()
-            }
+            })
         );
         assert_eq!(
-            ops[5],
-            ActionOp::Click {
+            ops.get(5),
+            Some(&ActionOp::Click {
                 ref_id: "css=button[type=submit]".into()
-            }
+            })
         );
         assert_eq!(
-            ops[6],
-            ActionOp::Click {
+            ops.get(6),
+            Some(&ActionOp::Click {
                 ref_id: "aria=\"Send\"".into()
-            }
+            })
         );
         assert_eq!(
-            ops[7],
-            ActionOp::ClearAndType {
+            ops.get(7),
+            Some(&ActionOp::ClearAndType {
                 ref_id: "i1".into(),
                 text: "hello human".into()
-            }
+            })
         );
         assert_eq!(
-            ops[8],
-            ActionOp::AppendText {
+            ops.get(8),
+            Some(&ActionOp::AppendText {
                 ref_id: "i2".into(),
                 text: " world".into()
-            }
+            })
         );
         assert_eq!(
-            ops[9],
-            ActionOp::ClearAndType {
+            ops.get(9),
+            Some(&ActionOp::ClearAndType {
                 ref_id: "css=input[name=q]".into(),
                 text: "search text".into()
-            }
+            })
         );
         assert_eq!(
-            ops[10],
-            ActionOp::Tab {
+            ops.get(10),
+            Some(&ActionOp::Tab {
                 action: TabAction::Select("personal-tab-3".into())
-            }
+            })
         );
         assert_eq!(
-            ops[11],
-            ActionOp::Tab {
+            ops.get(11),
+            Some(&ActionOp::Tab {
                 action: TabAction::Select("personal-tab-4".into())
-            }
+            })
         );
     }
 }

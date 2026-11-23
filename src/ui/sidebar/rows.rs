@@ -399,6 +399,9 @@ pub(crate) fn kept_tab_box(
 
 /// Empty slot shown only while a tab is being dragged. It shrinks the existing
 /// boxes live and previews where the dragged tab will land in this row.
+// These slot-geometry/state values are computed inline at four call sites;
+// bundling them into a struct would churn every caller for no behavior gain.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn kept_drop_slot(
     slot_id: String,
     group: Option<String>,

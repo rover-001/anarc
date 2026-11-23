@@ -1,7 +1,7 @@
 ---
 type: decision
 title: "Consolidated: UI System & Theme"
-timestamp: 2026-11-21T14:00:43.019837840+00:00
+timestamp: 2026-11-23T07:48:52.499207753+00:00
 tags: [consolidated, "ui-system-&-theme"]
 ---
 
@@ -11,6 +11,7 @@ Consolidated architectural decisions, system invariants, and implementation patt
 
 ## Core System Decisions & Invariants
 
+- **Four-pane split grid and drag-to-pane split UX**: Space.split remains Option<SplitPair> for save compatibility; SplitPair gained optional third/fourth tab ids (serde default) forming a 2x2 grid. Lumen gained third/fourth WebViewports, split_ratio_y and split_resizing_horizontal. Ctrl+Shift+S grows 2 panes to 4; Ctrl+Alt+arrows cycles panes 0..3. Dropping a sidebar TabDrag on a browser pane splits/extends/replaces that pane. Kept-tile drag preview opens the after-slot by default so the hovered tile slides left; the bottom dashed row is transparent until hovered. User-visible Lumen strings and the Rust type were renamed to Anarc; plugin ids/config keys/MCP tool names kept for compatibility.
 - **Anarc MCP visual browser control & tab lifecycle**: Replaced headless Python SQLite mock MCP wrapper with anarc-ctl mcp, automatically focusing and launching GUI window via omarchy-launch-or-focus. Added tab management DSL and CLI controls for pin, unpin, fav, unfav, close, new, select, and updated MCP schemas.
 - **Anarc Agent Control subagent telemetry, policy confirm gate on Send, and CEF lazy tab handling**: Audited subagent browser automation in Anarc. Discovered: 1) Tabs created in Anarc are initialized lazily by CEF only when activated/rendered in GPUI, causing 'tab not found' if queried before UI render. 2) PolicyConfig hardcodes 'send' in confirm_intents, triggering 'needs_confirm' on chat apps with a 'Send' button. 3) LLM subagent crashed on step 145 when calling read_file on binary PNG screenshot causing API code 400. 4) Successfully captured full execution telemetry (63 tool calls, 2,463,527 total tokens, 252s elapsed time).
 - **Eliminate OSR scrolling judder with dirty rect reuse, zero wake latency, and 1:1 input fidelity**: 1. Implemented persistent cached_buffer in LumenRenderHandler with copy_dirty_rects, eliminating full 8.3MB frame reallocations per paint. 2. Removed cx.on_next_frame deferral from the UI update loop, triggering immediate repaint without 2-frame latency. 3. Retained 2-frame depth window in retired_images before dropping to prevent WGPU atlas churn. 4. Scaled wheel lines by 100px * device scale factor, set WHEEL_SCROLL_SCALE to 1.0, dispatched precision touch deltas directly for zero input lag, and added smooth momentum fling on release. 5. Driven send_external_begin_frame from Lumen::render aligned with GPUI vsync at 144Hz.
@@ -37,8 +38,9 @@ Consolidated architectural decisions, system invariants, and implementation patt
 - `src/main.rs`
 - `src/ui/motion.rs`
 
-## Consolidated Evolution History (18 items archived)
+## Consolidated Evolution History (19 items archived)
 
+- 2026-11-23 — Four-pane split grid and drag-to-pane split UX (`four-pane-split-grid-and-drag-to-pane-split-ux.md`)
 - 2026-11-21 — Anarc MCP visual browser control & tab lifecycle (`anarc-mcp-visual-browser-control--tab-lifecycle.md`)
 - 2026-11-21 — Anarc Agent Control subagent telemetry, policy confirm gate on Send, and CEF lazy tab handling (`anarc-agent-control-subagent-telemetry-policy-confirm-gate-on-send-and-cef-lazy-tab-handling.md`)
 - 2026-11-19 — Eliminate OSR scrolling judder with dirty rect reuse, zero wake latency, and 1:1 input fidelity (`eliminate-osr-scrolling-judder-with-dirty-rect-reuse-zero-wake-latency-and-11-input-fidelity.md`)
