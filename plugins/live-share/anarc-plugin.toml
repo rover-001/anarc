@@ -1,0 +1,13 @@
+[plugin]
+id = "com.anarc.live-share"
+name = "Anarc Live Share"
+version = "1.0.0"
+api = "1"
+kind = "panel"
+entry = "index.html"
+description = "Live collaborative space sharing and synchronized browsing over Tailscale and WebRTC"
+enabled_by_default = true
+
+[permissions]
+storage = true
+network = ["*.ts.net", "localhost", "127.0.0.1"]

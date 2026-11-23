@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Anarc Live Share</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="panel">
+    <header class="panel-header">
+      <div>
+        <h1>Live Share</h1>
+        <p>Share and collaborate on browser spaces with peers over Tailscale.</p>
+      </div>
+      <p id="status" class="status" role="status">Ready</p>
+    </header>
+
+    <section id="setup" class="card" aria-label="Set up a shared session">
+      <div class="mode" role="group" aria-label="Connection mode">
+        <button type="button" id="host-mode" aria-pressed="true">Share Space</button>
+        <button type="button" id="join-mode" aria-pressed="false">Connect to Peer</button>
+      </div>
+
+      <div class="tailscale-bar">
+        <div>
+          <span class="ts-label">Your Tailscale:</span>
+          <strong id="my-ts-machine">omarchy</strong>
+          <span id="my-ts-ip" class="ts-ip">100.120.139.17</span>
+        </div>
+        <button type="button" id="refresh-peers" class="sm-btn">Refresh</button>
+      </div>
+
+      <div id="host-setup" class="stack">
+        <div>
+          <h2>Share a space</h2>
+          <p>Choose an Anarc space to share live with connected Tailscale machines.</p>
+        </div>
+        <div class="space-choice">
+          <div class="space-summary" aria-live="polite">
+            <strong id="space-name">No space selected</strong>
+            <p id="space-tab-count" hidden></p>
+          </div>
+          <button type="button" id="choose-space">Choose space</button>
+        </div>
+        <button type="button" id="start-share-btn" class="primary fit">Start sharing on Tailscale</button>
+        <p class="hint">Peers on your Tailnet will see this space and can connect to it directly.</p>
+      </div>
+
+      <div id="join-setup" class="stack" hidden>
+        <div>
+          <h2>Connect to a peer</h2>
+          <p>Select a connected Tailscale machine to join their shared space.</p>
+        </div>
+
+        <div class="peers-container">
+          <label>Connected machines on your Tailnet:</label>
+          <div id="peers-list" class="peers-list">
+            <p class="empty-peers">Searching for Tailscale peers...</p>
+          </div>
+        </div>
+
+        <form id="direct-connect-form" class="field">
+          <label for="peer-address-input">Or connect by Tailscale IP / Hostname</label>
+          <div class="control-row">
+            <input id="peer-address-input" placeholder="e.g. 100.127.224.5 or machine:7433" spellcheck="false" autocomplete="off" required>
+            <button type="button" id="paste-address">Paste</button>
+            <button type="submit" class="primary">Connect</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section id="session" class="card stack" aria-labelledby="session-name" hidden>
+      <div class="session-header">
+        <div>
+          <h2 id="session-name">Shared space</h2>
+          <p id="session-peer-info"></p>
+        </div>
+        <button type="button" id="disconnect">End session</button>
+      </div>
+
+      <div class="shared-banner">
+        <div class="shared-banner-icon">🌐</div>
+        <div class="shared-banner-text">
+          <strong>This space is now live in your sidebar!</strong>
+          <p>Switch to it using the globe icon at the bottom of your sidebar to browse tabs in the main window. All tab actions are synchronized live.</p>
+        </div>
+        <button type="button" id="switch-space-btn" class="primary">Switch to Space</button>
+      </div>
+    </section>
+
+    <p id="feedback" class="feedback" role="status"></p>
+  </main>
+</body>
+</html>
