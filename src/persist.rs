@@ -1,4 +1,4 @@
-//! Session persistence for Lumen spaces and tabs.
+//! Session persistence for Anarc spaces and tabs.
 
 use crate::model::Space;
 use serde::{Deserialize, Serialize};

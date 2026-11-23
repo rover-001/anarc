@@ -39,3 +39,4 @@ scroll.log
 .playwright-mcp
 .wrangler/
 tools/sync-windows.sh
+.heald

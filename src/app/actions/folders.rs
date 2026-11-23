@@ -1,6 +1,6 @@
 use super::super::*;
 
-impl Lumen {
+impl Anarc {
     pub(in crate::app) fn move_tab_to_folder(&mut self, tab_id: &str, folder_id: &str) {
         let mut changed = false;
         if let Some(space) = self
@@ -19,10 +19,10 @@ impl Lumen {
                 folder.expanded = true;
             }
             if let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id) {
-                tab.favorite = false;
-                tab.pinned = false;
+                tab.set_pinned(false);
                 tab.pinned_url = None;
                 tab.pinned_title = None;
+                tab.kept_group = None;
                 tab.folder = Some(folder_id.to_owned());
                 changed = true;
             }
@@ -65,10 +65,10 @@ impl Lumen {
         if let Some(tab_id) = target_tab
             && let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id)
         {
-            tab.favorite = false;
-            tab.pinned = false;
+            tab.set_pinned(false);
             tab.pinned_url = None;
             tab.pinned_title = None;
+            tab.kept_group = None;
             tab.folder = Some(id.clone());
         }
         self.save_state();
@@ -122,7 +122,7 @@ impl Lumen {
         name_input.update(cx, |input, cx| {
             input.focus(window, cx);
         });
-        let sub = cx.subscribe(&name_input, |this: &mut Lumen, _, event, cx| {
+        let sub = cx.subscribe(&name_input, |this: &mut Anarc, _, event, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
                 this.commit_folder_modal(cx);
                 cx.notify();
@@ -160,7 +160,7 @@ impl Lumen {
             input.set_value(&name, window, cx);
             input.focus(window, cx);
         });
-        let sub = cx.subscribe(&name_input, |this: &mut Lumen, _, event, cx| {
+        let sub = cx.subscribe(&name_input, |this: &mut Anarc, _, event, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
                 this.commit_folder_modal(cx);
                 cx.notify();

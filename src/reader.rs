@@ -55,7 +55,7 @@ body{{font:18px/1.6 system-ui,sans-serif!important}}
 #lumen-reader-content th,#lumen-reader-content td{{padding:8px;border:1px solid #282b33}}`;
 document.head.append(style);
 window.__lumenReaderActive=true;
-}}catch(error){{console.error("Lumen reader mode failed",error);}}
+}}catch(error){{console.error("Anarc reader mode failed",error);}}
 }})();"#
             )
         })

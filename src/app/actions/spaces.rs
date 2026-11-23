@@ -1,6 +1,11 @@
 use super::super::*;
 
-impl Lumen {
+/// Fingerprint of the last cookie snapshot pushed to the daemon. Avoids a
+/// disk write + peer broadcast every 3 s when nothing signed in changed.
+static SHARED_COOKIE_FINGERPRINT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+impl Anarc {
     pub(crate) fn spaces(&self) -> &[Space] {
         &self.spaces
     }
@@ -222,6 +227,14 @@ impl Lumen {
             viewport.clear_transition_image();
             cx.notify();
         });
+        self.third_web_viewport.update(cx, |viewport, cx| {
+            viewport.clear_transition_image();
+            cx.notify();
+        });
+        self.fourth_web_viewport.update(cx, |viewport, cx| {
+            viewport.clear_transition_image();
+            cx.notify();
+        });
         let previous_space = self.active_space.clone();
         self.close_peek();
         self.close_app_page();
@@ -258,7 +271,7 @@ impl Lumen {
             input.focus(window, cx);
         });
 
-        let sub = cx.subscribe(&name_input, |this: &mut Lumen, _, event, cx| {
+        let sub = cx.subscribe(&name_input, |this: &mut Anarc, _, event, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
                 this.commit_space_modal(cx);
                 cx.notify();
@@ -293,7 +306,7 @@ impl Lumen {
             input.focus(window, cx);
         });
 
-        let sub = cx.subscribe(&name_input, |this: &mut Lumen, _, event, cx| {
+        let sub = cx.subscribe(&name_input, |this: &mut Anarc, _, event, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
                 this.commit_space_modal(cx);
                 cx.notify();
@@ -414,7 +427,7 @@ impl Lumen {
 
         for mut external_space in loaded.spaces {
             for ext_tab in &mut external_space.tabs {
-                if (ext_tab.favorite || ext_tab.pinned)
+                if ext_tab.is_pinned()
                     && let Some(pinned) = &ext_tab.pinned_url
                 {
                     if !pinned.is_empty() {
@@ -451,8 +464,7 @@ impl Lumen {
                         a.id != b.id
                             || a.url != b.url
                             || a.title != b.title
-                            || a.favorite != b.favorite
-                            || a.pinned != b.pinned
+                            || a.is_pinned() != b.is_pinned()
                             || a.folder != b.folder
                     })
                 {
@@ -540,68 +552,85 @@ impl Lumen {
         }
 
         if sync_cookies {
-            self.sync_host_cookies_if_needed();
+            self.sync_host_cookies_if_needed(false);
         }
     }
 
-    pub(crate) fn sync_host_cookies_if_needed(&self) {
+    /// Export the host's *entire* session (all account cookies and page logins
+    /// in the shared space's CEF profile) to the daemon, which mirrors it to the
+    /// peer. `force` is used on session transitions; otherwise an unchanged
+    /// snapshot is skipped so the 3 s check never rewrites/rebroadcasts cookies.
+    pub(crate) fn sync_host_cookies_if_needed(&mut self, force: bool) {
         for space in &self.spaces {
-            if space.id != "shared-space" && !space.peer_ips.is_empty() {
-                let tab_to_query = space
-                    .tabs
-                    .iter()
-                    .find(|t| self.engine.has_browser(&t.id))
-                    .map(|t| t.id.clone())
-                    .or_else(|| {
-                        space
-                            .active
-                            .as_ref()
-                            .filter(|id| self.engine.has_browser(id))
-                            .cloned()
-                    });
-                if let Some(tab_id) = tab_to_query {
-                    let mut urls: Vec<String> = Vec::new();
-                    for t in &space.tabs {
-                        if !t.url.is_empty() && !t.url.starts_with("about:") {
-                            urls.push(t.url.clone());
-                            if t.url.contains("google.com") {
-                                urls.push("https://accounts.google.com/".into());
-                                urls.push("https://mail.google.com/".into());
-                                urls.push("https://google.com/".into());
-                            }
-                        }
-                    }
-                    urls.sort();
-                    urls.dedup();
-                    let params = if urls.is_empty() {
-                        None
-                    } else {
-                        Some(serde_json::json!({ "urls": urls }).to_string())
-                    };
-                    let rx = self.engine.devtools(&tab_id, "Network.getCookies", params.as_deref());
-                    std::thread::spawn(move || {
-                        if let Ok(Ok(raw_json)) = rx.recv_blocking() {
-                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw_json) {
-                                if let Some(cookies) = parsed.get("cookies").and_then(|c| c.as_array()) {
-                                    if !cookies.is_empty() {
-                                        let payload = serde_json::json!({ "cookies": cookies }).to_string();
-                                        let _ = std::net::TcpStream::connect("127.0.0.1:7433").and_then(|mut stream| {
-                                            use std::io::Write;
-                                            let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(500)));
-                                            let req = format!(
-                                                "POST /api/cookies HTTP/1.0\r\nHost: 127.0.0.1:7433\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                                                payload.len(),
-                                                payload
-                                            );
-                                            stream.write_all(req.as_bytes())
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
+            if space.id == "shared-space" {
+                continue;
             }
+            let is_active_session = !space.peer_ips.is_empty();
+            let is_sharing_now = force
+                && self.live_share_is_host
+                && self.live_share_space_id == space.id;
+            if !is_active_session && !is_sharing_now {
+                continue;
+            }
+
+            let tab_to_query = space
+                .tabs
+                .iter()
+                .find(|t| self.engine.has_browser(&t.id))
+                .map(|t| t.id.clone())
+                .or_else(|| {
+                    space
+                        .active
+                        .as_ref()
+                        .filter(|id| self.engine.has_browser(id))
+                        .cloned()
+                });
+            let Some(tab_id) = tab_to_query else { continue; };
+
+            // getAllCookies (not the URL-filtered getCookies) is required for a
+            // peer to actually be signed into the same Google/work accounts:
+            // Google auth spans accounts.google.com, google.com, youtube.com,
+            // gstatic.com and more, including hosts not present in the space.
+            let rx = self.engine.devtools(&tab_id, "Network.getAllCookies", None);
+            std::thread::spawn(move || {
+                let Ok(Ok(raw_json)) = rx.recv_blocking() else { return; };
+                let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw_json) else { return; };
+                let Some(cookies) = parsed.get("cookies").and_then(|c| c.as_array()) else { return; };
+                if cookies.is_empty() {
+                    return;
+                }
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                for c in cookies {
+                    let _ = (
+                        c.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                        c.get("value").and_then(|v| v.as_str()).unwrap_or(""),
+                        c.get("domain").and_then(|v| v.as_str()).unwrap_or(""),
+                        c.get("path").and_then(|v| v.as_str()).unwrap_or(""),
+                    ).hash(&mut hasher);
+                }
+                let fingerprint = hasher.finish();
+                if !force
+                    && fingerprint == SHARED_COOKIE_FINGERPRINT.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    return;
+                }
+                SHARED_COOKIE_FINGERPRINT.store(fingerprint, std::sync::atomic::Ordering::Relaxed);
+                let payload = serde_json::json!({ "cookies": cookies }).to_string();
+                let _ = std::net::TcpStream::connect_timeout(
+                    &"127.0.0.1:7433".parse::<std::net::SocketAddr>().unwrap(),
+                    std::time::Duration::from_millis(200),
+                ).and_then(|mut stream| {
+                    use std::io::Write;
+                    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(500)));
+                    let req = format!(
+                        "POST /api/cookies HTTP/1.0\r\nHost: 127.0.0.1:7433\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        payload.len(),
+                        payload
+                    );
+                    stream.write_all(req.as_bytes())
+                });
+            });
         }
     }
 

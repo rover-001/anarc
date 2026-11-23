@@ -189,6 +189,14 @@ impl Engine {
         }
     }
     pub fn close_browser(&mut self, tab_id: &str) {
+        // Record the expected CEF echo before asking CEF to close: `do_close`
+        // runs on another thread and may enqueue the request immediately.
+        if let Ok(mut events) = self.events.lock() {
+            *events
+                .expected_close_requests
+                .entry(tab_id.to_owned())
+                .or_insert(0) += 1;
+        }
         self.close_browser_entry(tab_id);
         self.lifecycle.closed(tab_id);
         self.resize_state.remove(tab_id);

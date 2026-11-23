@@ -2,12 +2,41 @@ use super::actions::single_line_paste;
 use super::*;
 use gpui_kit::{Focusable, WindowOptions};
 
-fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
+/// Tests that enable plugins call PluginConfig::save(), which targets the real
+/// user config by default. Redirect ANARC_CONFIG_DIR to a temporary directory
+/// so running the suite can never wipe the user's plugin toggles.
+struct IsolatedConfigDir {
+    previous: Option<std::ffi::OsString>,
+    path: std::path::PathBuf,
+}
+
+impl Drop for IsolatedConfigDir {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.previous {
+                Some(value) => std::env::set_var("ANARC_CONFIG_DIR", value),
+                None => std::env::remove_var("ANARC_CONFIG_DIR"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn isolated_config_dir(test: &str) -> IsolatedConfigDir {
+    let path = std::env::temp_dir().join(format!("anarc-plugin-config-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    let previous = std::env::var_os("ANARC_CONFIG_DIR");
+    unsafe { std::env::set_var("ANARC_CONFIG_DIR", &path) };
+    IsolatedConfigDir { previous, path }
+}
+
+fn test_app(window: &mut Window, cx: &mut Context<Anarc>) -> Anarc {
     crate::plugins::set_split_view_enabled_for_test(true);
     let address = cx.new(|cx| InputState::new(window, cx));
     address.update(cx, |input, cx| input.focus(window, cx));
     let address_subscription =
-        cx.subscribe(&address, |app: &mut Lumen, _, event: &InputEvent, cx| {
+        cx.subscribe(&address, |app: &mut Anarc, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 app.address_editing = true;
                 let text = app.address.read(cx).value().to_string();
@@ -19,7 +48,7 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
     let find_input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in page"));
     let command_input =
         cx.new(|cx| InputState::new(window, cx).placeholder("Search tabs, history, and actions"));
-    let command_subscription = cx.subscribe(&command_input, |this: &mut Lumen, _, event, cx| {
+    let command_subscription = cx.subscribe(&command_input, |this: &mut Anarc, _, event, cx| {
         if matches!(event, InputEvent::Change) {
             this.selected_command = 0;
             cx.notify();
@@ -29,11 +58,15 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
     let panel_registry = crate::plugin::new_panel_registry();
     let mut engine = engine::Engine::new();
     engine.set_panel_registry(panel_registry.clone());
-    Lumen {
+    Anarc {
         spaces,
         active_space,
         sidebar_collapsed: false,
         sidebar_hovered: false,
+        kept_drag_hovered_tab: None,
+        kept_drag_hover_after: false,
+        kept_drag_source_id: None,
+        kept_section_drag_hovered: false,
         sidebar_width: 240.0 * UI_SCALE,
         sidebar_resizing: false,
         sidebar_width_transition: None,
@@ -62,6 +95,16 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
             let focus_handle = cx.focus_handle();
             cx.new(|_| WebViewport::new(root_entity, focus_handle))
         },
+        third_web_viewport: {
+            let root_entity = cx.weak_entity();
+            let focus_handle = cx.focus_handle();
+            cx.new(|_| WebViewport::new(root_entity, focus_handle))
+        },
+        fourth_web_viewport: {
+            let root_entity = cx.weak_entity();
+            let focus_handle = cx.focus_handle();
+            cx.new(|_| WebViewport::new(root_entity, focus_handle))
+        },
         peek_web_viewport: {
             let root_entity = cx.weak_entity();
             let focus_handle = cx.focus_handle();
@@ -72,7 +115,9 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         peek_focused: false,
         focused_pane: 0,
         split_ratio: 0.5,
+        split_ratio_y: 0.5,
         split_resizing: false,
+        split_resizing_horizontal: false,
         _address_subscription: address_subscription,
         _command_subscription: command_subscription,
         show_find: false,
@@ -114,6 +159,10 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         last_spaces_mtime: std::sync::atomic::AtomicU64::new(0),
         last_shared_cookies_mtime: std::sync::atomic::AtomicU64::new(0),
         last_cookie_sync: std::time::Instant::now(),
+        last_live_share_session_mtime: std::sync::atomic::AtomicU64::new(0),
+        live_share_session_generation: 0,
+        live_share_is_host: false,
+        live_share_space_id: String::new(),
         pending_auth_recovery: std::collections::HashMap::new(),
         preferences: Default::default(),
         plugins: {
@@ -130,6 +179,7 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         panel_registry,
         pending_plugin_review: None,
         plugin_action_error: None,
+        expanded_plugins: std::collections::HashSet::new(),
         #[cfg(not(test))]
         cef_task_started: false,
     }
@@ -225,6 +275,7 @@ fn clicking_plugins_keeps_settings_open_over_a_blank_tab(cx: &mut gpui::TestAppC
 #[cfg(debug_assertions)]
 #[gpui::test]
 fn opening_a_panel_from_plugins_settings_focuses_its_tab(cx: &mut gpui::TestAppContext) {
+    let _config_guard = isolated_config_dir("open-panel");
     let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -300,10 +351,7 @@ fn split_shortcuts_create_focus_and_exit_the_pane_pair(cx: &mut gpui::TestAppCon
     view.read_with(cx, |app, _| {
         assert_eq!(
             app.current_split_pair(),
-            Some(SplitPair {
-                first: "tab-1".into(),
-                second: "tab-2".into(),
-            })
+            Some(SplitPair::new("tab-1".into(), "tab-2".into()))
         );
     });
     dispatch_test_key(cx, handle, "ctrl-shift-w");
@@ -323,6 +371,158 @@ fn split_shortcuts_create_focus_and_exit_the_pane_pair(cx: &mut gpui::TestAppCon
     view.read_with(cx, |app, _| {
         assert_eq!(app.focused_pane, 0);
         assert!(app.current_split_pair().is_none());
+    });
+}
+
+#[gpui::test]
+fn split_can_extend_to_four_panes(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.add_tab();
+        app.active_space_mut().active = Some("tab-1".into());
+        app.split_active_with_next();
+        assert_eq!(app.current_split_pair().unwrap().pane_count(), 2);
+
+        app.split_active_with_next();
+        let pair = app.current_split_pair().unwrap();
+        assert!(pair.is_quad());
+        assert_eq!(pair.panes().len(), 4);
+
+        // A fifth split is a no-op; focus cycles through all four panes.
+        app.split_active_with_next();
+        assert_eq!(app.current_split_pair().unwrap().pane_count(), 4);
+        app.set_focused_pane(3);
+        assert_eq!(app.focused_tab_id(), pair.panes()[3]);
+
+        app.exit_split();
+        assert!(app.current_split_pair().is_none());
+        assert_eq!(app.focused_pane, 0);
+    });
+}
+
+#[gpui::test]
+fn closing_a_pane_in_a_four_way_split_only_removes_that_pane(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.add_tab();
+        app.active_space_mut().active = Some("tab-1".into());
+        app.split_active_with_next();
+        app.split_active_with_next();
+        assert_eq!(
+            app.current_split_pair().unwrap().panes(),
+            ["tab-1", "tab-2", "tab-3", "tab-4"]
+        );
+
+        // Ctrl+W in the bottom-right pane must leave the other three split.
+        app.set_focused_pane(3);
+        app.close_active_tab();
+        let pair = app.current_split_pair().unwrap();
+        assert_eq!(pair.panes(), ["tab-1", "tab-2", "tab-3"]);
+        assert!(!pair.is_quad());
+        assert_eq!(app.focused_pane, 2);
+        assert_eq!(app.focused_tab_id(), "tab-3");
+        assert_eq!(app.active_tab_id(), "tab-3");
+
+        // Closing a non-focused pane keeps the current pane focused.
+        app.close_tab_by_id("tab-1");
+        let pair = app.current_split_pair().unwrap();
+        assert_eq!(pair.panes(), ["tab-2", "tab-3"]);
+        assert_eq!(app.focused_pane, 1);
+        assert_eq!(app.focused_tab_id(), "tab-3");
+
+        app.close_active_tab();
+        assert!(app.current_split_pair().is_none());
+        assert_eq!(app.focused_pane, 0);
+        assert_eq!(app.active_tab_id(), "tab-2");
+    });
+}
+
+#[gpui::test]
+fn unloading_a_kept_pane_keeps_the_rest_of_the_split(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.add_tab();
+        app.active_space_mut().active = Some("tab-1".into());
+        app.split_active_with_next();
+        app.split_active_with_next();
+        app.active_space_mut()
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.id == "tab-4")
+            .unwrap()
+            .set_pinned(true);
+        app.set_focused_pane(3);
+        app.close_active_tab();
+
+        let pair = app.current_split_pair().unwrap();
+        assert_eq!(pair.panes(), ["tab-1", "tab-2", "tab-3"]);
+        assert_eq!(app.focused_pane, 2);
+        assert_eq!(app.active_tab_id(), "tab-3");
+    });
+}
+
+#[gpui::test]
+fn dropping_a_tab_on_a_pane_builds_the_split(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.add_tab();
+        app.add_tab();
+        for tab in &mut app.active_space_mut().tabs {
+            if tab.url == "about:blank" {
+                tab.url = "https://example.com/".into();
+            }
+        }
+        app.active_space_mut().active = Some("tab-1".into());
+        app.drop_tab_into_pane("tab-2", 1);
+        let pair = app.current_split_pair().unwrap();
+        assert_eq!(pair.first, "tab-1");
+        assert_eq!(pair.second, "tab-2");
+        assert_eq!(app.focused_pane, 1);
+
+        app.drop_tab_into_pane("tab-3", 1);
+        let pair = app.current_split_pair().unwrap();
+        assert!(pair.is_quad());
+        assert_eq!(pair.fourth.as_deref(), Some("tab-3"));
     });
 }
 
@@ -362,7 +562,7 @@ fn closing_a_pinned_tab_request_keeps_it_pinned_and_unloads_it(cx: &mut gpui::Te
         .expect("open test window")
     });
     view.update(cx, |app, _| {
-        app.active_space_mut().tabs[0].pinned = true;
+        app.active_space_mut().tabs[0].set_pinned(true);
         app.active_space_mut().tabs[0].url = "https://example.com".into();
         app.close_section_tab("tab-1");
     });
@@ -375,6 +575,38 @@ fn closing_a_pinned_tab_request_keeps_it_pinned_and_unloads_it(cx: &mut gpui::Te
             .unwrap();
         assert!(tab.pinned);
         assert_eq!(tab.state, TabState::Discarded);
+    });
+}
+
+#[gpui::test]
+fn closing_a_pinned_tab_does_not_activate_another_pinned_tab(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.active_space_mut().tabs[1].url = "https://example.org".into();
+        app.pin_tab("tab-2", true);
+        app.active_space_mut().tabs[0].set_pinned(true);
+        app.active_space_mut().active = Some("tab-1".into());
+        app.close_active_tab();
+    });
+    view.read_with(cx, |app, _| {
+        let space = app.active_space();
+        let other_pinned = space.tabs.iter().find(|tab| tab.id == "tab-2").unwrap();
+        assert_eq!(
+            other_pinned.state,
+            TabState::Discarded,
+            "a second pinned tab must not be opened as the fallback"
+        );
+        assert_eq!(app.active_tab_id(), "tab-3");
     });
 }
 
@@ -437,7 +669,7 @@ fn unloading_a_favorite_tab_restores_its_pinned_destination(cx: &mut gpui::TestA
             .iter()
             .find(|tab| tab.id == "tab-1")
             .unwrap();
-        assert!(tab.favorite);
+        assert!(tab.is_pinned());
         assert_eq!(tab.url, "https://favorite.example/home");
         assert_eq!(tab.title, "Favorite Home");
     });
@@ -468,7 +700,7 @@ fn legacy_kept_tabs_adopt_their_saved_url_and_keep_it_after_navigation() {
 }
 
 #[gpui::test]
-fn transitioning_between_favorite_and_pinned_preserves_pinned_url(cx: &mut gpui::TestAppContext) {
+fn favorite_and_pin_are_aliases_preserving_pinned_url(cx: &mut gpui::TestAppContext) {
     let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -495,6 +727,7 @@ fn transitioning_between_favorite_and_pinned_preserves_pinned_url(cx: &mut gpui:
             .find(|tab| tab.id == "tab-1")
             .unwrap();
         assert!(tab.pinned);
+        assert!(tab.favorite);
         assert_eq!(tab.pinned_url.as_deref(), Some("https://original.example"));
     });
     // Unloading restores the original pinned link
@@ -722,16 +955,13 @@ fn split_with_context_flow_uses_the_clicked_tab_and_selected_target(cx: &mut gpu
     view.read_with(cx, |app, _| {
         assert_eq!(
             app.current_split_pair(),
-            Some(SplitPair {
-                first: "tab-1".into(),
-                second: "tab-2".into(),
-            })
+            Some(SplitPair::new("tab-1".into(), "tab-2".into()))
         );
     });
 }
 
 #[gpui::test]
-fn favorite_pin_and_folder_sections_are_exclusive(cx: &mut gpui::TestAppContext) {
+fn kept_and_folder_sections_are_exclusive(cx: &mut gpui::TestAppContext) {
     let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -753,7 +983,7 @@ fn favorite_pin_and_folder_sections_are_exclusive(cx: &mut gpui::TestAppContext)
             .find(|tab| tab.id == "tab-2")
             .unwrap();
         assert!(tab.favorite);
-        assert!(!tab.pinned);
+        assert!(tab.pinned);
         assert!(tab.folder.is_none());
 
         app.pin_tab("tab-2", true);
@@ -764,8 +994,19 @@ fn favorite_pin_and_folder_sections_are_exclusive(cx: &mut gpui::TestAppContext)
             .find(|tab| tab.id == "tab-2")
             .unwrap();
         assert!(tab.pinned);
+        assert!(tab.favorite);
+
+        app.favorite_tab("tab-2", false);
+        let tab = app
+            .active_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "tab-2")
+            .unwrap();
+        assert!(!tab.pinned);
         assert!(!tab.favorite);
 
+        app.favorite_tab("tab-2", true);
         let folder_id = app.create_folder("Work", Some("tab-2")).unwrap();
         let tab = app
             .active_space()
@@ -788,6 +1029,124 @@ fn favorite_pin_and_folder_sections_are_exclusive(cx: &mut gpui::TestAppContext)
             .find(|tab| tab.id == "tab-2")
             .unwrap();
         assert!(tab.folder.is_none());
+    });
+}
+
+#[gpui::test]
+fn dropping_a_regular_tab_on_a_kept_tab_joins_the_same_row(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.pin_tab("tab-1", true);
+        // Drag tab-2 onto tab-1 (drop before the target).
+        app.drop_tab_in_target_section("tab-2", "tab-1", false);
+    });
+    view.read_with(cx, |app, _| {
+        let tabs = &app.active_space().tabs;
+        assert_eq!(tabs.len(), 2);
+        assert!(tabs.iter().all(|tab| tab.is_pinned()));
+        assert_eq!(tabs[0].id, "tab-2");
+        assert_eq!(tabs[1].id, "tab-1");
+        assert_eq!(tabs[0].kept_group.as_deref(), Some("tab-1"));
+        assert_eq!(tabs[1].kept_group.as_deref(), Some("tab-1"));
+    });
+}
+
+#[gpui::test]
+fn dropping_on_a_slot_beside_an_ungrouped_tab_forms_a_two_tab_group(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.pin_tab("tab-1", true);
+        // The hover slot beside an ungrouped tab carries group = None. Dropping
+        // tab-2 there must still create a group shared by both tabs.
+        app.drop_kept_tab_in_slot("tab-2", "tab-1", None, false);
+    });
+    view.read_with(cx, |app, _| {
+        let tabs = &app.active_space().tabs;
+        assert_eq!(tabs.len(), 2);
+        assert!(tabs.iter().all(|tab| tab.is_pinned()));
+        assert!(tabs
+            .iter()
+            .all(|tab| tab.kept_group.as_deref() == Some("tab-1")));
+    });
+}
+
+#[gpui::test]
+fn dropping_on_the_lower_strip_keeps_a_single_web_per_row(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.pin_tab("tab-1", true);
+        // First drop joins the group via the box body.
+        app.drop_tab_in_target_section("tab-2", "tab-1", false);
+        app.add_tab();
+        // Second drop on the lower strip gives tab-3 its own full-width row.
+        app.drop_tab_in_target_section("tab-3", "tab-1", true);
+    });
+    view.read_with(cx, |app, _| {
+        let tabs = &app.active_space().tabs;
+        assert!(tabs.iter().all(|tab| tab.is_pinned()));
+        let tab_1 = tabs.iter().find(|tab| tab.id == "tab-1").unwrap();
+        let tab_2 = tabs.iter().find(|tab| tab.id == "tab-2").unwrap();
+        let tab_3 = tabs.iter().find(|tab| tab.id == "tab-3").unwrap();
+        assert_eq!(tab_1.kept_group.as_deref(), Some("tab-1"));
+        assert_eq!(tab_2.kept_group.as_deref(), Some("tab-1"));
+        assert_eq!(tab_3.kept_group, None);
+    });
+}
+
+#[gpui::test]
+fn detaching_a_grouped_tab_keeps_it_pinned_in_its_own_row(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.pin_tab("tab-1", true);
+        app.drop_tab_in_target_section("tab-2", "tab-1", false);
+        // Drop on the section background / use "Move to own row".
+        app.set_kept_group("tab-2", None);
+    });
+    view.read_with(cx, |app, _| {
+        let tabs = &app.active_space().tabs;
+        let detached = tabs.iter().find(|tab| tab.id == "tab-2").unwrap();
+        assert!(detached.is_pinned());
+        assert_eq!(detached.kept_group, None);
     });
 }
 

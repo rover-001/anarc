@@ -5,7 +5,7 @@ use gpui_kit::{
     rems,
 };
 
-impl Lumen {
+impl Anarc {
     #[cfg(not(test))]
     pub(in crate::app) fn choose_live_share_space(
         &mut self,

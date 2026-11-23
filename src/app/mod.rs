@@ -7,7 +7,10 @@ pub(crate) use crate::navigation::{
 #[cfg(not(test))]
 use crate::settings::url_host;
 use crate::ui::command_palette::{self, PaletteAction, PaletteItem, PaletteTab, PaletteTarget};
-use crate::ui::sidebar::rows::{TabDrag, TabDragGhost, section_tab_row, tab_context_menu_position};
+use crate::ui::sidebar::rows::{
+    TabDrag, TabDragGhost, kept_drop_slot, kept_tab_box, section_tab_row,
+    tab_context_menu_position,
+};
 use crate::ui::split_view::{self, DIVIDER_HIT_WIDTH, DIVIDER_WIDTH};
 use crate::ui::visual::{self, ADDRESS_BAR_HEIGHT, NAV_BUTTON_SIZE, TOPBAR_HEIGHT, UI_SCALE};
 use crate::ui::web_view::WebViewport;
@@ -61,13 +64,13 @@ pub const CONTENT_BEZEL_BOTTOM: f32 = 4.0 * UI_SCALE;
 pub(crate) const CARD_RADIUS: f32 = 16.0 * UI_SCALE;
 
 pub(crate) use crate::model::sidebar::closing_tab_row_index;
-pub(crate) use state::{AppPage, Lumen, SettingsSection};
+pub(crate) use state::{AppPage, Anarc, SettingsSection};
 use state::{
     FolderContextMenu, FolderModal, FolderModalMode, SidebarContextMenu, SpaceContextMenu,
     SpaceModal, SpaceModalMode, TabContextMenu, ThemeEditor,
 };
 
-impl Lumen {
+impl Anarc {
     pub(crate) fn is_app_shortcut_for_view(
         key: &str,
         browser_modifier: bool,
@@ -143,11 +146,17 @@ fn make_tab_ids_unique(spaces: &mut [Space]) {
             *active = replacement.clone();
         }
         if let Some(split) = &mut space.split {
-            if let Some(replacement) = replacements.get(&split.first) {
-                split.first = replacement.clone();
+            for pane in [&mut split.first, &mut split.second] {
+                if let Some(replacement) = replacements.get(pane.as_str()) {
+                    *pane = replacement.clone();
+                }
             }
-            if let Some(replacement) = replacements.get(&split.second) {
-                split.second = replacement.clone();
+            for pane in [&mut split.third, &mut split.fourth] {
+                if let Some(id) = pane
+                    && let Some(replacement) = replacements.get(id.as_str())
+                {
+                    *id = replacement.clone();
+                }
             }
         }
     }
@@ -161,9 +170,6 @@ fn sidebar_width_for(collapsed: bool, width: f32) -> f32 {
         width
     }
 }
-
-/// Arc-style favorite tile size.
-const FAVORITE_TILE_SIZE: f32 = 30.0 * UI_SCALE;
 
 #[cfg(not(test))]
 fn resize_debug(message: std::fmt::Arguments<'_>) {

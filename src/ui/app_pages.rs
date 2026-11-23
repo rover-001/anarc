@@ -1,10 +1,12 @@
+use std::collections::HashSet;
+
 use gpui_kit::{
     Context, FontWeight, StatefulInteractiveElement, assets::IconName, component::Icon,
     component::scroll::ScrollableElement, div, prelude::*, px, rgb,
 };
 
 use crate::app::SettingsSection;
-use crate::app::{AppPage, Lumen};
+use crate::app::{AppPage, Anarc};
 use crate::engine::DownloadRecord;
 use crate::settings::{SearchEngine, SidebarMode};
 use crate::ui::visual::{self, SpaceTheme, UI_SCALE};
@@ -15,7 +17,7 @@ pub fn render(
     theme: SpaceTheme,
     downloads: Vec<DownloadRecord>,
     page_zoom: f64,
-    site_protection_enabled: bool,
+    ad_blocker_enabled: bool,
     has_web_site: bool,
     settings_section: SettingsSection,
     search_engine: SearchEngine,
@@ -24,7 +26,8 @@ pub fn render(
     plugin_rows: Vec<crate::plugin::PluginRow>,
     pending_plugin_review: Option<crate::ui::plugin_manager::PluginReview>,
     plugin_action_error: Option<String>,
-    cx: &mut Context<Lumen>,
+    expanded_plugins: HashSet<String>,
+    cx: &mut Context<Anarc>,
 ) -> gpui_kit::AnyElement {
     let (title, icon) = match page {
         AppPage::Settings => ("Settings", IconName::Settings),
@@ -34,16 +37,16 @@ pub fn render(
         AppPage::Settings => settings_content(
             theme,
             page_zoom,
-            site_protection_enabled,
+            ad_blocker_enabled,
             has_web_site,
             settings_section,
             search_engine,
             sidebar_mode,
             active_space_color,
-            downloads.clone(),
             plugin_rows,
             pending_plugin_review,
             plugin_action_error,
+            expanded_plugins,
             cx,
         ),
         AppPage::Downloads => downloads_content(downloads, theme),
@@ -101,7 +104,7 @@ pub fn render(
                         .active(|style| style.opacity(0.88))
                         .hover(move |style| {
                             style
-                                .bg(rgb(theme.surface_hover))
+                                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                                 .text_color(rgb(theme.text))
                         })
                         .child(Icon::new(IconName::X))
@@ -125,17 +128,17 @@ pub fn render(
 fn settings_content(
     theme: SpaceTheme,
     page_zoom: f64,
-    site_protection_enabled: bool,
+    ad_blocker_enabled: bool,
     has_web_site: bool,
     selected_section: SettingsSection,
     search_engine: SearchEngine,
     sidebar_mode: SidebarMode,
     _active_space_color: u32,
-    downloads: Vec<DownloadRecord>,
     plugin_rows: Vec<crate::plugin::PluginRow>,
     pending_plugin_review: Option<crate::ui::plugin_manager::PluginReview>,
     plugin_action_error: Option<String>,
-    cx: &mut Context<Lumen>,
+    expanded_plugins: HashSet<String>,
+    cx: &mut Context<Anarc>,
 ) -> gpui_kit::AnyElement {
     let tabs = div()
         .w_full()
@@ -159,36 +162,6 @@ fn settings_content(
             theme,
             cx.listener(|this, _, _, cx| {
                 this.set_settings_section(SettingsSection::Appearance);
-                cx.notify();
-            }),
-        ))
-        .child(settings_tab(
-            "Search",
-            SettingsSection::Search,
-            selected_section,
-            theme,
-            cx.listener(|this, _, _, cx| {
-                this.set_settings_section(SettingsSection::Search);
-                cx.notify();
-            }),
-        ))
-        .child(settings_tab(
-            "Privacy",
-            SettingsSection::Privacy,
-            selected_section,
-            theme,
-            cx.listener(|this, _, _, cx| {
-                this.set_settings_section(SettingsSection::Privacy);
-                cx.notify();
-            }),
-        ))
-        .child(settings_tab(
-            "Downloads",
-            SettingsSection::Downloads,
-            selected_section,
-            theme,
-            cx.listener(|this, _, _, cx| {
-                this.set_settings_section(SettingsSection::Downloads);
                 cx.notify();
             }),
         ))
@@ -223,29 +196,83 @@ fn settings_content(
                     cx.notify();
                 }),
             );
+            let search_choices = div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .child(action_button(
+                    if search_engine == SearchEngine::Google {
+                        "✓ Google"
+                    } else {
+                        "Google"
+                    },
+                    theme,
+                    cx.listener(|this, _, _, cx| {
+                        this.set_search_engine(SearchEngine::Google);
+                        cx.notify();
+                    }),
+                ))
+                .child(action_button(
+                    if search_engine == SearchEngine::Bing {
+                        "✓ Bing"
+                    } else {
+                        "Bing"
+                    },
+                    theme,
+                    cx.listener(|this, _, _, cx| {
+                        this.set_search_engine(SearchEngine::Bing);
+                        cx.notify();
+                    }),
+                ))
+                .child(action_button(
+                    if search_engine == SearchEngine::DuckDuckGo {
+                        "✓ DuckDuckGo"
+                    } else {
+                        "DuckDuckGo"
+                    },
+                    theme,
+                    cx.listener(|this, _, _, cx| {
+                        this.set_search_engine(SearchEngine::DuckDuckGo);
+                        cx.notify();
+                    }),
+                ));
+            let shield_control = crate::ui::plugin_manager::toggle_switch(
+                "settings-ad-blocker".to_owned(),
+                ad_blocker_enabled,
+                theme,
+                cx.listener(|this, _, _, cx| {
+                    let enabled = !this.engine.ad_blocker_enabled();
+                    this.set_ad_blocker_enabled(enabled);
+                    cx.notify();
+                }),
+            );
+            let protection_text = if ad_blocker_enabled {
+                "On for every site"
+            } else {
+                "Off"
+            };
             div()
                 .flex()
                 .flex_col()
                 .gap_4()
                 .child(setting_card(
-                    "About",
-                    "Anarc Browser",
-                    "Fast, customisable, private web browser built with Rust and GPUI.",
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .children(visual::anarc_logo().map(|logo| {
-                            div()
-                                .size(px(32.0 * UI_SCALE))
-                                .child(gpui_kit::img(logo).size_full())
-                        })),
+                    "Search",
+                    "Default engine",
+                    "Used for address-bar searches.",
+                    search_choices,
+                    theme,
+                ))
+                .child(setting_card(
+                    "Privacy",
+                    "Ad & tracker shield",
+                    protection_text,
+                    shield_control,
                     theme,
                 ))
                 .child(setting_card(
                     "Browsing data",
-                    "History and search suggestions",
-                    "Remove visited pages and saved address-bar searches.",
+                    "History & suggestions",
+                    "Clear visited pages and saved searches.",
                     clear_button,
                     theme,
                 ))
@@ -296,8 +323,8 @@ fn settings_content(
             );
             let theme_card = setting_card(
                 "Theme",
-                "Space accent color",
-                "Choose the accent used by this space's browser chrome.",
+                "Space accent",
+                "Accent color for this space.",
                 color_controls,
                 theme,
             );
@@ -306,13 +333,9 @@ fn settings_content(
                 if has_web_site {
                     "Current website"
                 } else {
-                    "Default zoom for new websites"
+                    "New websites"
                 },
-                if has_web_site {
-                    "Use + or − to adjust this website in 10% steps."
-                } else {
-                    "This default applies to new websites; + or − changes it in 10% steps."
-                },
+                "Adjust in 10% steps.",
                 zoom_controls,
                 theme,
             );
@@ -359,7 +382,7 @@ fn settings_content(
             let sidebar_card = setting_card(
                 "Sidebar",
                 "Collapsed appearance",
-                "Choose whether a collapsed sidebar is hidden, keeps tab icons, or opens when you point at the window edge.",
+                "Hidden, tab icons, or reveal on hover.",
                 sidebar_choices,
                 theme,
             );
@@ -372,114 +395,95 @@ fn settings_content(
                 .child(sidebar_card)
                 .into_any_element()
         }
-        SettingsSection::Search => {
-            let choices = div()
-                .flex()
-                .flex_wrap()
-                .gap_2()
-                .child(action_button(
-                    if search_engine == SearchEngine::Google {
-                        "✓ Google"
-                    } else {
-                        "Google"
-                    },
+        SettingsSection::Shortcuts => div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(
+                section(
+                    "Tabs & spaces",
+                    vec![
+                        ("Ctrl + T", "New tab"),
+                        ("Ctrl + W", "Close tab or this panel"),
+                        ("Ctrl + Shift + T", "Reopen closed tab"),
+                        ("Ctrl + Tab", "Next tab"),
+                        ("Ctrl + Shift + Tab", "Previous tab"),
+                        ("Ctrl + 1 … 9", "Jump to tab (9 = last)"),
+                        ("Ctrl + Shift + S", "Split / add pane pair (up to 4)"),
+                        ("Ctrl + Shift + W", "Exit split view"),
+                        ("Ctrl + Alt + ← / →", "Focus split pane"),
+                    ],
                     theme,
-                    cx.listener(|this, _, _, cx| {
-                        this.set_search_engine(SearchEngine::Google);
-                        cx.notify();
-                    }),
-                ))
-                .child(action_button(
-                    if search_engine == SearchEngine::Bing {
-                        "✓ Bing"
-                    } else {
-                        "Bing"
-                    },
-                    theme,
-                    cx.listener(|this, _, _, cx| {
-                        this.set_search_engine(SearchEngine::Bing);
-                        cx.notify();
-                    }),
-                ))
-                .child(action_button(
-                    if search_engine == SearchEngine::DuckDuckGo {
-                        "✓ DuckDuckGo"
-                    } else {
-                        "DuckDuckGo"
-                    },
-                    theme,
-                    cx.listener(|this, _, _, cx| {
-                        this.set_search_engine(SearchEngine::DuckDuckGo);
-                        cx.notify();
-                    }),
-                ));
-            setting_card(
-                "Address bar",
-                "Search engine",
-                &format!("Current: {}", search_engine.label()),
-                choices,
-                theme,
+                ),
             )
-            .into_any_element()
-        }
-        SettingsSection::Privacy => {
-            let shield_text = if !has_web_site {
-                "Open a website to change its protection setting".to_owned()
-            } else if site_protection_enabled {
-                "Protection is on for this website".to_owned()
-            } else {
-                "Protection is off for this website".to_owned()
-            };
-            let shield_control = if has_web_site {
-                action_button(
-                    if site_protection_enabled {
-                        "Turn off"
-                    } else {
-                        "Turn on"
-                    },
+            .child(
+                section(
+                    "Navigation & address bar",
+                    vec![
+                        ("Ctrl + L", "Focus address bar"),
+                        ("Enter", "Open typed URL or suggestion"),
+                        ("↑ / ↓", "Move address suggestion"),
+                        ("Esc", "Dismiss suggestions"),
+                        ("Alt + ← / →", "Back / forward"),
+                        ("Ctrl + R", "Reload"),
+                        ("Ctrl + Shift + R", "Hard reload"),
+                        ("Ctrl + V", "Paste into address bar"),
+                    ],
                     theme,
-                    cx.listener(|this, _, _, cx| {
-                        this.toggle_shield_for_active_tab();
-                        cx.notify();
-                    }),
-                )
-                .into_any_element()
-            } else {
-                div()
-                    .text_sm()
-                    .text_color(rgb(theme.muted))
-                    .child("Unavailable")
-                    .into_any_element()
-            };
-            setting_card(
-                "Site protection",
-                "Tracking protection",
-                &shield_text,
-                shield_control,
-                theme,
+                ),
             )
-            .into_any_element()
-        }
-        SettingsSection::Downloads => downloads_content(downloads, theme),
-        SettingsSection::Shortcuts => section(
-            "Keyboard shortcuts",
-            vec![
-                ("Ctrl + L", "Focus the address bar"),
-                ("Ctrl + T", "Open a tab"),
-                ("Ctrl + W", "Close the active tab or this settings window"),
-                ("Ctrl + K", "Open the command palette"),
-                ("Ctrl + S", "Collapse or expand the sidebar"),
-                ("Ctrl + Shift + S", "Split the active tab with another tab"),
-                ("Ctrl + + / − / 0", "Change or reset page zoom"),
-            ],
-            theme,
-        )
-        .into_any_element(),
+            .child(
+                section(
+                    "Page & find",
+                    vec![
+                        ("Ctrl + F", "Find in page"),
+                        ("Enter / Shift + Enter", "Find next / previous"),
+                        ("Esc", "Close find bar"),
+                        ("Ctrl + C / X / V", "Copy / cut / paste selection"),
+                        ("Ctrl + A", "Select all"),
+                        ("Esc", "Stop page loading"),
+                    ],
+                    theme,
+                ),
+            )
+            .child(
+                section(
+                    "Tools & appearance",
+                    vec![
+                        ("Ctrl + K", "Command palette"),
+                        ("Ctrl + S", "Toggle sidebar"),
+                        ("Ctrl + Shift + B", "Toggle site shield"),
+                        ("Ctrl + Alt + R", "Reader mode"),
+                        ("Ctrl + = / − / 0", "Zoom in / out / reset"),
+                    ],
+                    theme,
+                ),
+            )
+            .child(
+                section(
+                    "Dialogs & overlays",
+                    vec![
+                        ("Esc", "Close palette, peek, or menu"),
+                        ("↑ / ↓", "Move palette selection"),
+                        ("Enter", "Run selected command"),
+                    ],
+                    theme,
+                ),
+            )
+            .child(
+                section(
+                    "Plugins",
+                    vec![("Ctrl + J", "Next tab (Vim keymap)")],
+                    theme,
+                ),
+            )
+            .into_any_element(),
         SettingsSection::Plugins => plugin_manager_content(
             theme,
             plugin_rows,
             pending_plugin_review,
             plugin_action_error,
+            expanded_plugins,
             cx,
         ),
     };
@@ -508,7 +512,8 @@ fn plugin_manager_content(
     plugin_rows: Vec<crate::plugin::PluginRow>,
     pending_review: Option<crate::ui::plugin_manager::PluginReview>,
     feedback: Option<String>,
-    cx: &mut Context<Lumen>,
+    expanded: HashSet<String>,
+    cx: &mut Context<Anarc>,
 ) -> gpui_kit::AnyElement {
     use std::rc::Rc;
 
@@ -626,6 +631,15 @@ fn plugin_manager_content(
             });
         });
 
+    let details_entity = entity.clone();
+    let on_toggle_details: crate::ui::plugin_manager::DetailsCallback =
+        Rc::new(move |id, _, _, app| {
+            let entity = details_entity.clone();
+            app.update_entity(&entity, move |this, cx| {
+                this.toggle_plugin_details(id);
+                cx.notify();
+            });
+        });
     crate::ui::plugin_manager::render(
         &plugin_rows,
         &[],
@@ -636,6 +650,8 @@ fn plugin_manager_content(
         on_install,
         on_open_plugin_folder,
         on_open_panel,
+        &expanded,
+        on_toggle_details,
     )
 }
 
@@ -783,11 +799,11 @@ fn settings_tab(
         .px_3()
         .py_1p5()
         .rounded_md()
-        .bg(rgb(if selected {
-            theme.accent
+        .bg(if selected {
+            rgb(theme.accent)
         } else {
-            theme.surface
-        }))
+            crate::ui::visual::translucent_surface(theme.surface, 0x30)
+        })
         .text_xs()
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(if selected { theme.base } else { theme.text }))
@@ -797,7 +813,7 @@ fn settings_tab(
             if selected {
                 style
             } else {
-                style.bg(rgb(theme.surface_hover))
+                style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
             }
         })
         .child(label)
@@ -815,7 +831,7 @@ fn setting_card(
         .w_full()
         .p_4()
         .rounded_xl()
-        .bg(rgb(theme.surface))
+        .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
         .border_1()
         .border_color(rgb(theme.border))
         .flex()
@@ -865,7 +881,7 @@ fn action_button(
         .px_3()
         .py_2()
         .rounded_md()
-        .bg(rgb(theme.surface_hover))
+        .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
         .text_xs()
         .text_color(rgb(theme.text))
         .hover(|style| style.bg(rgb(theme.border_hover)))
@@ -904,7 +920,7 @@ fn section(
         .w_full()
         .p_4()
         .rounded_xl()
-        .bg(rgb(theme.surface))
+        .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
         .border_1()
         .border_color(rgb(theme.border))
         .flex()
@@ -961,7 +977,7 @@ fn downloads_content(downloads: Vec<DownloadRecord>, theme: SpaceTheme) -> gpui_
                     .w_full()
                     .p_3()
                     .rounded_lg()
-                    .bg(rgb(theme.surface))
+                    .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                     .border_1()
                     .border_color(rgb(theme.border))
                     .flex()

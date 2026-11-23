@@ -3,6 +3,7 @@ use crate::ui::visual::UI_SCALE;
 pub const DIVIDER_WIDTH: f32 = 4.0 * UI_SCALE;
 pub const DIVIDER_HIT_WIDTH: f32 = 8.0 * UI_SCALE;
 pub const MIN_PANE_WIDTH: f32 = 240.0 * UI_SCALE;
+pub const MIN_PANE_HEIGHT: f32 = 160.0 * UI_SCALE;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BrowserSize {
@@ -28,6 +29,19 @@ impl ResizeDrag {
         self.frozen = None;
         self.edge_colors = edge_colors.into_iter().collect();
         self.pending_targets.clear();
+    }
+
+    /// Starts a transition (sidebar reveal/collapse) where CEF keeps its current
+    /// size until the animation finishes. The OSR image is GPU-stretched to the
+    /// animating container in the meantime, so Blink only relayouts once at the
+    /// end instead of once per frame.
+    pub fn start_frozen(
+        &mut self,
+        current_sizes: Vec<BrowserSize>,
+        edge_colors: Vec<(String, u32)>,
+    ) {
+        self.start(Vec::new(), edge_colors);
+        self.frozen = Some(current_sizes);
     }
 
     pub fn frozen_size(&self, tab_id: &str) -> Option<(i32, i32)> {
@@ -63,6 +77,7 @@ impl ResizeDrag {
     }
 }
 
+#[cfg(test)]
 pub fn tab_for_pane<'a>(first: &'a str, second: &'a str, pane_index: usize) -> &'a str {
     if pane_index == 1 { second } else { first }
 }
@@ -85,6 +100,52 @@ pub fn ratio_at_pointer(pointer_x: f32, card_left: f32, card_width: f32) -> f32 
     }
     let min_ratio = (MIN_PANE_WIDTH / available).min(0.5);
     ((pointer_x - card_left).clamp(MIN_PANE_WIDTH, available - MIN_PANE_WIDTH) / available)
+        .clamp(min_ratio, 1.0 - min_ratio)
+}
+
+/// Widths and heights for the four panes of a 2x2 split, in row-major order.
+pub fn quad_pane_sizes(
+    total_width: f32,
+    total_height: f32,
+    ratio_x: f32,
+    ratio_y: f32,
+) -> [(f32, f32); 4] {
+    let (left, right) = pane_widths(total_width, ratio_x);
+    let (top, bottom) = pane_heights(total_height, ratio_y);
+    [(left, top), (right, top), (left, bottom), (right, bottom)]
+}
+
+/// Sizes for a three-pane split: full-height left pane and a stacked pair on
+/// the right, in pane order.
+pub fn triple_pane_sizes(
+    total_width: f32,
+    total_height: f32,
+    ratio_x: f32,
+    ratio_y: f32,
+) -> [(f32, f32); 3] {
+    let (left, right) = pane_widths(total_width, ratio_x);
+    let (top, bottom) = pane_heights(total_height, ratio_y);
+    [(left, total_height), (right, top), (right, bottom)]
+}
+
+pub fn pane_heights(total_height: f32, ratio: f32) -> (f32, f32) {
+    let available = (total_height - DIVIDER_WIDTH).max(0.0);
+    let min_ratio = if available > 0.0 {
+        (MIN_PANE_HEIGHT / available).min(0.5)
+    } else {
+        0.5
+    };
+    let ratio = ratio.clamp(min_ratio, 1.0 - min_ratio);
+    (available * ratio, available * (1.0 - ratio))
+}
+
+pub fn ratio_y_at_pointer(pointer_y: f32, card_top: f32, card_height: f32) -> f32 {
+    let available = (card_height - DIVIDER_WIDTH).max(1.0);
+    if available <= MIN_PANE_HEIGHT * 2.0 {
+        return 0.5;
+    }
+    let min_ratio = (MIN_PANE_HEIGHT / available).min(0.5);
+    ((pointer_y - card_top).clamp(MIN_PANE_HEIGHT, available - MIN_PANE_HEIGHT) / available)
         .clamp(min_ratio, 1.0 - min_ratio)
 }
 
@@ -113,6 +174,31 @@ mod tests {
         assert!((ratio_at_pointer(100.0, 0.0, 1004.0) - min_ratio).abs() < 1e-6);
         assert!((ratio_at_pointer(900.0, 0.0, 1004.0) - (1.0 - min_ratio)).abs() < 1e-6);
         assert_eq!(ratio_at_pointer(100.0, 0.0, 400.0), 0.5);
+    }
+
+    #[test]
+    fn quad_panes_share_both_dividers() {
+        let sizes = quad_pane_sizes(1004.0, 604.0, 0.5, 0.5);
+        assert_eq!(sizes.len(), 4);
+        let (left, top) = sizes[0];
+        let (right, _) = sizes[1];
+        let (_, bottom) = sizes[2];
+        assert!((left - right).abs() < 0.01);
+        assert!((top - bottom).abs() < 0.01);
+        assert!((top + bottom + DIVIDER_WIDTH - 604.0).abs() < 0.01);
+        assert!((ratio_y_at_pointer(200.0, 0.0, 400.0) - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn triple_panes_fill_the_full_height_on_the_left() {
+        let sizes = triple_pane_sizes(1004.0, 604.0, 0.5, 0.5);
+        assert_eq!(sizes.len(), 3);
+        let (left, left_height) = sizes[0];
+        let (right, top) = sizes[1];
+        let (_, bottom) = sizes[2];
+        assert!((left_height - 604.0).abs() < 0.01);
+        assert!((left + right + DIVIDER_WIDTH - 1004.0).abs() < 0.01);
+        assert!((top + bottom + DIVIDER_WIDTH - 604.0).abs() < 0.01);
     }
 
     #[test]

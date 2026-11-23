@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::app::{CONTENT_BEZEL_X, Lumen};
+use crate::app::{CONTENT_BEZEL_X, Anarc};
 #[cfg(test)]
 use crate::ui::visual::TOPBAR_HEIGHT;
 #[cfg(test)]
@@ -49,13 +49,20 @@ impl ResizeFrameHandoff {
 }
 
 pub struct WebViewport {
-    parent: gpui_kit::WeakEntity<Lumen>,
+    parent: gpui_kit::WeakEntity<Anarc>,
     focus_handle: gpui_kit::FocusHandle,
     tab_id: String,
     sidebar_width: f32,
     pane_offset: f32,
+    pane_y_offset: f32,
     pane_index: usize,
+    /// Logical pane index used for input routing and drop targets. Unlike
+    /// `pane_index` (which selects corner radii) this is always 0-based and
+    /// contiguous, including the right-hand panes of a three-pane split.
+    focus_pane_index: usize,
     split_layout: bool,
+    /// True when panes form a 2x2 grid rather than a single split row.
+    split_grid: bool,
     drag_edge_color: Option<u32>,
     resize_source_image: Option<Arc<gpui_kit::RenderImage>>,
     resize_frame_handoff: ResizeFrameHandoff,
@@ -83,15 +90,18 @@ pub struct WebViewport {
 }
 
 impl WebViewport {
-    pub fn new(parent: gpui_kit::WeakEntity<Lumen>, focus_handle: gpui_kit::FocusHandle) -> Self {
+    pub fn new(parent: gpui_kit::WeakEntity<Anarc>, focus_handle: gpui_kit::FocusHandle) -> Self {
         Self {
             parent,
             focus_handle,
             tab_id: String::new(),
             sidebar_width: 320.0,
             pane_offset: 0.0,
+            pane_y_offset: 0.0,
             pane_index: 0,
+            focus_pane_index: 0,
             split_layout: false,
+            split_grid: false,
             drag_edge_color: None,
             resize_source_image: None,
             resize_frame_handoff: ResizeFrameHandoff::default(),
@@ -119,6 +129,18 @@ impl WebViewport {
 
     pub fn set_peek_mode(&mut self, peek_mode: bool) -> bool {
         std::mem::replace(&mut self.peek_mode, peek_mode) != peek_mode
+    }
+
+    pub fn set_split_grid(&mut self, split_grid: bool) -> bool {
+        std::mem::replace(&mut self.split_grid, split_grid) != split_grid
+    }
+
+    pub fn set_focus_pane_index(&mut self, focus_pane_index: usize) -> bool {
+        std::mem::replace(&mut self.focus_pane_index, focus_pane_index) != focus_pane_index
+    }
+
+    pub fn set_pane_y_offset(&mut self, pane_y_offset: f32) -> bool {
+        std::mem::replace(&mut self.pane_y_offset, pane_y_offset) != pane_y_offset
     }
 
     pub fn has_content(&self) -> bool {
@@ -304,13 +326,14 @@ impl WebViewport {
 
 #[cfg(test)]
 fn browser_point(position: gpui_kit::Point<gpui_kit::Pixels>, sidebar_width: f32) -> (i32, i32) {
-    browser_point_in_pane(position, sidebar_width, 0.0, false)
+    browser_point_in_pane(position, sidebar_width, 0.0, 0.0, false)
 }
 
 fn browser_point_in_pane(
     position: gpui_kit::Point<gpui_kit::Pixels>,
     sidebar_width: f32,
     pane_offset: f32,
+    pane_y_offset: f32,
     fullscreen: bool,
 ) -> (i32, i32) {
     let x = (f32::from(position.x) - sidebar_width - CONTENT_BEZEL_X - pane_offset).max(0.0) as i32;
@@ -319,7 +342,7 @@ fn browser_point_in_pane(
     } else {
         active_topbar_height()
     };
-    let y = (f32::from(position.y) - top).max(0.0) as i32;
+    let y = (f32::from(position.y) - top - pane_y_offset).max(0.0) as i32;
     (x, y)
 }
 
@@ -329,16 +352,17 @@ fn browser_point_at(
     position: gpui_kit::Point<gpui_kit::Pixels>,
     sidebar_width: f32,
     pane_offset: f32,
+    pane_y_offset: f32,
     fullscreen: bool,
     origin_override: Option<(f32, f32)>,
 ) -> (i32, i32) {
     if let Some((left, top)) = origin_override {
         (
             (f32::from(position.x) - left).max(0.0) as i32,
-            (f32::from(position.y) - top).max(0.0) as i32,
+            (f32::from(position.y) - top - pane_y_offset).max(0.0) as i32,
         )
     } else {
-        browser_point_in_pane(position, sidebar_width, pane_offset, fullscreen)
+        browser_point_in_pane(position, sidebar_width, pane_offset, pane_y_offset, fullscreen)
     }
 }
 
@@ -359,8 +383,9 @@ mod tests {
     #[test]
     fn viewport_coordinates_remove_sidebar_and_topbar_before_scaling() {
         let position = gpui_kit::point(px(340.0), px(72.0));
-        assert_eq!(browser_point(position, 320.0), (16, 27));
-        assert_eq!(browser_point(position, 64.0), (272, 27));
+        let expected_y = (72.0 - active_topbar_height()) as i32;
+        assert_eq!(browser_point(position, 320.0), (16, expected_y));
+        assert_eq!(browser_point(position, 64.0), (272, expected_y));
     }
 
     #[test]
@@ -374,9 +399,10 @@ mod tests {
     #[test]
     fn pane_coordinates_are_local_to_the_selected_viewport() {
         let position = gpui_kit::point(px(520.0), px(72.0));
+        let expected_y = (72.0 - active_topbar_height()) as i32;
         assert_eq!(
-            browser_point_in_pane(position, 320.0, 100.0, false),
-            (96, 27)
+            browser_point_in_pane(position, 320.0, 100.0, 0.0, false),
+            (96, expected_y)
         );
     }
 

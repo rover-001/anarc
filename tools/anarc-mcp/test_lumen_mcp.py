@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Automated tests for Lumen MCP Server and Plugin Tools."""
+"""Automated tests for Anarc MCP Server and Plugin Tools."""
 
 import json
 import os

@@ -53,6 +53,7 @@ Execute batch actions using the `do` DSL.
   - `hover b1` | `focus i1` | `drag b1 b2` | `xy X Y` (canvas fallback)
   - `upload [target] /path/file` : Upload file to target or page `<input type=file>`
   - `dialog ok` | `dialog cancel` | `tab new [url]` | `tab select <id|N>` | `tab close`
+  - `tab pin [id]` / `tab unpin [id]` : Pin/unpin a tab. Favorites and pins are the same sidebar section: `tab fav`/`tab unfav` (bare `fav`/`unfav`) are aliases.
   - `submit` : Press Enter or click the nearest send button
   - `wait idle` | `wait 500` | `wait "Results"` | `wait stable [ms]` at the end of a batch
 - **Diff replies**:

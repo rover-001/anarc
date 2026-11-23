@@ -256,11 +256,22 @@ fn live_share_proxy_request(method: &str, path: &str, request: &mut cef::Request
         bytes
     };
 
-    let Ok(mut stream) = TcpStream::connect("127.0.0.1:7433") else {
+    // This runs on CEF's IO thread: bound every stage. Only /api/connect is
+    // allowed a longer budget because it performs a real peer handshake.
+    let Ok(addr) = "127.0.0.1:7433".parse::<std::net::SocketAddr>() else {
+        return error_resp("invalid daemon address");
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(250))
+    else {
         return error_resp("daemon not reachable");
     };
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
-    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
+    let read_timeout = if path.starts_with("/api/connect") {
+        std::time::Duration::from_secs(7)
+    } else {
+        std::time::Duration::from_secs(2)
+    };
+    let _ = stream.set_read_timeout(Some(read_timeout));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(2)));
 
     let http_req = if body_bytes.is_empty() {
         format!(

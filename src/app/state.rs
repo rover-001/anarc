@@ -11,9 +11,6 @@ pub(crate) enum SettingsSection {
     #[default]
     General,
     Appearance,
-    Search,
-    Privacy,
-    Downloads,
     Shortcuts,
     Plugins,
 }
@@ -112,11 +109,15 @@ pub(super) struct FolderModal {
     pub(super) anchor_y: f32,
 }
 
-pub(crate) struct Lumen {
+pub(crate) struct Anarc {
     pub(super) spaces: Vec<Space>,
     pub(super) active_space: String,
     pub(super) sidebar_collapsed: bool,
     pub(super) sidebar_hovered: bool,
+    pub(crate) kept_drag_hovered_tab: Option<String>,
+    pub(crate) kept_drag_hover_after: bool,
+    pub(crate) kept_drag_source_id: Option<String>,
+    pub(crate) kept_section_drag_hovered: bool,
     pub(super) sidebar_width: f32,
     pub(super) sidebar_resizing: bool,
     pub(super) sidebar_width_transition: Option<(f32, f32, Instant, u64)>,
@@ -155,13 +156,17 @@ pub(crate) struct Lumen {
     pub(crate) engine: crate::engine::Engine,
     pub(super) web_viewport: gpui_kit::Entity<WebViewport>,
     pub(super) second_web_viewport: gpui_kit::Entity<WebViewport>,
+    pub(super) third_web_viewport: gpui_kit::Entity<WebViewport>,
+    pub(super) fourth_web_viewport: gpui_kit::Entity<WebViewport>,
     pub(super) peek_web_viewport: gpui_kit::Entity<WebViewport>,
     pub(super) peek: Option<PeekState>,
     pub(super) peek_serial: u64,
     pub(crate) peek_focused: bool,
     pub(crate) focused_pane: usize,
     pub(super) split_ratio: f32,
+    pub(super) split_ratio_y: f32,
     pub(super) split_resizing: bool,
+    pub(super) split_resizing_horizontal: bool,
     pub(super) space_modal: Option<SpaceModal>,
     pub(super) space_context_menu: Option<SpaceContextMenu>,
     pub(super) sidebar_context_menu: Option<SidebarContextMenu>,
@@ -189,17 +194,24 @@ pub(crate) struct Lumen {
     pub(crate) last_spaces_mtime: std::sync::atomic::AtomicU64,
     pub(crate) last_shared_cookies_mtime: std::sync::atomic::AtomicU64,
     pub(crate) last_cookie_sync: std::time::Instant,
+    // Live Share session state mirrored from the daemon's live-share-session.json.
+    pub(crate) last_live_share_session_mtime: std::sync::atomic::AtomicU64,
+    pub(crate) live_share_session_generation: u64,
+    pub(crate) live_share_is_host: bool,
+    pub(crate) live_share_space_id: String,
     pub(crate) pending_auth_recovery: std::collections::HashMap<String, (String, std::time::Instant)>,
     pub(super) preferences: crate::settings::BrowserPreferences,
     pub(super) plugins: crate::plugin::PluginHost,
     pub(super) panel_registry: crate::plugin::PanelRegistryHandle,
     pub(super) pending_plugin_review: Option<PendingPluginReview>,
     pub(super) plugin_action_error: Option<String>,
+    /// Plugin ids whose description/details accordion is expanded.
+    pub(crate) expanded_plugins: std::collections::HashSet<String>,
     #[cfg(not(test))]
     pub(super) cef_task_started: bool,
 }
 
-impl Drop for Lumen {
+impl Drop for Anarc {
     fn drop(&mut self) {
         self.plugins.emit(
             "app.quit",

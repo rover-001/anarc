@@ -1,6 +1,6 @@
 use super::*;
 
-impl Lumen {
+impl Anarc {
     pub(super) fn render_sidebar(
         &mut self,
         theme: visual::SpaceTheme,
@@ -19,14 +19,14 @@ impl Lumen {
             .tabs
             .iter()
             .map(|tab| {
-                let display_title = if (tab.pinned || tab.favorite)
+                let display_title = if tab.is_pinned()
                     && let Some(pinned_title) = &tab.pinned_title
                 {
                     pinned_title.clone()
                 } else {
                     tab.title.clone()
                 };
-                let display_url = if (tab.pinned || tab.favorite)
+                let display_url = if tab.is_pinned()
                     && let Some(pinned_url) = &tab.pinned_url
                 {
                     pinned_url.as_str()
@@ -164,238 +164,261 @@ impl Lumen {
             let is_split_member = |id: &str| {
                 stored_split_pair
                     .as_ref()
-                    .is_some_and(|pair| pair.first == id || pair.second == id)
+                    .is_some_and(|pair| pair.panes().contains(&id))
             };
-            let tab_flags = |id: &str| -> Option<(bool, bool, Option<String>)> {
+            let tab_flags = |id: &str| -> Option<(bool, Option<String>)> {
                 active_space
                     .tabs
                     .iter()
                     .find(|tab| tab.id == id)
-                    .map(|tab| (tab.favorite, tab.pinned, tab.folder.clone()))
+                    .map(|tab| (tab.is_pinned(), tab.folder.clone()))
             };
 
-            // Arc-style favorites: the top of the sidebar doubles as the
-            // favorite drop target. Dragging a tab here favorites it.
-            let favorite_tabs = tabs
+            // Kept tabs: dropping on a box body groups tabs into a shared row
+            // of favicon boxes; dropping on its lower strip gives the tab its
+            // own full-width single-web row. Groups wrap at three per row.
+            const MAX_KEPT_PER_ROW: usize = 3;
+            let dragging = cx.has_active_drag();
+            let dragged_kept_source = self.kept_drag_source_id.as_deref();
+            let kept_tabs = tabs
                 .iter()
                 .filter(|(id, _, _)| {
-                    !is_split_member(id) && tab_flags(id).is_some_and(|(favorite, _, _)| favorite)
+                    !is_split_member(id)
+                        && tab_flags(id).is_some_and(|(kept, _)| kept)
+                        && !(dragging && dragged_kept_source == Some(id.as_str()))
                 })
                 .cloned()
                 .collect::<Vec<_>>();
-            let mut favorites_grid = div()
-                .id("favorites-grid")
+            let tab_group = |id: &str| -> Option<String> {
+                active_space
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .and_then(|tab| tab.kept_group.clone())
+            };
+            let mut kept_boxes = div()
+                .id("kept-tab-boxes")
                 .w_full()
                 .flex()
-                .flex_wrap()
+                .flex_col()
                 .gap_1();
-            if favorite_tabs.is_empty() {
-                favorites_grid = favorites_grid.child(
+            if kept_tabs.is_empty() && !dragging {
+                kept_boxes = kept_boxes.child(
                     div()
-                        .id("favorites-empty-hint")
+                        .id("kept-empty-hint")
                         .w_full()
-                        .h(px(28.0 * UI_SCALE))
-                        .rounded_md()
+                        .h(px(visual::TAB_ROW_HEIGHT))
+                        .rounded_lg()
                         .border_1()
                         .border_dashed()
                         .border_color(rgb(theme.border))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_xs()
-                        .text_color(rgb(theme.muted))
-                        .child("Drag a tab here to star"),
+                        .child(Icon::new(IconName::StarFill).size(px(14.0 * UI_SCALE))),
                 );
+            } else if !kept_tabs.is_empty() {
+                let mut rows: Vec<(
+                    Option<String>,
+                    Vec<(
+                        String,
+                        String,
+                        Option<std::sync::Arc<gpui_kit::RenderImage>>,
+                    )>,
+                )> = Vec::new();
+                let mut seen_groups: Vec<String> = Vec::new();
+                for (id, title, favicon) in &kept_tabs {
+                    match tab_group(id) {
+                        None => rows.push((
+                            None,
+                            vec![(id.clone(), title.clone(), favicon.clone())],
+                        )),
+                        Some(group) => {
+                            if !seen_groups.contains(&group) {
+                                seen_groups.push(group.clone());
+                                let members = kept_tabs
+                                    .iter()
+                                    .filter(|(member_id, _, _)| {
+                                        tab_group(member_id).as_deref() == Some(group.as_str())
+                                    })
+                                    .cloned()
+                                    .collect::<Vec<_>>();
+                                rows.push((Some(group), members));
+                            }
+                        }
+                    }
+                }
+                // While a tab is in flight, the hovered position opens a slot
+                // and neighboring tiles flex around it.
+                let hovered_kept_tab = self.kept_drag_hovered_tab.as_deref();
+                let hovered_after = self.kept_drag_hover_after;
+                for (row_index, (group, members)) in rows.iter().enumerate() {
+                    if group.is_none() || members.len() == 1 {
+                        let (id, title, favicon) = &members[0];
+                        let mut kept_row = div()
+                            .id(format!("kept-single-row-{row_index}"))
+                            .w_full()
+                            .flex()
+                            .gap(px(2.0 * UI_SCALE));
+                        kept_row = kept_row
+                            .child(kept_drop_slot(
+                                format!("single-before-{row_index}"),
+                                group.clone(),
+                                id.clone(),
+                                false,
+                                0.5,
+                                dragging
+                                    && hovered_kept_tab == Some(id.as_str())
+                                    && !hovered_after,
+                                theme,
+                                cx,
+                            ))
+                            .child(kept_tab_box(
+                                id.clone(),
+                                title.clone(),
+                                favicon.clone(),
+                                active_tab_id.as_ref() == Some(id),
+                                !dragging,
+                                theme,
+                                cx,
+                            ))
+                            .child(kept_drop_slot(
+                                format!("single-after-{row_index}"),
+                                group.clone(),
+                                id.clone(),
+                                true,
+                                0.5,
+                                dragging
+                                    && hovered_kept_tab == Some(id.as_str())
+                                    && hovered_after,
+                                theme,
+                                cx,
+                            ));
+                        kept_boxes = kept_boxes.child(kept_row);
+                    } else {
+                        for (chunk_index, chunk) in members.chunks(MAX_KEPT_PER_ROW).enumerate() {
+                            let mut kept_row = div()
+                                .id(format!("kept-group-{row_index}-row-{chunk_index}"))
+                                .w_full()
+                                .flex()
+                                .gap(px(2.0 * UI_SCALE));
+                            for (id, title, favicon) in chunk {
+                                kept_row = kept_row
+                                    .child(kept_drop_slot(
+                                        format!("group-{row_index}-{chunk_index}-before-{id}"),
+                                        group.clone(),
+                                        id.clone(),
+                                        false,
+                                        1.0 / (chunk.len() as f32 + 1.0),
+                                        dragging
+                                            && hovered_kept_tab == Some(id.as_str())
+                                            && !hovered_after,
+                                        theme,
+                                        cx,
+                                    ))
+                                    .child(kept_tab_box(
+                                        id.clone(),
+                                        title.clone(),
+                                        favicon.clone(),
+                                        active_tab_id.as_ref() == Some(id),
+                                        false,
+                                        theme,
+                                        cx,
+                                    ))
+                                    .child(kept_drop_slot(
+                                        format!("group-{row_index}-{chunk_index}-after-{id}"),
+                                        group.clone(),
+                                        id.clone(),
+                                        true,
+                                        1.0 / (chunk.len() as f32 + 1.0),
+                                        dragging
+                                            && hovered_kept_tab == Some(id.as_str())
+                                            && hovered_after,
+                                        theme,
+                                        cx,
+                                    ));
+                            }
+                            kept_boxes = kept_boxes.child(kept_row);
+                        }
+                    }
+                }
             }
-            for (id, _title, favicon) in &favorite_tabs {
-                let tile_id = id.clone();
-                let context_id = id.clone();
-                let before_target = id.clone();
-                let after_target = id.clone();
-                let selected = active_tab_id.as_ref() == Some(id);
-                let drag_value = TabDrag {
-                    tab_id: id.clone(),
-                    favicon: favicon.clone(),
-                };
-                favorites_grid = favorites_grid.child(
+            if dragging {
+                kept_boxes = kept_boxes.child(
                     div()
-                        .id(format!("favorite-{id}"))
-                        .size(px(FAVORITE_TILE_SIZE))
-                        .relative()
-                        .rounded_lg()
+                        .id("kept-own-row-drop-target")
+                        .w_full()
+                        .h(px(visual::TAB_ROW_HEIGHT))
+                        .rounded_xl()
+                        .border_1()
+                        .border_dashed()
+                        .border_color(rgb(0x00000000))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .cursor_pointer()
-                        .when(selected, |tile| tile.bg(rgb(theme.surface)))
-                        .hover(move |tile| tile.bg(rgb(theme.surface_hover)))
-                        .child(tab_list::favorite_favicon(favicon.clone()))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.activate_tab_in_active_space(&tile_id);
-                            this.focus_browser(window, cx);
-                            cx.notify();
-                        }))
-                        .on_mouse_down(
-                            gpui_kit::MouseButton::Right,
-                            cx.listener(
-                                move |this, event: &gpui_kit::MouseDownEvent, window, cx| {
-                                    let (x, y, width, height) =
-                                        tab_context_menu_position(event, window);
-                                    this.tab_context_menu = Some(TabContextMenu {
-                                        tab_id: context_id.clone(),
-                                        showing_split_targets: false,
-                                        x,
-                                        y,
-                                        width,
-                                        height,
-                                    });
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                },
-                            ),
-                        )
-                        .on_drag(
-                            drag_value,
-                            |drag: &TabDrag, pointer_offset, _window, cx: &mut gpui_kit::App| {
-                                let favicon = drag.favicon.clone();
-                                cx.new(|_| TabDragGhost {
-                                    favicon,
-                                    pointer_offset,
-                                })
-                            },
-                        )
-                        .child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .bottom_0()
-                                .w_full()
-                                .h(px(5.0 * UI_SCALE))
-                                .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
-                                    this.drop_tab_in_target_section(
-                                        &drag.tab_id,
-                                        &after_target,
-                                        true,
-                                    );
-                                    cx.notify();
-                                })),
-                        )
-                        .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
-                            this.drop_tab_in_target_section(&drag.tab_id, &before_target, false);
+                        .drag_over::<TabDrag>(move |style, _, _, _| {
+                            style.border_color(rgb(theme.accent))
+                        })
+                        .on_drop(cx.listener(|this, drag: &TabDrag, _, cx| {
+                            this.kept_drag_hovered_tab = None;
+                            this.kept_drag_hover_after = false;
+                            this.kept_drag_source_id = None;
+                            this.kept_section_drag_hovered = false;
+                            this.pin_tab(&drag.tab_id, true);
+                            this.set_kept_group(&drag.tab_id, None);
+                            this.move_tab_to_end(&drag.tab_id);
                             cx.notify();
                         })),
                 );
             }
-            let favorites_section = div()
-                .id("favorites-drop-zone")
-                .w_full()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .rounded_lg()
-                .drag_over::<TabDrag>(move |style, _, _, _| style.bg(rgb(theme.surface)))
-                .on_drop::<TabDrag>(cx.listener(|this, drag: &TabDrag, _window, cx| {
-                    this.favorite_tab(&drag.tab_id, true);
-                    cx.notify();
-                }))
-                .child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px_1()
-                        .child(
-                            div()
-                                .text_color(rgb(theme.muted))
-                                .child(Icon::new(IconName::StarFill).size(px(12.0 * UI_SCALE))),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme.muted))
-                                .child("Favorites"),
-                        ),
-                )
-                .child(favorites_grid);
-            sidebar_content = sidebar_content.child(favorites_section);
-
-            // Pinned tabs live directly below favorites. Dropping a tab on
-            // this section pins it.
-            let pinned_tabs = tabs
-                .iter()
-                .filter(|(id, _, _)| {
-                    !is_split_member(id)
-                        && tab_flags(id).is_some_and(|(favorite, pinned, _)| !favorite && pinned)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            let mut pinned_rows = div().id("pinned-rows").w_full().flex().flex_col().gap_1();
-            if pinned_tabs.is_empty() {
-                pinned_rows = pinned_rows.child(
-                    div()
-                        .id("pinned-empty-hint")
-                        .w_full()
-                        .h(px(28.0 * UI_SCALE))
-                        .rounded_md()
-                        .border_1()
-                        .border_dashed()
-                        .border_color(rgb(theme.border))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_xs()
-                        .text_color(rgb(theme.muted))
-                        .child("Drag a tab here to pin"),
-                );
-            }
-            for (id, title, favicon) in &pinned_tabs {
-                pinned_rows = pinned_rows.child(section_tab_row(
-                    id.clone(),
-                    title.clone(),
-                    favicon.clone(),
-                    active_tab_id.as_ref() == Some(id),
-                    true,
-                    theme,
-                    0.0,
-                    cx,
-                ));
-            }
-            let pinned_section = div()
+            let kept_section_drag_hover_view = cx.weak_entity();
+            let kept_section = div()
                 .id("pinned-drop-zone")
                 .w_full()
                 .flex()
                 .flex_col()
-                .gap_1()
                 .rounded_lg()
-                .drag_over::<TabDrag>(move |style, _, _, _| style.bg(rgb(theme.surface)))
                 .on_drop::<TabDrag>(cx.listener(|this, drag: &TabDrag, _window, cx| {
+                    this.kept_drag_hovered_tab = None;
+                    this.kept_drag_hover_after = false;
+                    this.kept_drag_source_id = None;
+                    this.kept_section_drag_hovered = false;
                     this.pin_tab(&drag.tab_id, true);
+                    // Dropping on the section background (rather than a tile)
+                    // detaches the tab into its own full-width row.
+                    this.set_kept_group(&drag.tab_id, None);
+                    this.move_tab_to_end(&drag.tab_id);
                     cx.notify();
                 }))
-                .child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px_1()
-                        .child(
-                            div()
-                                .text_color(rgb(theme.muted))
-                                .child(Icon::new(IconName::Pin).size(px(12.0 * UI_SCALE))),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme.muted))
-                                .child("Pinned"),
-                        ),
-                )
-                .child(pinned_rows);
-            sidebar_content = sidebar_content.child(pinned_section);
+                .drag_over::<TabDrag>(move |style, _, _, app| {
+                    kept_section_drag_hover_view
+                        .update(app, |this, cx| {
+                            if !this.kept_section_drag_hovered {
+                                this.kept_section_drag_hovered = true;
+                                cx.notify();
+                            }
+                        })
+                        .ok();
+                    style
+                })
+                .on_mouse_move(cx.listener(|this, _, _, cx| {
+                    if cx.has_active_drag() && !this.kept_section_drag_hovered {
+                        this.kept_section_drag_hovered = true;
+                        cx.notify();
+                    }
+                }))
+                .on_mouse_exit(cx.listener(|this, _, _, cx| {
+                    let had_target = this.kept_drag_hovered_tab.take().is_some();
+                    let had_after = this.kept_drag_hover_after;
+                    let had_section_hover = this.kept_section_drag_hovered;
+                    this.kept_drag_hover_after = false;
+                    this.kept_section_drag_hovered = false;
+                    if had_target || had_after || had_section_hover {
+                        cx.notify();
+                    }
+                }))
+                .child(kept_boxes);
+            sidebar_content = sidebar_content.child(kept_section);
 
             // Folders group tabs below pinned. Drop a tab on a folder row to
             // file it, or use the plus button / tab context menu.
@@ -438,7 +461,7 @@ impl Lumen {
                             .text_color(rgb(theme.muted))
                             .hover(move |style| {
                                 style
-                                    .bg(rgb(theme.surface_hover))
+                                    .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                                     .text_color(rgb(theme.text))
                             })
                             .child(Icon::new(IconName::FolderPlus).size(px(13.0 * UI_SCALE)))
@@ -466,10 +489,8 @@ impl Lumen {
                     .iter()
                     .filter(|(id, _, _)| {
                         !is_split_member(id)
-                            && tab_flags(id).is_some_and(|(favorite, pinned, tab_folder)| {
-                                !favorite
-                                    && !pinned
-                                    && tab_folder.as_deref() == Some(folder.id.as_str())
+                            && tab_flags(id).is_some_and(|(kept, tab_folder)| {
+                                !kept && tab_folder.as_deref() == Some(folder.id.as_str())
                             })
                     })
                     .cloned()
@@ -495,7 +516,7 @@ impl Lumen {
                                 .gap(px(visual::SIDEBAR_ROW_GAP))
                                 .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                 .rounded_lg()
-                                .hover(|row| row.bg(rgb(theme.surface_hover)))
+                                .hover(|row| row.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                                 .child(
                                     div().text_color(rgb(theme.muted)).child(
                                         Icon::new(if expanded {
@@ -547,7 +568,7 @@ impl Lumen {
                                 },
                             ),
                         )
-                        .drag_over::<TabDrag>(move |style, _, _, _| style.bg(rgb(theme.surface)))
+                        .drag_over::<TabDrag>(move |style, _, _, _| style.bg(crate::ui::visual::translucent_surface(theme.surface, 0x30)))
                         .on_drop::<TabDrag>(cx.listener(
                             move |this, drag: &TabDrag, _window, cx| {
                                 this.move_tab_to_folder(&drag.tab_id, &drop_folder_id);
@@ -608,10 +629,17 @@ impl Lumen {
             sidebar_content = sidebar_content.child(folders_section);
 
             if let Some(pair) = &stored_split_pair {
-                let first = tabs.iter().find(|(id, _, _)| id == &pair.first);
-                let second = tabs.iter().find(|(id, _, _)| id == &pair.second);
-                if let (Some(first), Some(second)) = (first, second) {
-                    let group_name = tab_list::group_label(&first.1, &second.1);
+                let members = pair
+                    .panes()
+                    .into_iter()
+                    .filter_map(|id| tabs.iter().find(|(tab_id, _, _)| tab_id == id))
+                    .collect::<Vec<_>>();
+                if !members.is_empty() {
+                    let first = members[0];
+                    let second = members[1];
+                    let group_name = tab_list::group_labels(
+                        &members.iter().map(|tab| tab.1.clone()).collect::<Vec<_>>(),
+                    );
                     let group_key = format!("split-{}-{}", pair.first, pair.second);
                     let expanded = self.split_group_expanded;
                     crate::engine::log_favicon_row_rendered(&first.0, first.2.is_some());
@@ -640,8 +668,7 @@ impl Lumen {
                             .into_any_element()
                     };
                     let group_active = !expanded
-                        && (active_tab_id.as_deref() == Some(pair.first.as_str())
-                            || active_tab_id.as_deref() == Some(pair.second.as_str()));
+                        && pair.panes().contains(&active_tab_id.as_deref().unwrap_or_default());
                     let group_row = div()
                         .id("split-tab-group")
                         .w_full()
@@ -658,9 +685,9 @@ impl Lumen {
                                 .gap(px(visual::SIDEBAR_ROW_GAP))
                                 .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                 .rounded_lg()
-                                .when(group_active, |row| row.bg(rgb(theme.surface)))
+                                .when(group_active, |row| row.bg(crate::ui::visual::translucent_surface(theme.surface, 0x30)))
                                 .when(!group_active, |row| {
-                                    row.hover(|row| row.bg(rgb(theme.surface_hover)))
+                                    row.hover(|row| row.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                                 })
                                 .child(tab_list::split_favicon(first.2.clone(), second.2.clone()))
                                 .child(
@@ -724,7 +751,7 @@ impl Lumen {
                                 at.elapsed() < ui::motion::row_enter().duration() * 2
                             });
                         let mut member_rows = Vec::new();
-                        for (pane_index, member) in [first, second].into_iter().enumerate() {
+                        for (pane_index, member) in members.into_iter().enumerate() {
                             let member_id = member.0.clone();
                             let member_selected =
                                 active_tab_id.as_deref() == Some(member_id.as_str());
@@ -759,9 +786,9 @@ impl Lumen {
                                             + visual::SIDEBAR_ROW_GAP))
                                         .pr(px(visual::SIDEBAR_ROW_PADDING_X))
                                         .rounded_lg()
-                                        .when(member_selected, |row| row.bg(rgb(theme.surface)))
+                                        .when(member_selected, |row| row.bg(crate::ui::visual::translucent_surface(theme.surface, 0x30)))
                                         .when(!member_selected, |row| {
-                                            row.hover(|row| row.bg(rgb(theme.surface_hover)))
+                                            row.hover(|row| row.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                                         })
                                         .child(tab_list::favicon(member.2.clone()))
                                         .child(
@@ -865,9 +892,7 @@ impl Lumen {
 
             for (id, title, favicon) in &tabs {
                 if is_split_member(id)
-                    || tab_flags(id).is_some_and(|(favorite, pinned, folder)| {
-                        favorite || pinned || folder.is_some()
-                    })
+                    || tab_flags(id).is_some_and(|(kept, folder)| kept || folder.is_some())
                 {
                     continue;
                 }
@@ -876,10 +901,18 @@ impl Lumen {
                 let close_id = tab_id.clone();
                 let before_target = id.clone();
                 let after_target = id.clone();
+                let is_blank_tab = active_space
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.id == *id)
+                    .is_some_and(|tab| tab.url.is_empty() || tab.url == "about:blank");
                 let drag_value = TabDrag {
                     tab_id: id.clone(),
                     favicon: favicon.clone(),
+                    source_kept: false,
                 };
+                let drag_app_view = cx.weak_entity();
+                let drag_over_view = cx.weak_entity();
                 let selected = active_tab_id.as_ref() == Some(id);
                 let animate_entry = space_switch_transition.is_none()
                     && !ui::motion::reduced_motion()
@@ -908,9 +941,9 @@ impl Lumen {
                                 .gap(px(visual::SIDEBAR_ROW_GAP))
                                 .px(px(visual::SIDEBAR_ROW_PADDING_X))
                                 .rounded_lg()
-                                .when(selected, |row| row.bg(rgb(theme.surface)))
+                                .when(selected, |row| row.bg(crate::ui::visual::translucent_surface(theme.surface, 0x30)))
                                 .when(!selected, |row| {
-                                    row.hover(|row| row.bg(rgb(theme.surface_hover)))
+                                    row.hover(|row| row.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                                 })
                                 .child(tab_list::favicon(favicon.clone()))
                                 .child(
@@ -985,19 +1018,56 @@ impl Lumen {
                                 },
                             ),
                         )
-                        .on_drag(
-                            drag_value,
-                            |drag: &TabDrag, pointer_offset, _window, cx: &mut gpui_kit::App| {
-                                let favicon = drag.favicon.clone();
-                                cx.new(|_| TabDragGhost {
-                                    favicon,
-                                    pointer_offset,
-                                })
-                            },
-                        )
-                        .drag_over::<TabDrag>(move |style, _, _, _| {
-                            style.bg(rgb(theme.surface_hover))
+                        .when(!is_blank_tab, |row| {
+                            row.on_drag(
+                                drag_value,
+                                move |drag: &TabDrag,
+                                      pointer_offset,
+                                      _window,
+                                      cx: &mut gpui_kit::App| {
+                                    drag_app_view
+                                        .update(cx, |this, cx| {
+                                            this.kept_drag_source_id = None;
+                                            this.kept_drag_hovered_tab = None;
+                                            this.kept_drag_hover_after = false;
+                                            this.kept_section_drag_hovered = false;
+                                            cx.notify();
+                                        })
+                                        .ok();
+                                    let favicon = drag.favicon.clone();
+                                    cx.new(|_| TabDragGhost {
+                                        favicon,
+                                        pointer_offset,
+                                    })
+                                },
+                            )
                         })
+                        .drag_over::<TabDrag>(move |style, _, _, app| {
+                            drag_over_view
+                                .update(app, |this, cx| {
+                                    if this.kept_drag_hovered_tab.take().is_some()
+                                        || this.kept_drag_hover_after
+                                        || this.kept_section_drag_hovered
+                                    {
+                                        this.kept_drag_hover_after = false;
+                                        this.kept_section_drag_hovered = false;
+                                        cx.notify();
+                                    }
+                                })
+                                .ok();
+                            style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
+                        })
+                        .on_mouse_move(cx.listener(|this, _, _, cx| {
+                            if cx.has_active_drag()
+                                && (this.kept_drag_hovered_tab.take().is_some()
+                                    || this.kept_drag_hover_after
+                                    || this.kept_section_drag_hovered)
+                            {
+                                this.kept_drag_hover_after = false;
+                                this.kept_section_drag_hovered = false;
+                                cx.notify();
+                            }
+                        }))
                         .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
                             this.drop_tab_in_target_section(&drag.tab_id, &before_target, false);
                             cx.notify();
@@ -1045,7 +1115,7 @@ impl Lumen {
                             .h(px(row_rect.height))
                             .overflow_hidden()
                             .rounded_lg()
-                            .bg(rgb(theme.surface))
+                            .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                             .child(
                                 div()
                                     .w_full()
@@ -1077,9 +1147,7 @@ impl Lumen {
             // favorites, pinned, or folder sections.
             let has_regular_tabs = tabs.iter().any(|(id, _, _)| {
                 !is_split_member(id)
-                    && !tab_flags(id).is_some_and(|(favorite, pinned, folder)| {
-                        favorite || pinned || folder.is_some()
-                    })
+                    && !tab_flags(id).is_some_and(|(kept, folder)| kept || folder.is_some())
             });
             sidebar_content = sidebar_content.child(
                 div()
@@ -1106,7 +1174,7 @@ impl Lumen {
                             cx.notify();
                         }),
                     )
-                    .drag_over::<TabDrag>(move |style, _, _, _| style.bg(rgb(theme.surface)))
+                    .drag_over::<TabDrag>(move |style, _, _, _| style.bg(crate::ui::visual::translucent_surface(theme.surface, 0x30)))
                     .on_drop::<TabDrag>(cx.listener(|this, drag: &TabDrag, _window, cx| {
                         this.clear_tab_section(&drag.tab_id);
                         this.move_tab_to_end(&drag.tab_id);
@@ -1135,7 +1203,7 @@ impl Lumen {
                         });
                         cx.notify();
                     }))
-                    .drag_over::<TabDrag>(move |style, _, _, _| style.bg(rgb(theme.surface_hover)))
+                    .drag_over::<TabDrag>(move |style, _, _, _| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                     .on_drop::<TabDrag>(cx.listener(|this, drag: &TabDrag, _, cx| {
                         this.clear_tab_section(&drag.tab_id);
                         this.move_tab_to_end(&drag.tab_id);
@@ -1187,7 +1255,7 @@ impl Lumen {
                 .left_0()
                 .size(px(28.0 * UI_SCALE))
                 .rounded_lg()
-                .bg(rgb(theme.surface))
+                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                 .border_1()
                 .border_color(rgb(theme.border_hover));
             let indicator = if ui::motion::reduced_motion() {
@@ -1301,8 +1369,8 @@ impl Lumen {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .when(selected, |row| row.bg(rgb(theme.surface)))
-                            .hover(|row| row.bg(rgb(theme.surface_hover)))
+                            .when(selected, |row| row.bg(crate::ui::visual::translucent_surface(theme.surface, 0x30)))
+                            .hover(|row| row.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
                             .child(tab_list::favorite_favicon(favicon.clone()))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.activate_tab_in_active_space(&id);

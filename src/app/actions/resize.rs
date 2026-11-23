@@ -1,6 +1,6 @@
 use super::super::*;
 
-impl Lumen {
+impl Anarc {
     pub(in crate::app) fn animate_sidebar_toggle(
         &mut self,
         window: &mut Window,
@@ -51,7 +51,7 @@ impl Lumen {
             },
         );
         #[cfg(not(test))]
-        self.begin_browser_resize_drag(window, false);
+        self.begin_browser_resize_drag(window, false, true);
         #[cfg(not(test))]
         let final_sizes = self.browser_sizes_for_sidebar(window, target);
         self.sidebar_transition_serial = self.sidebar_transition_serial.wrapping_add(1);

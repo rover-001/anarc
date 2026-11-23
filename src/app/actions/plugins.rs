@@ -3,7 +3,7 @@ use crate::app::state::PendingPluginReview;
 use crate::ui::plugin_manager::{InstallSource, PluginReview};
 use std::{fs, path::Path};
 
-impl Lumen {
+impl Anarc {
     #[cfg(not(test))]
     pub(crate) fn inject_pack_assets(&self, tab_id: &str, url: &str) {
         for asset in crate::plugin::matched_page_assets(url) {
@@ -33,6 +33,13 @@ impl Lumen {
 
     pub(crate) fn set_plugin_action_error(&mut self, error: Option<String>) {
         self.plugin_action_error = error;
+    }
+
+    /// Expand or collapse the details accordion for one plugin row.
+    pub(crate) fn toggle_plugin_details(&mut self, id: String) {
+        if !self.expanded_plugins.remove(&id) {
+            self.expanded_plugins.insert(id);
+        }
     }
 
     pub(crate) fn plugin_action_error(&self) -> Option<&str> {
@@ -216,21 +223,29 @@ impl Lumen {
             return Err("built-in plugins cannot be removed".into());
         }
         let plugin_root = crate::paths::data_dir().join("plugins");
-        let canonical_root = plugin_root
-            .canonicalize()
-            .map_err(|error| format!("{}: {error}", plugin_root.display()))?;
-        let target = canonical_root.join(id);
-        let canonical_target = target
-            .canonicalize()
-            .map_err(|error| format!("{}: {error}", target.display()))?;
-        if !canonical_target.starts_with(&canonical_root) || !canonical_target.is_dir() {
-            return Err("plugin directory is outside the install root".into());
+        let target = plugin_root.join(id);
+        // An invalid plugin (for example a manifest-less leftover folder) gets a
+        // fallback id that never matches an installed directory. Removal must
+        // still unregister it so the stale row and config entry disappear.
+        let canonical_target = match target.canonicalize() {
+            Ok(path) => Some(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(format!("{}: {error}", target.display())),
+        };
+        if let Some(path) = canonical_target.as_ref() {
+            let canonical_root = plugin_root
+                .canonicalize()
+                .map_err(|error| format!("{}: {error}", plugin_root.display()))?;
+            if !path.starts_with(&canonical_root) || !path.is_dir() {
+                return Err("plugin directory is outside the install root".into());
+            }
         }
         if row.enabled {
             self.set_plugin_enabled(id, false)?;
         }
-        fs::remove_dir_all(&canonical_target)
-            .map_err(|error| format!("{}: {error}", canonical_target.display()))?;
+        if let Some(path) = canonical_target {
+            fs::remove_dir_all(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        }
         self.plugins.remove(id)
     }
 

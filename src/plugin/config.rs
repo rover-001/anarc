@@ -41,6 +41,35 @@ impl PluginConfig {
                 .map_err(|error| format!("{}: {error}", parent.display()))?;
         }
         let contents = toml::to_string_pretty(self).map_err(|error| error.to_string())?;
-        std::fs::write(&path, contents).map_err(|error| format!("{}: {error}", path.display()))
+        // Atomic replace: a crash mid-write must never leave a truncated config
+        // that loads as "no entries" and silently resets every plugin toggle.
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, &contents)
+            .map_err(|error| format!("{}: {error}", tmp.display()))?;
+        std::fs::rename(&tmp, &path).map_err(|error| format!("{}: {error}", path.display()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enabled_false_round_trips_through_toml() {
+        let mut config = PluginConfig::default();
+        config.plugins.insert(
+            "com.example.plugin".to_owned(),
+            PluginEntry {
+                enabled: Some(false),
+                ..Default::default()
+            },
+        );
+        let encoded = toml::to_string_pretty(&config).unwrap();
+        assert!(encoded.contains("enabled = false"), "{encoded}");
+        let decoded: PluginConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(
+            decoded.plugins["com.example.plugin"].enabled,
+            Some(false)
+        );
     }
 }

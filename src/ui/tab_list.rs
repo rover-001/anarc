@@ -6,6 +6,17 @@ pub fn group_label(first: &str, second: &str) -> String {
     format!("{first} | {second}")
 }
 
+/// Label for a split group of any size. Titles are shown in pane order and
+/// longer groups are abbreviated so the sidebar row stays one line.
+pub fn group_labels(titles: &[String]) -> String {
+    match titles {
+        [] => "Split view".to_owned(),
+        [only] => only.clone(),
+        [first, second] => group_label(first, second),
+        [first, second, rest @ ..] => format!("{first} | {second} | +{}", rest.len()),
+    }
+}
+
 pub fn favicon(favicon: Option<Arc<gpui_kit::RenderImage>>) -> gpui_kit::AnyElement {
     if let Some(favicon) = favicon {
         div()

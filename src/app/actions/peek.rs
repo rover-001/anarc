@@ -57,7 +57,7 @@ pub(in crate::app) fn peek_layout(
     }
 }
 
-impl Lumen {
+impl Anarc {
     /// Opens a user-requested link as a peek overlay instead of a new tab. A
     /// second link while the peek is open reuses the same preview window.
     pub(in crate::app) fn open_peek(&mut self, space_id: &str, url: String) {

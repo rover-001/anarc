@@ -1,7 +1,34 @@
 use super::super::*;
 use super::seed_pinned_destination;
 
-impl Lumen {
+/// Compact a split after one of its panes closes. Returns the new split (or
+/// `None` when fewer than two panes remain), the adjusted focus index and the
+/// pane tab that should become active.
+fn split_after_close(
+    split: &Option<SplitPair>,
+    focused_pane: usize,
+    tab_id: &str,
+) -> Option<(Option<SplitPair>, usize, Option<String>)> {
+    let pair = split.as_ref()?;
+    let closed_index = pair.panes().iter().position(|id| *id == tab_id)?;
+    let remaining_ids = pair.panes_without(tab_id);
+    let last_focused = remaining_ids.len().saturating_sub(1);
+    let focused = focused_pane.min(pair.pane_count() - 1);
+    let next_focused = if focused > closed_index {
+        focused - 1
+    } else {
+        focused.min(last_focused)
+    }
+    .min(last_focused);
+    let activated = remaining_ids.get(next_focused).cloned();
+    Some((
+        SplitPair::from_panes(&remaining_ids),
+        next_focused,
+        activated,
+    ))
+}
+
+impl Anarc {
     pub(crate) fn open_tab_context_menu(
         &mut self,
         tab_id: String,
@@ -40,7 +67,7 @@ impl Lumen {
             let was_already_active = space.active.as_deref() == Some(tab_id);
             if let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id) {
                 seed_pinned_destination(tab);
-                if (tab.pinned || tab.favorite)
+                if tab.is_pinned()
                     && let Some(pinned_url) = tab.pinned_url.clone()
                     && tab.url != pinned_url
                 {
@@ -80,39 +107,20 @@ impl Lumen {
         }
     }
 
-    /// Favorites take precedence over pinning and folders so each tab lives in
-    /// exactly one sidebar section.
+    /// Favorites and pins are the same kept-tab section. `favorite_tab` is kept
+    /// as an alias of `pin_tab` for the agent/CLI/MCP surface.
     pub(crate) fn favorite_tab(&mut self, tab_id: &str, favorite: bool) {
-        let mut changed = false;
-        if let Some(space) = self
-            .spaces
-            .iter_mut()
-            .find(|space| space.id == self.active_space)
-            && let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id)
-        {
-            tab.favorite = favorite;
-            if favorite {
-                tab.pinned = false;
-                tab.folder = None;
-                if tab.pinned_url.is_none() {
-                    tab.pinned_url = Some(tab.url.clone());
-                }
-                if tab.pinned_title.is_none() && !tab.title.is_empty() {
-                    tab.pinned_title = Some(tab.title.clone());
-                }
-            } else if !tab.pinned {
-                tab.pinned_url = None;
-                tab.pinned_title = None;
-            }
-            changed = true;
-        }
-        if changed {
-            self.save_state();
-        }
+        self.set_tab_kept(tab_id, favorite);
     }
 
-    /// Pinned tabs render directly below the favorites grid.
+    /// Pins (or unpins) a tab in the single kept-tab section at the top of the
+    /// sidebar. Both `pinned` and `favorite` are written so the alias never
+    /// diverges in saved state.
     pub(crate) fn pin_tab(&mut self, tab_id: &str, pinned: bool) {
+        self.set_tab_kept(tab_id, pinned);
+    }
+
+    fn set_tab_kept(&mut self, tab_id: &str, kept: bool) {
         let mut changed = false;
         if let Some(space) = self
             .spaces
@@ -120,9 +128,8 @@ impl Lumen {
             .find(|space| space.id == self.active_space)
             && let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id)
         {
-            tab.pinned = pinned;
-            if pinned {
-                tab.favorite = false;
+            tab.set_pinned(kept);
+            if kept {
                 tab.folder = None;
                 if tab.pinned_url.is_none() {
                     tab.pinned_url = Some(tab.url.clone());
@@ -130,9 +137,10 @@ impl Lumen {
                 if tab.pinned_title.is_none() && !tab.title.is_empty() {
                     tab.pinned_title = Some(tab.title.clone());
                 }
-            } else if !tab.favorite {
+            } else {
                 tab.pinned_url = None;
                 tab.pinned_title = None;
+                tab.kept_group = None;
             }
             changed = true;
         }
@@ -141,8 +149,27 @@ impl Lumen {
         }
     }
 
-    /// Dragging a tab out of a favorite/pinned/folder section and dropping it
-    /// on the regular tab list returns it to the plain section.
+    /// Drag targets decide the shape: dropping on a box body joins its group,
+    /// dropping on the lower strip gives the tab its own full-width row.
+    pub(crate) fn set_kept_group(&mut self, tab_id: &str, group: Option<String>) {
+        let mut changed = false;
+        if let Some(space) = self
+            .spaces
+            .iter_mut()
+            .find(|space| space.id == self.active_space)
+            && let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id)
+            && tab.kept_group != group
+        {
+            tab.kept_group = group;
+            changed = true;
+        }
+        if changed {
+            self.save_state();
+        }
+    }
+
+    /// Dragging a tab out of the kept/folder section and dropping it on the
+    /// regular tab list returns it to the plain section.
     pub(crate) fn clear_tab_section(&mut self, tab_id: &str) {
         let mut changed = false;
         if let Some(space) = self
@@ -150,20 +177,20 @@ impl Lumen {
             .iter_mut()
             .find(|space| space.id == self.active_space)
             && let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id)
-            && (tab.favorite || tab.pinned || tab.folder.is_some())
+            && (tab.is_pinned() || tab.folder.is_some())
         {
-            tab.favorite = false;
-            tab.pinned = false;
+            tab.set_pinned(false);
             tab.pinned_url = None;
             tab.pinned_title = None;
             tab.folder = None;
+            tab.kept_group = None;
             changed = true;
         }
         if changed {
             self.save_state();
         }
     }
-    pub(in crate::app) fn reorder_tab_relative(
+    pub(crate) fn reorder_tab_relative(
         &mut self,
         tab_id: &str,
         target_id: &str,
@@ -183,7 +210,7 @@ impl Lumen {
                     .tabs
                     .iter()
                     .find(|tab| tab.id == id)
-                    .map(|tab| (tab.favorite, tab.pinned, tab.folder.clone()))
+                    .map(|tab| (tab.is_pinned(), tab.folder.clone()))
             };
             if section(tab_id).is_none() || section(tab_id) != section(target_id) {
                 return;
@@ -230,25 +257,62 @@ impl Lumen {
         target_id: &str,
         after: bool,
     ) {
+        self.kept_drag_source_id = None;
+        self.kept_drag_hovered_tab = None;
+        self.kept_drag_hover_after = false;
+        self.kept_section_drag_hovered = false;
         let target_section = self
             .active_space()
             .tabs
             .iter()
             .find(|tab| tab.id == target_id)
-            .map(|tab| (tab.favorite, tab.pinned, tab.folder.clone()));
-        let Some((favorite, pinned, folder)) = target_section else {
+            .map(|tab| (tab.is_pinned(), tab.folder.clone(), tab.kept_group.clone()));
+        let Some((kept, folder, group)) = target_section else {
             return;
         };
         if let Some(folder_id) = folder {
             self.move_tab_to_folder(tab_id, &folder_id);
-        } else if favorite {
-            self.favorite_tab(tab_id, true);
-        } else if pinned {
+        } else if kept {
             self.pin_tab(tab_id, true);
+            // Body drop: join the target's box group (creating one if needed).
+            // Lower-strip drop: keep the tab in its own full-width row.
+            let joined_group = if after {
+                None
+            } else {
+                Some(group.unwrap_or_else(|| target_id.to_owned()))
+            };
+            self.set_kept_group(tab_id, joined_group.clone());
+            if let Some(group) = joined_group {
+                self.set_kept_group(target_id, Some(group));
+            }
         } else {
             self.clear_tab_section(tab_id);
         }
         self.reorder_tab_relative(tab_id, target_id, after);
+    }
+
+    /// Drop a kept tab onto the hover-expanded before/after slot beside `anchor`.
+    ///
+    /// A slot beside an ungrouped tab must create a two-tab group: using the
+    /// anchor's id as the group key joins both tabs. Previously the slot only
+    /// set the dragged tab's group to `None`, so the first group could never be
+    /// formed (adding a third tab worked because existing groups carry an id).
+    pub(crate) fn drop_kept_tab_in_slot(
+        &mut self,
+        tab_id: &str,
+        anchor: &str,
+        group: Option<String>,
+        after: bool,
+    ) {
+        self.kept_drag_source_id = None;
+        self.kept_drag_hovered_tab = None;
+        self.kept_drag_hover_after = false;
+        self.kept_section_drag_hovered = false;
+        self.pin_tab(tab_id, true);
+        let joined_group = group.or_else(|| Some(anchor.to_owned()));
+        self.set_kept_group(tab_id, joined_group.clone());
+        self.set_kept_group(anchor, joined_group);
+        self.reorder_tab_relative(tab_id, anchor, after);
     }
     pub(crate) fn add_tab(&mut self) {
         self.close_peek();
@@ -288,7 +352,7 @@ impl Lumen {
             .tabs
             .iter()
             .find(|tab| tab.id == active_id)
-            .is_some_and(|tab| tab.favorite || tab.pinned);
+            .is_some_and(|tab| tab.is_pinned());
 
         if is_kept {
             self.unload_kept_tab(&active_id);
@@ -311,19 +375,16 @@ impl Lumen {
         let closing_space_id = space.id.clone();
         let closing_snapshot = space.tabs[index].clone();
         let closed_tab_id = closing_snapshot.id.clone();
-        let split_other = space.split.as_ref().and_then(|pair| {
-            if pair.first == tab_id {
-                Some(pair.second.clone())
-            } else if pair.second == tab_id {
-                Some(pair.first.clone())
-            } else {
-                None
-            }
-        });
-        if split_other.is_some() {
-            space.split = None;
-            self.focused_pane = 0;
-        }
+        let is_active_space = space.id == self.active_space;
+        let split_fallback = split_after_close(&space.split, self.focused_pane, tab_id).map(
+            |(remaining_split, next_focused, fallback)| {
+                if is_active_space {
+                    self.focused_pane = next_focused;
+                }
+                space.split = remaining_split;
+                fallback
+            },
+        );
         self.engine.close_browser(tab_id);
         let closed = space.tabs.remove(index);
         self.recently_closed_tabs.push((space.id.clone(), closed));
@@ -338,9 +399,9 @@ impl Lumen {
             space.tabs.push(Tab::new(&id, "New tab", "about:blank"));
             space.active = Some(id.clone());
             activated_new_tab = Some(id);
-        } else if let Some(other) = split_other {
-            space.active = Some(other.clone());
-            activated_new_tab = Some(other);
+        } else if let Some(act) = split_fallback.flatten() {
+            space.active = Some(act.clone());
+            activated_new_tab = Some(act);
         } else if was_active {
             // Closing a regular tab should never open a favorite or pinned page.
             // Kept tabs stay unloaded unless the user selects them, so keep a
@@ -349,7 +410,7 @@ impl Lumen {
                 .chain((0..index.min(space.tabs.len())).rev())
                 .find_map(|candidate| {
                     let tab = &space.tabs[candidate];
-                    (!tab.favorite && !tab.pinned && tab.folder.is_none()).then(|| tab.id.clone())
+                    (!tab.is_pinned() && tab.folder.is_none()).then(|| tab.id.clone())
                 });
             if let Some(next_regular) = next_regular {
                 space.active = Some(next_regular.clone());
@@ -389,7 +450,7 @@ impl Lumen {
             .tabs
             .iter()
             .find(|tab| tab.id == tab_id)
-            .is_some_and(|tab| tab.favorite || tab.pinned);
+            .is_some_and(|tab| tab.is_pinned());
         if is_kept_page {
             self.unload_kept_tab(tab_id);
         } else {
@@ -408,27 +469,21 @@ impl Lumen {
             return;
         };
         let folder_id = space.tabs[index].folder.clone();
-        if folder_id.is_none() && !space.tabs[index].favorite && !space.tabs[index].pinned {
+        if folder_id.is_none() && !space.tabs[index].is_pinned() {
             return;
         }
 
         let was_active = space.active.as_deref() == Some(tab_id);
-        let split_other = space.split.as_ref().and_then(|pair| {
-            if pair.first == tab_id {
-                Some(pair.second.clone())
-            } else if pair.second == tab_id {
-                Some(pair.first.clone())
-            } else {
-                None
-            }
-        });
-        if split_other.is_some() {
-            space.split = None;
-            self.focused_pane = 0;
-        }
+        let split_fallback = split_after_close(&space.split, self.focused_pane, tab_id).map(
+            |(remaining_split, next_focused, fallback)| {
+                self.focused_pane = next_focused;
+                space.split = remaining_split;
+                fallback
+            },
+        );
         self.engine.close_browser(tab_id);
         space.tabs[index].state = TabState::Discarded;
-        if space.tabs[index].pinned || space.tabs[index].favorite {
+        if space.tabs[index].is_pinned() {
             seed_pinned_destination(&mut space.tabs[index]);
             if let Some(pinned_url) = space.tabs[index].pinned_url.clone() {
                 space.tabs[index].url = pinned_url;
@@ -455,19 +510,33 @@ impl Lumen {
         }
 
         if was_active {
-            let next_active = split_other
+            let next_active = split_fallback
+                .flatten()
                 .filter(|other| other != tab_id)
+                // A remaining pane is the natural focus target even when its
+                // tab has not been loaded yet, but never reactivate a pinned
+                // page: that would reopen it on the next render.
                 .filter(|other| {
                     space
                         .tabs
                         .iter()
-                        .any(|tab| tab.id == *other && tab.state != TabState::Discarded)
+                        .any(|tab| tab.id == *other && !tab.is_pinned())
                 })
+                // Unloading a pinned tab must never activate another pinned
+                // page: doing so reopens it on the next render and cascades
+                // into more tabs when Ctrl+W is pressed repeatedly. Prefer a
+                // live regular tab, then an existing blank tab, then create
+                // one new blank tab.
                 .or_else(|| {
                     space
                         .tabs
                         .iter()
-                        .find(|tab| tab.id != tab_id && tab.state != TabState::Discarded)
+                        .find(|tab| {
+                            tab.id != tab_id
+                                && tab.state != TabState::Discarded
+                                && !tab.is_pinned()
+                                && tab.folder.is_none()
+                        })
                         .map(|tab| tab.id.clone())
                 })
                 .or_else(|| {
@@ -479,20 +548,6 @@ impl Lumen {
                                 && tab.folder.is_none()
                                 && (tab.url == "about:blank" || tab.url == "lumen://welcome")
                         })
-                        .map(|tab| tab.id.clone())
-                })
-                .or_else(|| {
-                    space
-                        .tabs
-                        .iter()
-                        .find(|tab| tab.id != tab_id && !tab.favorite && !tab.pinned && tab.folder.is_none())
-                        .map(|tab| tab.id.clone())
-                })
-                .or_else(|| {
-                    space
-                        .tabs
-                        .iter()
-                        .find(|tab| tab.id != tab_id)
                         .map(|tab| tab.id.clone())
                 });
             space.active = next_active.or_else(|| {
@@ -513,15 +568,116 @@ impl Lumen {
         {
             return false;
         }
-        self.active_space_mut().split = Some(SplitPair {
-            first: first.to_owned(),
-            second: second.to_owned(),
-        });
+        let space = self.active_space_mut();
+        if let Some(mut pair) = space.split.clone() {
+            if pair.is_quad() {
+                return false;
+            }
+            if pair.panes().contains(&first) || pair.panes().contains(&second) {
+                return false;
+            }
+            if pair.third.is_some() {
+                // Three panes already: only the free quadrant can be filled.
+                pair.fourth = Some(second.to_owned());
+                space.split = Some(pair);
+            } else {
+                let extra = space
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.id.clone())
+                    .find(|id| !pair.panes().contains(&id.as_str()) && id != second);
+                let Some(extra) = extra else {
+                    return false;
+                };
+                pair.third = Some(second.to_owned());
+                pair.fourth = Some(extra);
+                space.split = Some(pair);
+            }
+        } else {
+            space.split = Some(SplitPair::new(first.to_owned(), second.to_owned()));
+        }
         self.focused_pane = 0;
         self.split_ratio = 0.5;
+        self.split_ratio_y = 0.5;
         self.save_state();
         true
     }
+    /// Drop a sidebar tab onto a content pane. With no split this creates a
+    /// two-pane split with the dropped tab in the target pane; an existing
+    /// split grows to the 2x2 grid, and a full grid replaces that pane.
+    pub(crate) fn drop_tab_into_pane(&mut self, tab_id: &str, pane_index: usize) {
+        if !crate::plugins::split_view_enabled() {
+            return;
+        }
+        let space = self.active_space();
+        if !space.tabs.iter().any(|tab| {
+            tab.id == tab_id && tab.url != "about:blank" && !tab.url.is_empty()
+        }) {
+            return;
+        }
+        let active = space.active.clone().unwrap_or_default();
+        let Some(mut pair) = space.split.clone() else {
+            if tab_id == active {
+                return;
+            }
+            let new_pair = if pane_index == 0 {
+                SplitPair::new(tab_id.to_owned(), active.clone())
+            } else {
+                SplitPair::new(active.clone(), tab_id.to_owned())
+            };
+            self.active_space_mut().split = Some(new_pair);
+            self.focused_pane = pane_index.min(1);
+            self.split_ratio = 0.5;
+            self.split_ratio_y = 0.5;
+            self.save_state();
+            return;
+        };
+        if let Some(existing) = pair
+            .panes()
+            .iter()
+            .position(|id| *id == tab_id)
+        {
+            self.set_focused_pane(existing);
+            return;
+        }
+        if pair.is_quad() {
+            match pane_index {
+                0 => pair.first = tab_id.to_owned(),
+                1 => pair.second = tab_id.to_owned(),
+                2 => pair.third = Some(tab_id.to_owned()),
+                _ => pair.fourth = Some(tab_id.to_owned()),
+            }
+            self.active_space_mut().split = Some(pair);
+            self.set_focused_pane(pane_index);
+            self.save_state();
+            return;
+        }
+        if pair.third.is_some() {
+            // Three-pane layout has one free quadrant (the bottom-right pane).
+            pair.fourth = Some(tab_id.to_owned());
+            self.active_space_mut().split = Some(pair);
+            self.set_focused_pane(3);
+            self.save_state();
+            return;
+        }
+        // The free quadrant gets a fresh blank tab. Reusing an existing tab
+        // here silently pulls in unrelated pages (for example a pinned inbox).
+        let space = self.active_space_mut();
+        let blank_id = next_tab_id(space);
+        space.tabs.push(Tab::new(&blank_id, "New tab", "about:blank"));
+        let (third, fourth) = if pane_index == 0 {
+            (tab_id.to_owned(), blank_id)
+        } else {
+            (blank_id, tab_id.to_owned())
+        };
+        pair.third = Some(third);
+        pair.fourth = Some(fourth);
+        self.active_space_mut().split = Some(pair);
+        self.focused_pane = pane_index.min(3);
+        self.split_ratio_y = 0.5;
+        self.save_state();
+    }
+
     pub(in crate::app) fn choose_split_target(&mut self, target_id: &str) -> bool {
         let Some(menu) = self.tab_context_menu.as_ref() else {
             return false;

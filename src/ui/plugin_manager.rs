@@ -1,18 +1,22 @@
 //! Plugins settings view. The app owns plugin lifecycle and persistence; this
 //! module only renders rows and reports user actions to that host.
 
-use std::rc::Rc;
+use std::{cell::Cell, collections::HashSet, rc::Rc};
 
-use gpui_kit::{App, ClickEvent, IntoElement, Window, div, prelude::*, px, rgb};
+use gpui_kit::{AnimationExt as _, App, ClickEvent, IntoElement, Window, div, prelude::*, px, rgb};
 
 use crate::{
     plugin::{PluginKind, PluginRow, RuntimeStatus},
-    ui::visual::SpaceTheme,
+    ui::{
+        motion,
+        visual::{SpaceTheme, UI_SCALE},
+    },
 };
 
 pub(crate) type ToggleCallback = Rc<dyn Fn(String, bool, &ClickEvent, &mut Window, &mut App)>;
 pub(crate) type ActionCallback = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 pub(crate) type PluginActionCallback = Rc<dyn Fn(String, &ClickEvent, &mut Window, &mut App)>;
+pub(crate) type DetailsCallback = Rc<dyn Fn(String, &ClickEvent, &mut Window, &mut App)>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InstallSource {
@@ -99,7 +103,7 @@ pub(crate) fn render_permission_review(
         .mx_auto()
         .p_5()
         .rounded_xl()
-        .bg(rgb(theme.surface))
+        .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
         .border_1()
         .border_color(rgb(theme.border))
         .flex()
@@ -181,7 +185,7 @@ pub(crate) fn render_permission_review(
                         .px_3()
                         .py_2()
                         .rounded_md()
-                        .bg(rgb(theme.surface_hover))
+                        .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                         .text_xs()
                         .text_color(rgb(theme.muted))
                         .child(install_label)
@@ -206,14 +210,18 @@ pub(crate) fn render(
     on_install: InstallCallback,
     on_open_plugin_folder: ActionCallback,
     on_open: PluginActionCallback,
+    expanded: &HashSet<String>,
+    on_toggle_details: DetailsCallback,
 ) -> gpui_kit::AnyElement {
+    // Stable, state-independent order: alphabetical by display name. Disabling a
+    // plugin must never move its row.
     let mut sorted_rows = rows.to_vec();
-    sorted_rows.sort_by_key(|row| {
-        if row.descriptor.kind == crate::plugin::PluginKind::Core {
-            0
-        } else {
-            1
-        }
+    sorted_rows.sort_by(|a, b| {
+        a.descriptor
+            .name
+            .to_lowercase()
+            .cmp(&b.descriptor.name.to_lowercase())
+            .then_with(|| a.descriptor.id.cmp(&b.descriptor.id))
     });
     let mut list = div().w_full().flex().flex_col().gap_2();
     for row in &sorted_rows {
@@ -229,6 +237,8 @@ pub(crate) fn render(
             on_toggle.clone(),
             on_remove.clone(),
             on_open.clone(),
+            expanded.contains(&row.descriptor.id),
+            on_toggle_details.clone(),
         ));
     }
 
@@ -303,48 +313,40 @@ fn plugin_row(
     on_toggle: ToggleCallback,
     on_remove: PluginActionCallback,
     on_open: PluginActionCallback,
+    expanded: bool,
+    on_toggle_details: DetailsCallback,
 ) -> impl IntoElement {
     let id = row.descriptor.id.clone();
     let plugin_id = id.clone();
     let requested_state = !row.enabled;
     let can_toggle = row.descriptor.can_toggle;
+    // Child controls run their click handler before the card's bubbling handler.
+    // This flag keeps clicks on the switch / Open / Remove from also expanding.
+    let handled_by_control = Rc::new(Cell::new(false));
     let control = if can_toggle {
         let callback = on_toggle.clone();
-        let enabled = row.enabled;
+        let handled = handled_by_control.clone();
+        let toggle_id = format!("plugin-toggle-{id}");
+        let debug_id = format!("plugin-toggle-{id}");
         div()
-            .id(format!("plugin-toggle-{id}"))
-            .px_3()
-            .py_1p5()
-            .rounded_md()
-            .bg(rgb(if enabled {
-                theme.accent
-            } else {
-                theme.surface_hover
-            }))
-            .text_xs()
-            .font_weight(gpui_kit::FontWeight::MEDIUM)
-            .text_color(rgb(if enabled { theme.base } else { theme.text }))
-            .cursor_pointer()
-            .flex_shrink_0()
-            .active(|style| style.opacity(0.88))
-            .hover(move |style| {
-                if enabled {
-                    style.opacity(0.92)
-                } else {
-                    style.bg(rgb(theme.accent)).text_color(rgb(theme.base))
-                }
-            })
-            .child(if enabled { "Enabled" } else { "Disabled" })
-            .on_click(move |event, window, app| {
-                callback(id.clone(), requested_state, event, window, app);
-            })
+            .id(toggle_id)
+            .debug_selector(move || debug_id.clone())
+            .child(toggle_switch(
+                format!("plugin-switch-{id}"),
+                row.enabled,
+                theme,
+                move |event, window, app| {
+                    handled.set(true);
+                    callback(id.clone(), requested_state, event, window, app)
+                },
+            ))
             .into_any_element()
     } else {
         div()
             .px_3()
             .py_1p5()
             .rounded_md()
-            .bg(rgb(theme.surface_hover))
+            .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
             .text_xs()
             .font_weight(gpui_kit::FontWeight::MEDIUM)
             .text_color(rgb(theme.muted))
@@ -361,18 +363,34 @@ fn plugin_row(
     let configuration = details
         .configuration
         .unwrap_or_else(|| "No configurable settings".to_owned());
+    let details_callback_id = plugin_id.clone();
+    let handled_by_card = handled_by_control.clone();
 
     div()
         .w_full()
+        .id(format!("plugin-card-click-{plugin_id}"))
         .debug_selector(|| format!("plugin-card-{plugin_id}"))
+        .cursor_pointer()
+        .hover(|style| {
+            style.bg(crate::ui::visual::translucent_surface(
+                theme.surface_hover,
+                0x48,
+            ))
+        })
+        .on_click(move |event, window, app| {
+            if handled_by_card.replace(false) {
+                return;
+            }
+            on_toggle_details(details_callback_id.clone(), event, window, app);
+        })
         .p_4()
         .rounded_xl()
-        .bg(rgb(theme.surface))
+        .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
         .border_1()
         .border_color(rgb(theme.border))
         .flex()
         .flex_col()
-        .gap_3()
+        .gap_2()
         .child(
             div()
                 .w_full()
@@ -385,44 +403,31 @@ fn plugin_row(
                         .flex_1()
                         .min_w_0()
                         .flex()
-                        .flex_col()
-                        .gap_1()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
                         .child(
                             div()
-                                .flex()
-                                .flex_wrap()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                        .text_color(rgb(theme.text))
-                                        .child(if row.descriptor.id == "lumen.core" {
-                                            "Anarc Core".to_string()
-                                        } else {
-                                            row.descriptor.name.clone()
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(theme.muted))
-                                        .child(kind_label(row.descriptor.kind)),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(theme.muted))
-                                        .child(format!("v{}", row.descriptor.version)),
-                                ),
+                                .text_sm()
+                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                .text_color(rgb(theme.text))
+                                .child(if row.descriptor.id == "lumen.core" {
+                                    "Anarc Core".to_string()
+                                } else {
+                                    row.descriptor.name.clone()
+                                }),
                         )
                         .child(
                             div()
                                 .text_xs()
-                                .whitespace_normal()
                                 .text_color(rgb(theme.muted))
-                                .child(row.descriptor.description.clone()),
+                                .child(kind_label(row.descriptor.kind)),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(theme.muted))
+                                .child(format!("v{}", row.descriptor.version)),
                         ),
                 )
                 .child(
@@ -434,6 +439,7 @@ fn plugin_row(
                         .debug_selector(|| format!("plugin-actions-{plugin_id}"))
                         .child(if row.descriptor.kind == crate::plugin::PluginKind::Panel && row.enabled {
                             let callback = on_open.clone();
+                            let handled = handled_by_control.clone();
                             let plugin_id = plugin_id.clone();
                             div()
                                 .id(format!("plugin-open-{plugin_id}"))
@@ -441,7 +447,7 @@ fn plugin_row(
                                 .px_3()
                                 .py_1p5()
                                 .rounded_md()
-                                .bg(rgb(theme.surface_hover))
+                                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                                 .text_xs()
                                 .font_weight(gpui_kit::FontWeight::MEDIUM)
                                 .text_color(rgb(theme.text))
@@ -451,21 +457,22 @@ fn plugin_row(
                                 .hover(move |style| style.bg(rgb(theme.accent)).text_color(rgb(theme.base)))
                                 .child("Open")
                                 .on_click(move |event, window, app| {
+                                    handled.set(true);
                                     callback(plugin_id.clone(), event, window, app);
                                 })
                                 .into_any_element()
                         } else {
                             div().into_any_element()
                         })
-                        .child(control)
                         .child(if can_remove(row) {
                             let callback = on_remove.clone();
+                            let handled = handled_by_control.clone();
                             div()
                                 .id(format!("plugin-remove-{plugin_id}"))
                                 .px_3()
                                 .py_1p5()
                                 .rounded_md()
-                                .bg(rgb(theme.surface_hover))
+                                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                                 .text_xs()
                                 .font_weight(gpui_kit::FontWeight::MEDIUM)
                                 .text_color(rgb(theme.text))
@@ -475,51 +482,121 @@ fn plugin_row(
                                 .hover(|style| style.bg(rgb(0xef4444)).text_color(rgb(0xffffff)))
                                 .child("Remove")
                                 .on_click(move |event, window, app| {
+                                    handled.set(true);
                                     callback(plugin_id.clone(), event, window, app);
                                 })
                                 .into_any_element()
                         } else {
                             div().into_any_element()
-                        }),
+                        })
+                        .child(control),
                 ),
         )
-        .child(
-            div()
-                .w_full()
-                .pt_2()
-                .border_t_1()
-                .border_color(rgb(theme.border))
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(theme.muted))
-                        .child(format!("Status: {}", runtime_label(&row.runtime))),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(theme.muted))
-                        .child(permission_summary),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(theme.muted))
-                        .child(format!("Configuration: {configuration}")),
-                )
-                .child(if let Some(error) = details.error {
-                    div()
-                        .text_xs()
-                        .text_color(rgb(theme.text))
-                        .child(format!("Error: {error}"))
-                        .into_any_element()
+        .when(expanded, |card| {
+            card.child(
+                div()
+                    .w_full()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(rgb(theme.border))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .whitespace_normal()
+                            .text_color(rgb(theme.muted))
+                            .child(row.descriptor.description.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(theme.muted))
+                            .child(format!("Status: {}", runtime_label(&row.runtime))),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(theme.muted))
+                            .child(permission_summary),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(theme.muted))
+                            .child(format!("Configuration: {configuration}")),
+                    )
+                    .child(if let Some(error) = details.error.clone() {
+                        div()
+                            .text_xs()
+                            .text_color(rgb(theme.text))
+                            .child(format!("Error: {error}"))
+                            .into_any_element()
+                    } else {
+                        div().into_any_element()
+                    }),
+            )
+        })
+}
+
+/// Compact on/off switch matching the toggle used by the Extensions menu.
+/// The thumb and track share a spring so a flip reads as a state change
+/// instead of an instant jump, and rapid re-toggles keep their momentum.
+pub(crate) fn toggle_switch(
+    id: String,
+    checked: bool,
+    theme: SpaceTheme,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> gpui_kit::AnyElement {
+    let spring_id = format!("toggle-spring-{id}");
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .w(px(34.0 * UI_SCALE))
+        .h(px(20.0 * UI_SCALE))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_start()
+        .px(px(2.0 * UI_SCALE))
+        .cursor_pointer()
+        .hover(|style| style.opacity(0.92))
+        .active(|style| style.opacity(0.88))
+        .on_click(on_click)
+        .with_spring(
+            spring_id,
+            motion::toggle().to(if checked { 1.0 } else { 0.0 }),
+            move |track, value| {
+                let color_progress = motion::clamp_percentage(value);
+                // Let the thumb keep the spring's small overshoot; clamp only
+                // the colour channels so they always land inside the palette.
+                let offset_progress = if value.is_finite() {
+                    value.clamp(0.0, 1.1)
                 } else {
-                    div().into_any_element()
-                }),
+                    0.0
+                };
+                track
+                    .bg(rgb(mix_color(theme.border, theme.accent, color_progress)))
+                    .child(
+                        div()
+                            .size(px(16.0 * UI_SCALE))
+                            .rounded_full()
+                            .bg(rgb(0xffffff))
+                            .ml(px(14.0 * UI_SCALE * offset_progress)),
+                    )
+            },
         )
+        .into_any_element()
+}
+
+fn mix_color(from: u32, to: u32, progress: f32) -> u32 {
+    let channel = |shift: u32| {
+        let a = ((from >> shift) & 0xff_u32) as f32;
+        let b = ((to >> shift) & 0xff_u32) as f32;
+        (a + (b - a) * progress).round() as u32
+    };
+    (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
 fn action_button(
@@ -532,7 +609,7 @@ fn action_button(
         .px_3()
         .py_1p5()
         .rounded_md()
-        .bg(rgb(theme.surface_hover))
+        .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
         .text_xs()
         .font_weight(gpui_kit::FontWeight::MEDIUM)
         .text_color(rgb(theme.text))

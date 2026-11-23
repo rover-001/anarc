@@ -18,7 +18,7 @@ use super::*;
 /// user navigates later. Legacy tabs predate that field, so their current URL
 /// is adopted once as the pinned destination.
 pub(in crate::app) fn seed_pinned_destination(tab: &mut Tab) {
-    if (tab.pinned || tab.favorite) && tab.pinned_url.is_none() {
+    if tab.is_pinned() && tab.pinned_url.is_none() {
         tab.pinned_url = Some(tab.url.clone());
         if tab.pinned_title.is_none() && !tab.title.is_empty() {
             tab.pinned_title = Some(tab.title.clone());
@@ -26,7 +26,7 @@ pub(in crate::app) fn seed_pinned_destination(tab: &mut Tab) {
     }
 }
 
-impl Lumen {
+impl Anarc {
     pub(crate) fn plugin_rows(&self) -> Vec<crate::plugin::PluginRow> {
         self.plugins.rows()
     }
@@ -90,6 +90,13 @@ impl Lumen {
         make_tab_ids_unique(&mut spaces);
         for space in &mut spaces {
             for tab in &mut space.tabs {
+                // Favorites and pins are one section: normalize old saves that
+                // only set one of the two flags before any logic reads them.
+                if tab.is_pinned() {
+                    tab.set_pinned(true);
+                } else {
+                    tab.kept_group = None;
+                }
                 // Saves older than `pinned_url` (and tabs pinned before their
                 // URL settled) get their destination captured now, while the
                 // stored URL is still the page they represent. Capturing it on
@@ -99,7 +106,7 @@ impl Lumen {
         }
         for space in &mut spaces {
             for tab in &mut space.tabs {
-                if (tab.pinned || tab.favorite)
+                if tab.is_pinned()
                     && let Some(pinned_url) = &tab.pinned_url
                 {
                     tab.url = pinned_url.clone();
@@ -116,8 +123,7 @@ impl Lumen {
                 .iter()
                 .find(|tab| {
                     (tab.url == "about:blank" || tab.url == "lumen://welcome")
-                        && !tab.favorite
-                        && !tab.pinned
+                        && !tab.is_pinned()
                         && tab.folder.is_none()
                 })
                 .map(|tab| tab.id.clone());
@@ -214,10 +220,16 @@ impl Lumen {
         let second_web_viewport =
             cx.new(|_| WebViewport::new(root_entity, browser_focus_handle.clone()));
         let root_entity = cx.weak_entity();
+        let third_web_viewport =
+            cx.new(|_| WebViewport::new(root_entity, browser_focus_handle.clone()));
+        let root_entity = cx.weak_entity();
+        let fourth_web_viewport =
+            cx.new(|_| WebViewport::new(root_entity, browser_focus_handle.clone()));
+        let root_entity = cx.weak_entity();
         let peek_web_viewport =
             cx.new(|_| WebViewport::new(root_entity, browser_focus_handle.clone()));
         let address_subscription =
-            cx.subscribe(&address, |this: &mut Lumen, _, event, cx| match event {
+            cx.subscribe(&address, |this: &mut Anarc, _, event, cx| match event {
                 InputEvent::PressEnter { .. } => {
                     this.navigate(None, cx);
                     cx.notify();
@@ -247,7 +259,7 @@ impl Lumen {
                 _ => {}
             });
         let command_subscription =
-            cx.subscribe(&command_input, |this: &mut Lumen, _, event, cx| {
+            cx.subscribe(&command_input, |this: &mut Anarc, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.selected_command = 0;
                     cx.notify();
@@ -272,6 +284,10 @@ impl Lumen {
             active_space,
             sidebar_collapsed,
             sidebar_hovered: false,
+            kept_drag_hovered_tab: None,
+            kept_drag_hover_after: false,
+            kept_drag_source_id: None,
+            kept_section_drag_hovered: false,
             sidebar_width,
             sidebar_resizing: false,
             sidebar_width_transition: None,
@@ -292,13 +308,17 @@ impl Lumen {
             browser_focus_handle,
             web_viewport,
             second_web_viewport,
+            third_web_viewport,
+            fourth_web_viewport,
             peek_web_viewport,
             peek: None,
             peek_serial: 0,
             peek_focused: false,
             focused_pane: 0,
             split_ratio: 0.5,
+            split_ratio_y: 0.5,
             split_resizing: false,
+            split_resizing_horizontal: false,
             _address_subscription: address_subscription,
             _command_subscription: command_subscription,
             show_find: false,
@@ -348,12 +368,17 @@ impl Lumen {
             ),
             last_shared_cookies_mtime: std::sync::atomic::AtomicU64::new(0),
             last_cookie_sync: std::time::Instant::now(),
+            last_live_share_session_mtime: std::sync::atomic::AtomicU64::new(0),
+            live_share_session_generation: 0,
+            live_share_is_host: false,
+            live_share_space_id: String::new(),
             pending_auth_recovery: std::collections::HashMap::new(),
             preferences,
             plugins,
             panel_registry,
             pending_plugin_review: None,
             plugin_action_error: None,
+            expanded_plugins: std::collections::HashSet::new(),
             #[cfg(not(test))]
             cef_task_started: false,
         };
@@ -424,6 +449,47 @@ impl Lumen {
             .and_then(|preset| preset.sidebar_collapsed)
             .unwrap_or(self.sidebar_collapsed)
     }
+    /// Exact CEF sizes for every visible split pane, row-major.
+    pub(in crate::app) fn split_browser_sizes(
+        &self,
+        pair: &crate::model::SplitPair,
+        content_width: f32,
+        content_height: f32,
+    ) -> Vec<(String, i32, i32)> {
+        let panes = pair.panes();
+        let sizes = if pair.is_quad() {
+            let quad = split_view::quad_pane_sizes(
+                content_width,
+                content_height,
+                self.split_ratio,
+                self.split_ratio_y,
+            );
+            quad.to_vec()
+        } else if pair.third.is_some() {
+            let triple = split_view::triple_pane_sizes(
+                content_width,
+                content_height,
+                self.split_ratio,
+                self.split_ratio_y,
+            );
+            triple.to_vec()
+        } else {
+            let (left, right) = split_view::pane_widths(content_width, self.split_ratio);
+            vec![(left, content_height), (right, content_height)]
+        };
+        panes
+            .into_iter()
+            .zip(sizes)
+            .map(|(tab_id, (width, height))| {
+                (
+                    tab_id.to_owned(),
+                    width.max(1.0) as i32,
+                    height.max(1.0) as i32,
+                )
+            })
+            .collect()
+    }
+
     #[cfg(not(test))]
     pub(in crate::app) fn browser_sizes_for_sidebar(
         &self,
@@ -437,19 +503,15 @@ impl Lumen {
             (f32::from(bounds.size.height) - visual::active_topbar_height() - CONTENT_BEZEL_BOTTOM)
                 .max(100.0) as i32;
         if let Some(pair) = self.current_split_pair() {
-            let (left, right) = split_view::pane_widths(content_width, self.split_ratio);
-            vec![
-                split_view::BrowserSize {
-                    tab_id: pair.first,
-                    width: left.max(1.0) as i32,
-                    height,
-                },
-                split_view::BrowserSize {
-                    tab_id: pair.second,
-                    width: right.max(1.0) as i32,
-                    height,
-                },
-            ]
+            let sizes = self.split_browser_sizes(&pair, content_width, height as f32);
+            sizes
+                .into_iter()
+                .map(|(tab_id, width, pane_height)| split_view::BrowserSize {
+                    tab_id,
+                    width,
+                    height: pane_height,
+                })
+                .collect()
         } else {
             self.active_space()
                 .active
@@ -469,6 +531,7 @@ impl Lumen {
         &mut self,
         window: &Window,
         split_divider: bool,
+        freeze: bool,
     ) {
         let pair = self.current_split_pair();
         let bounds = window.bounds();
@@ -478,16 +541,20 @@ impl Lumen {
                 .max(100.0) as i32;
         let sidebar_width = self.effective_sidebar_width();
         let content_width = (width - sidebar_width - CONTENT_BEZEL_X * 2.0).max(100.0);
-        let fallback_widths = if pair.is_some() {
-            let (first, second) = split_view::pane_widths(content_width, self.split_ratio);
-            vec![first.max(1.0) as i32, second.max(1.0) as i32]
+        let fallback_sizes = if let Some(pair) = &pair {
+            self.split_browser_sizes(pair, content_width, height as f32)
         } else if self.active_space().active.is_some() {
-            vec![content_width.max(1.0) as i32]
+            vec![(self.active_tab_id().to_owned(), content_width.max(1.0) as i32, height)]
         } else {
             Vec::new()
         };
         let tab_ids = pair
-            .map(|pair| vec![pair.first, pair.second])
+            .map(|pair| {
+                pair.panes()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_else(|| self.active_space().active.clone().into_iter().collect());
         let fallback_surface = visual::theme_for_space(self.active_space()).surface;
         let sizes = tab_ids
@@ -497,7 +564,7 @@ impl Lumen {
                 let (current_width, current_height) = self
                     .engine
                     .browser_size(tab_id)
-                    .unwrap_or((fallback_widths[index], height));
+                    .unwrap_or((fallback_sizes[index].1, fallback_sizes[index].2));
                 split_view::BrowserSize {
                     tab_id: tab_id.clone(),
                     width: current_width,
@@ -516,7 +583,11 @@ impl Lumen {
                 )
             })
             .collect();
-        self.resize_drag.start(sizes.clone(), edge_colors);
+        if freeze {
+            self.resize_drag.start_frozen(sizes.clone(), edge_colors);
+        } else {
+            self.resize_drag.start(sizes.clone(), edge_colors);
+        }
         for size in sizes {
             resize_debug(format_args!(
                 "drag_start kind={} tab={} size={}x{}",
@@ -590,8 +661,9 @@ impl Lumen {
         self.theme_editor = None;
         window.focus(&self.browser_focus_handle, cx);
         if let Some(pair) = self.current_split_pair() {
-            self.engine.set_focus(&pair.first, false);
-            self.engine.set_focus(&pair.second, false);
+            for tab_id in pair.panes() {
+                self.engine.set_focus(tab_id, false);
+            }
         }
         if let Some(peek_id) = self.peek.as_ref().map(|peek| peek.id.clone()) {
             self.engine.set_focus(&peek_id, false);
@@ -603,23 +675,27 @@ impl Lumen {
         let space = self.active_space();
         let active = space.active.as_deref().unwrap_or_default();
         let Some(pair) = space.split.as_ref().filter(|pair| {
-            (active == pair.first || active == pair.second)
-                && pair.first != pair.second
-                && space.tabs.iter().any(|tab| tab.id == pair.first)
-                && space.tabs.iter().any(|tab| tab.id == pair.second)
+            let panes = pair.panes();
+            panes.contains(&active)
+                && panes.iter().all(|id| space.tabs.iter().any(|tab| &tab.id == id))
         }) else {
             return active;
         };
-        split_view::tab_for_pane(&pair.first, &pair.second, self.focused_pane)
+        pair.pane(self.focused_pane.min(pair.pane_count() - 1))
+            .unwrap_or(active)
     }
     pub(crate) fn set_focused_pane(&mut self, pane_index: usize) {
-        self.focused_pane = pane_index.min(1);
+        if let Some(pair) = self.stored_split_pair() {
+            self.focused_pane = pane_index.min(pair.pane_count() - 1);
+        } else {
+            self.focused_pane = 0;
+        }
         self.close_app_page();
         self.plugins_menu_open = false;
-        if let Some(pair) = self.stored_split_pair() {
-            self.active_space_mut().active = Some(
-                split_view::tab_for_pane(&pair.first, &pair.second, self.focused_pane).to_owned(),
-            );
+        if let Some(pair) = self.stored_split_pair()
+            && let Some(tab_id) = pair.pane(self.focused_pane)
+        {
+            self.active_space_mut().active = Some(tab_id.to_owned());
         }
     }
     pub(in crate::app) fn activate_split_group(&mut self) {
@@ -632,21 +708,67 @@ impl Lumen {
     }
     pub(in crate::app) fn current_split_pair(&self) -> Option<SplitPair> {
         let pair = self.stored_split_pair()?;
-        let active = self.active_tab_id();
-        (active == pair.first || active == pair.second).then_some(pair)
+        pair.panes()
+            .contains(&self.active_tab_id())
+            .then_some(pair)
     }
     pub(in crate::app) fn stored_split_pair(&self) -> Option<SplitPair> {
         let space = self.active_space();
         let pair = space.split.as_ref()?;
-        let has_first = space.tabs.iter().any(|tab| tab.id == pair.first);
-        let has_second = space.tabs.iter().any(|tab| tab.id == pair.second);
-        (has_first && has_second && pair.first != pair.second).then(|| pair.clone())
+        let panes = pair.panes();
+        let distinct = panes
+            .iter()
+            .enumerate()
+            .all(|(index, id)| panes[index + 1..].iter().all(|other| other != id));
+        (distinct
+            && panes
+                .iter()
+                .all(|id| space.tabs.iter().any(|tab| &tab.id == id)))
+        .then(|| pair.clone())
     }
     pub(in crate::app) fn split_active_with_next(&mut self) {
         let space = self.active_space_mut();
         let Some(first) = space.active.clone() else {
             return;
         };
+        // A second split fills the remaining two quadrants; beyond four panes
+        // the shortcut is a no-op.
+        if let Some(mut pair) = space.split.clone() {
+            if pair.is_quad() {
+                return;
+            }
+            let mut used = pair.panes().iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+            let mut extra = Vec::new();
+            let needed = if pair.third.is_some() { 1 } else { 2 };
+            while extra.len() < needed {
+                let next = space
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.id.clone())
+                    .find(|id| !used.contains(id) && !extra.contains(id));
+                let id = match next {
+                    Some(id) => id,
+                    None => {
+                        let id = next_tab_id(space);
+                        space.tabs.push(Tab::new(&id, "New tab", "about:blank"));
+                        id
+                    }
+                };
+                used.push(id.clone());
+                extra.push(id);
+            }
+            if pair.third.is_some() {
+                pair.fourth = Some(extra.remove(0));
+            } else {
+                pair.third = Some(extra.remove(0));
+                pair.fourth = Some(extra.pop().unwrap());
+            }
+            space.split = Some(pair);
+            self.split_ratio = 0.5;
+            self.split_ratio_y = 0.5;
+            self.save_state();
+            return;
+        }
         let Some(first_index) = space.tabs.iter().position(|tab| tab.id == first) else {
             return;
         };
@@ -660,9 +782,10 @@ impl Lumen {
             id
         };
         if first != second {
-            space.split = Some(SplitPair { first, second });
+            space.split = Some(SplitPair::new(first, second));
             self.focused_pane = 0;
             self.split_ratio = 0.5;
+            self.split_ratio_y = 0.5;
             self.save_state();
         }
     }
@@ -670,6 +793,10 @@ impl Lumen {
         if self.active_space().split.is_some() {
             self.active_space_mut().split = None;
             self.focused_pane = 0;
+            self.split_ratio = 0.5;
+            self.split_ratio_y = 0.5;
+            self.split_resizing = false;
+            self.split_resizing_horizontal = false;
             self.save_state();
         }
     }

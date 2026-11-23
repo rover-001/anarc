@@ -162,7 +162,7 @@ pub(crate) fn register(host: &mut PluginHost) {
         (
             "lumen.split-view",
             "Split view",
-            "View two tabs side by side",
+            "View up to four tabs in a split grid",
             BuiltinFeature::SplitView,
         ),
         (

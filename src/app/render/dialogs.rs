@@ -1,6 +1,6 @@
 use super::*;
 
-impl Lumen {
+impl Anarc {
     pub(super) fn render_dialogs(
         &mut self,
         theme: visual::SpaceTheme,
@@ -43,14 +43,14 @@ impl Lumen {
                 .when(sidebar_on_right, |this| this.right(px(8.0 * UI_SCALE)))
                 .when(!sidebar_on_right, |this| this.left(px(8.0 * UI_SCALE)))
                 .w(px(240.0 * UI_SCALE))
-                .bg(rgb(modal_theme.surface))
+                .bg(rgb(visual::panel_surface(modal_theme.surface)))
                 .border_1()
                 .border_color(rgb(modal_theme.border))
                 .rounded_xl()
-                .p_3()
+                .p_2()
                 .flex()
                 .flex_col()
-                .gap_3()
+                .gap_2()
                 .on_mouse_down(
                     gpui_kit::MouseButton::Left,
                     cx.listener(|_, _, _, cx| cx.stop_propagation()),
@@ -71,7 +71,7 @@ impl Lumen {
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(modal_theme.muted))
+                                .text_color(rgb(visual::panel_muted(modal_theme)))
                                 .child("Name"),
                         )
                         .child(
@@ -110,17 +110,17 @@ impl Lumen {
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(modal_theme.muted))
+                                .text_color(rgb(visual::panel_muted(modal_theme)))
                                 .child("Icon"),
                         )
                         .child({
                             let mut icons_grid = div()
                                 .id("svg-picker-grid")
-                                .h(px(144.0 * UI_SCALE))
+                                .h(px(128.0 * UI_SCALE))
                                 .overflow_y_scroll()
                                 .p_1()
                                 .rounded_md()
-                                .bg(rgb(modal_theme.surface))
+                                .bg(crate::ui::visual::translucent_surface(modal_theme.surface, 0x30))
                                 .border_1()
                                 .border_color(rgb(modal_theme.border))
                                 .flex()
@@ -133,30 +133,32 @@ impl Lumen {
                                 icons_grid = icons_grid.child(
                                     div()
                                         .id(format!("space-icon-choice-{i}"))
-                                        .size(px(26.0 * UI_SCALE))
+                                        .size(px(24.0 * UI_SCALE))
                                         .rounded_lg()
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .bg(rgb(if is_selected {
-                                            modal_theme.surface_hover
+                                        .bg(if is_selected {
+                                            crate::ui::visual::translucent_surface(
+                                                modal_theme.accent,
+                                                0x3a,
+                                            )
                                         } else {
-                                            modal_theme.surface
-                                        }))
+                                            crate::ui::visual::translucent_surface(
+                                                modal_theme.surface,
+                                                0x30,
+                                            )
+                                        })
                                         .border_1()
                                         .border_color(rgb(if is_selected {
                                             modal_theme.accent
                                         } else {
                                             modal_theme.border
                                         }))
-                                        .text_color(rgb(if is_selected {
-                                            0xffffff
-                                        } else {
-                                            0x8b8f9a
-                                        }))
+                                        .text_color(rgb(modal_theme.accent))
                                         .hover(|s| {
-                                            s.bg(rgb(modal_theme.surface_hover))
-                                                .text_color(rgb(modal_theme.text))
+                                            s.bg(crate::ui::visual::translucent_surface(modal_theme.surface_hover, 0x60))
+                                                .text_color(rgb(visual::tint_rgb(modal_theme.accent, 0xffffff, 0.3)))
                                         })
                                         .cursor_pointer()
                                         .child(space_switcher::render_space_icon(icon))
@@ -180,7 +182,7 @@ impl Lumen {
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(modal_theme.muted))
+                                .text_color(rgb(visual::panel_muted(modal_theme)))
                                 .child("Color"),
                         )
                         .child({
@@ -189,7 +191,7 @@ impl Lumen {
                                 .px_3()
                                 .py_2()
                                 .rounded_lg()
-                                .bg(rgb(modal_theme.surface_hover))
+                                .bg(crate::ui::visual::translucent_surface(modal_theme.surface_hover, 0x40))
                                 .text_color(rgb(modal_theme.text))
                                 .text_sm()
                                 .cursor_pointer()
@@ -217,9 +219,9 @@ impl Lumen {
                                 .py_1()
                                 .rounded_md()
                                 .text_xs()
-                                .text_color(rgb(0xa1a4af))
+                                .text_color(rgb(visual::panel_muted(modal_theme)))
                                 .hover(move |s| {
-                                    s.bg(rgb(modal_theme.surface_hover))
+                                    s.bg(crate::ui::visual::translucent_surface(modal_theme.surface_hover, 0x40))
                                         .text_color(rgb(modal_theme.text))
                                 })
                                 .cursor_pointer()
@@ -241,7 +243,9 @@ impl Lumen {
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(modal_theme.base))
-                                .hover(|s| s.bg(rgb(0xb4bcff)))
+                                .hover(|s| {
+                                    s.bg(rgb(visual::tint_rgb(modal_theme.accent, 0xffffff, 0.25)))
+                                })
                                 .cursor_pointer()
                                 .child(action_label)
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -297,7 +301,7 @@ impl Lumen {
                 .top(px(modal.anchor_y - 12.0 * UI_SCALE))
                 .left(px(modal.anchor_x + 12.0 * UI_SCALE))
                 .w(px(224.0 * UI_SCALE))
-                .bg(rgb(theme.surface))
+                .bg(rgb(visual::panel_surface(theme.surface)))
                 .border_1()
                 .border_color(rgb(theme.border))
                 .rounded_xl()
@@ -325,7 +329,7 @@ impl Lumen {
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(theme.muted))
+                                .text_color(rgb(visual::panel_muted(theme)))
                                 .child("Name"),
                         )
                         .child(
@@ -337,7 +341,7 @@ impl Lumen {
                                 .rounded_md()
                                 .border_1()
                                 .border_color(rgb(theme.border))
-                                .bg(rgb(theme.surface))
+                                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                                 .cursor_text()
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     if let Some(modal) = &this.folder_modal {
@@ -369,10 +373,10 @@ impl Lumen {
                                 .py_1()
                                 .rounded_md()
                                 .text_xs()
-                                .text_color(rgb(0xa1a4af))
+                                .text_color(rgb(visual::panel_muted(theme)))
                                 .hover(move |style| {
                                     style
-                                        .bg(rgb(theme.surface_hover))
+                                        .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                                         .text_color(rgb(theme.text))
                                 })
                                 .cursor_pointer()

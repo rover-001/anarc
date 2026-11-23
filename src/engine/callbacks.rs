@@ -15,11 +15,22 @@ fn recycle_frame_pixels(pixels: Vec<u8>) {
 
 fn copy_frame_pixels(source: &[u8]) -> Vec<u8> {
     let recycled = RECYCLED_FRAME_PIXELS.lock().ok().and_then(|mut pool| {
-        if let Some(index) = pool.iter().position(|pixels| pixels.len() == source.len()) {
-            Some(pool.swap_remove(index))
-        } else {
-            pool.pop()
-        }
+        // Pane sizes change continuously while a split divider is dragged, so
+        // an exact-length lookup almost always misses. Prefer the smallest
+        // buffer that can hold this frame; otherwise reuse the largest one.
+        let fitting = pool
+            .iter()
+            .enumerate()
+            .filter(|(_, pixels)| pixels.capacity() >= source.len())
+            .min_by_key(|(_, pixels)| pixels.capacity())
+            .map(|(index, _)| index);
+        let index = fitting.or_else(|| {
+            pool.iter()
+                .enumerate()
+                .max_by_key(|(_, pixels)| pixels.capacity())
+                .map(|(index, _)| index)
+        });
+        index.map(|index| pool.swap_remove(index))
     });
     if let Some(mut pixels) = recycled {
         pixels.clear();
@@ -709,8 +720,11 @@ cef::wrap_render_handler! {
                 }
                 state.pending_image = Some(render_image);
                 state.dirty = true;
+                drop(state);
+                // CEF paces paints and the bounded wake channel coalesces
+                // bursts. Even the last frame of a scroll must wake the UI.
+                let _ = self.paint_wake.try_send(());
             }
-            let _ = self.paint_wake.try_send(());
         }
     }
 }
@@ -1361,7 +1375,7 @@ cef::wrap_download_handler! {
             drop(events);
             callback.cont(Some(&cef_path), 0);
             let _ = self.ui_update_wake.try_send(());
-            eprintln!("Lumen download started: {} -> {}", record.url, record.path.display());
+            eprintln!("Anarc download started: {} -> {}", record.url, record.path.display());
             1
         }
 
@@ -1384,9 +1398,9 @@ cef::wrap_download_handler! {
                     record.canceled = canceled;
                     let _ = self.ui_update_wake.try_send(());
                     if complete || canceled {
-                        eprintln!("Lumen download {}: {} ({}/{})", if complete { "complete" } else { "failed" }, record.path.display(), received, total);
+                        eprintln!("Anarc download {}: {} ({}/{})", if complete { "complete" } else { "failed" }, record.path.display(), received, total);
                     } else {
-                        eprintln!("Lumen download progress: {} ({}/{})", record.path.display(), received, total);
+                        eprintln!("Anarc download progress: {} ({}/{})", record.path.display(), received, total);
                     }
                 }
         }
@@ -1400,7 +1414,7 @@ fn unique_download_path(name: &str, reserved: &[DownloadRecord]) -> PathBuf {
         .join("Downloads");
     if let Err(error) = std::fs::create_dir_all(&downloads) {
         eprintln!(
-            "Lumen cannot create download directory {}: {error}",
+            "Anarc cannot create download directory {}: {error}",
             downloads.display()
         );
     }

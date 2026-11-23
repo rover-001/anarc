@@ -25,14 +25,6 @@ impl SearchEngine {
         }
     }
 
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Google => "Google",
-            Self::Bing => "Bing",
-            Self::DuckDuckGo => "DuckDuckGo",
-        }
-    }
-
     pub(crate) fn search_url(self, encoded_query: &str) -> String {
         search_engine_registry()
             .read()

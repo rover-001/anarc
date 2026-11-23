@@ -12,7 +12,7 @@ mod shell;
 mod sidebar;
 mod theme_picker;
 
-impl Render for Lumen {
+impl Render for Anarc {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         _window.set_rem_size(px(16.0 * UI_SCALE));
         let auto_light = matches!(
@@ -104,7 +104,7 @@ impl Render for Lumen {
                     let scheduled = this.update_in(cx, |this, window, cx| {
                         let was_initialized = this.engine.is_initialized();
                         if let Err(error) = this.engine.initialize() {
-                            eprintln!("Lumen CEF startup failed: {error}");
+                            eprintln!("Anarc CEF startup failed: {error}");
                             this.process_agent_requests();
                             return None;
                         }
@@ -138,7 +138,7 @@ impl Render for Lumen {
                                             && s.tabs.iter().any(|t| t.id == tab_id)
                                     });
                                     if is_host_tab {
-                                        this.sync_host_cookies_if_needed();
+                                        this.sync_host_cookies_if_needed(false);
                                     } else if this.spaces.iter().any(|s| s.id == "shared-space" && s.tabs.iter().any(|t| t.id == tab_id)) {
                                         let cookies_file = crate::paths::config_dir().join("shared-cookies.json");
                                         if cookies_file.is_file() {
@@ -299,6 +299,42 @@ impl Render for Lumen {
                             }
                         }
 
+                        // Live Share publishes session transitions as a tiny file.
+                        // Export the host's full account/session snapshot the moment
+                        // sharing starts, before any peer connects.
+                        let session_path = crate::paths::config_dir().join("live-share-session.json");
+                        if let Ok(meta) = std::fs::metadata(&session_path)
+                            && let Ok(mtime) = meta.modified()
+                            && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
+                        {
+                            let mtime_ms = d.as_millis() as u64;
+                            let last = this
+                                .last_live_share_session_mtime
+                                .load(std::sync::atomic::Ordering::Relaxed);
+                            if mtime_ms > last {
+                                this.last_live_share_session_mtime
+                                    .store(mtime_ms, std::sync::atomic::Ordering::Relaxed);
+                                if let Ok(content) = std::fs::read_to_string(&session_path)
+                                    && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
+                                {
+                                    let generation = val.get("generation").and_then(|v| v.as_u64()).unwrap_or(0);
+                                    let is_host = val.get("is_host").and_then(|v| v.as_bool()).unwrap_or(false);
+                                    let space_id = val
+                                        .get("space_id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let new_session = generation != this.live_share_session_generation;
+                                    this.live_share_session_generation = generation;
+                                    this.live_share_is_host = is_host;
+                                    this.live_share_space_id = space_id;
+                                    if new_session && is_host {
+                                        this.sync_host_cookies_if_needed(true);
+                                    }
+                                }
+                            }
+                        }
+
                         // Process delayed auth recoveries
                         let now = std::time::Instant::now();
                         let ready_recoveries: Vec<(String, String)> = this
@@ -312,10 +348,14 @@ impl Render for Lumen {
                             this.engine.navigate(&tid, &dest);
                         }
 
-                        // Periodic cookie extraction for hosted Live Share space
-                        if this.last_cookie_sync.elapsed() >= std::time::Duration::from_secs(3) {
+                        // Periodic cookie extraction for hosted Live Share space.
+                        // Only hosts pay this cost; unchanged snapshots are skipped
+                        // inside sync_host_cookies_if_needed.
+                        if this.live_share_is_host
+                            && this.last_cookie_sync.elapsed() >= std::time::Duration::from_secs(3)
+                        {
                             this.last_cookie_sync = std::time::Instant::now();
-                            this.sync_host_cookies_if_needed();
+                            this.sync_host_cookies_if_needed(false);
                         }
                         let (visible_ids, split_active, peek_id) = this.visible_browser_panes();
                         let (dirty_tabs, has_root_updates) =
@@ -348,9 +388,7 @@ impl Render for Lumen {
                                             title.filter(|title| !title.is_empty())
                                         {
                                             tab.title = title.clone();
-                                            if (tab.pinned || tab.favorite)
-                                                && tab.pinned_title.is_none()
-                                            {
+                                            if tab.is_pinned() && tab.pinned_title.is_none() {
                                                 tab.pinned_title = Some(title);
                                             }
                                         }
@@ -420,7 +458,7 @@ impl Render for Lumen {
                         && !t.is_empty()
                     {
                         tab.title = t.clone();
-                        if (tab.pinned || tab.favorite) && tab.pinned_title.is_none() {
+                        if tab.is_pinned() && tab.pinned_title.is_none() {
                             tab.pinned_title = Some(t);
                         }
                     }
@@ -577,28 +615,23 @@ impl Render for Lumen {
                     && active_tab_url != "about:blank"
                     && !active_tab_url.is_empty()))
         {
-            let (left_width, right_width) =
-                split_view::pane_widths(content_w as f32, self.split_ratio);
-            let left_width_dip = left_width as i32;
-            let right_width_dip = right_width as i32;
+            let pane_sizes = split_pair.as_ref().map_or_else(Vec::new, |pair| {
+                self.split_browser_sizes(pair, content_w as f32, content_h as f32)
+            });
             let active_width = if browser_fullscreen {
                 content_w
             } else {
-                split_pair.as_ref().map_or(content_w, |pair| {
-                    if pair.first == active_tab_id_string {
-                        left_width_dip
-                    } else if pair.second == active_tab_id_string {
-                        right_width_dip
-                    } else {
-                        content_w
-                    }
-                })
+                pane_sizes
+                    .iter()
+                    .find(|(id, _, _)| id == &active_tab_id_string)
+                    .map_or(content_w, |(_, width, _)| *width)
             };
             let active_width = self
                 .resize_drag
                 .frozen_size(&active_tab_id_string)
                 .map_or(active_width, |(width, _)| width);
-            if active_tab_url != "lumen://welcome"
+            if !self.engine.has_browser(&active_tab_id_string)
+                && active_tab_url != "lumen://welcome"
                 && active_tab_url != "about:blank"
                 && !active_tab_url.is_empty()
                 && let Err(error) = self.engine.ensure_browser(
@@ -607,7 +640,7 @@ impl Render for Lumen {
                     &active_tab_url,
                     active_width.max(1),
                     content_h,
-                    0xff000000 | theme.surface,
+                    0x26000000 | visual::light_surface_tint(theme.surface),
                     self.zoom_levels
                         .get(&url_host(&active_tab_url))
                         .copied()
@@ -616,78 +649,52 @@ impl Render for Lumen {
                         }),
                 )
             {
-                eprintln!("Lumen CEF browser creation failed: {error}");
+                eprintln!("Anarc CEF browser creation failed: {error}");
             }
-            if let Some(pair) = &split_pair {
-                if let Some(url) = self
-                    .active_space()
-                    .tabs
-                    .iter()
-                    .find(|tab| tab.id == pair.first)
-                    .map(|tab| tab.url.clone())
+            let pane_browsers = pane_sizes
+                .iter()
+                .filter_map(|(id, width, height)| {
+                    self.active_space()
+                        .tabs
+                        .iter()
+                        .find(|tab| &tab.id == id)
+                        .map(|tab| (id.clone(), tab.url.clone(), *width, *height))
+                })
+                .collect::<Vec<_>>();
+            for (tab_id, url, width, height) in &pane_browsers {
+                if !self.engine.has_browser(tab_id)
                     && url != "lumen://welcome"
                     && url != "about:blank"
                     && !url.is_empty()
                     && let Err(error) = self.engine.ensure_browser(
                         &active_space_id,
-                        &pair.first,
-                        &url,
+                        tab_id,
+                        url,
                         self.resize_drag
-                            .frozen_size(&pair.first)
-                            .map_or(left_width_dip.max(1), |(width, _)| width),
-                        content_h,
-                        0xff000000 | theme.surface,
+                            .frozen_size(tab_id)
+                            .map_or((*width).max(1), |(frozen, _)| frozen),
+                        *height,
+                        0x26000000 | visual::light_surface_tint(theme.surface),
                         self.zoom_levels
-                            .get(&url_host(&url))
+                            .get(&url_host(url))
                             .copied()
                             .unwrap_or_else(|| {
                                 visual::zoom_level_for_factor(self.preferences.default_zoom_factor)
                             }),
                     )
                 {
-                    eprintln!("Lumen split browser creation failed: {error}");
-                }
-                if let Some(url) = self
-                    .active_space()
-                    .tabs
-                    .iter()
-                    .find(|tab| tab.id == pair.second)
-                    .map(|tab| tab.url.clone())
-                    && url != "lumen://welcome"
-                    && url != "about:blank"
-                    && !url.is_empty()
-                    && let Err(error) = self.engine.ensure_browser(
-                        &active_space_id,
-                        &pair.second,
-                        &url,
-                        self.resize_drag
-                            .frozen_size(&pair.second)
-                            .map_or(right_width_dip.max(1), |(width, _)| width),
-                        content_h,
-                        0xff000000 | theme.surface,
-                        self.zoom_levels
-                            .get(&url_host(&url))
-                            .copied()
-                            .unwrap_or_else(|| {
-                                visual::zoom_level_for_factor(self.preferences.default_zoom_factor)
-                            }),
-                    )
-                {
-                    eprintln!("Lumen split browser creation failed: {error}");
+                    eprintln!("Anarc split browser creation failed: {error}");
                 }
             }
-            if let Some(pair) = &split_pair {
-                let left_w = self
+            for (tab_id, _, width, height) in &pane_browsers {
+                let (resize_width, resize_height) = self
                     .resize_drag
-                    .frozen_size(&pair.first)
-                    .map_or(left_width_dip.max(1), |(width, _)| width);
-                let right_w = self
-                    .resize_drag
-                    .frozen_size(&pair.second)
-                    .map_or(right_width_dip.max(1), |(width, _)| width);
-                self.engine.resize_browser(&pair.first, left_w, content_h);
-                self.engine.resize_browser(&pair.second, right_w, content_h);
-            } else {
+                    .frozen_size(tab_id)
+                    .unwrap_or((*width, *height));
+                self.engine
+                    .resize_browser(tab_id, resize_width.max(1), resize_height);
+            }
+            if pane_browsers.is_empty() {
                 self.engine
                     .resize_browser(&active_tab_id_string, active_width.max(1), content_h);
             }
@@ -704,10 +711,15 @@ impl Render for Lumen {
             } else if host.is_empty() {
                 self.active_zoom_target = None;
             }
-            let mut visible_ids = split_pair.as_ref().map_or_else(
-                || vec![active_tab_id_string.as_str()],
-                |pair| vec![pair.first.as_str(), pair.second.as_str()],
-            );
+            let pane_refs = split_pair
+                .as_ref()
+                .map(|pair| pair.panes())
+                .unwrap_or_default();
+            let mut visible_ids = if pane_refs.is_empty() {
+                vec![active_tab_id_string.as_str()]
+            } else {
+                pane_refs
+            };
             let peek_visible = self.peek.as_ref().map(|peek| peek.id.clone());
             if let Some(peek_id) = peek_visible.as_deref() {
                 visible_ids.push(peek_id);
@@ -772,16 +784,21 @@ impl Render for Lumen {
                 &peek.url,
                 layout.viewport_w,
                 layout.viewport_h,
-                0xff000000 | theme.surface,
+                0x26000000 | visual::light_surface_tint(theme.surface),
                 zoom,
             ) {
-                eprintln!("Lumen peek browser creation failed: {error}");
+                eprintln!("Anarc peek browser creation failed: {error}");
             }
             self.engine
                 .resize_browser(&peek.id, layout.viewport_w, layout.viewport_h);
             let mut ids: Vec<String> = split_pair.as_ref().map_or_else(
                 || vec![active_tab_id_string.clone()],
-                |pair| vec![pair.first.clone(), pair.second.clone()],
+                |pair| {
+                    pair.panes()
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect()
+                },
             );
             ids.push(peek.id.clone());
             let refs = ids.iter().map(String::as_str).collect::<Vec<_>>();
@@ -863,28 +880,31 @@ impl Render for Lumen {
                                 .child(outgoing_space.name.clone()),
                         );
                     let mut outgoing_rows = Vec::new();
-                    let split_tabs = outgoing_space.split.as_ref().and_then(|pair| {
-                        let first = outgoing_space
-                            .tabs
-                            .iter()
-                            .find(|tab| tab.id == pair.first)?;
-                        let second = outgoing_space
-                            .tabs
-                            .iter()
-                            .find(|tab| tab.id == pair.second)?;
-                        Some((pair, first, second))
-                    });
-                    if let Some((pair, first, second)) = split_tabs {
-                        let active_is_member = outgoing_space.active.as_deref()
-                            == Some(pair.first.as_str())
-                            || outgoing_space.active.as_deref() == Some(pair.second.as_str());
+                    let split_members = outgoing_space
+                        .split
+                        .as_ref()
+                        .map(|pair| {
+                            pair.panes()
+                                .into_iter()
+                                .filter_map(|id| {
+                                    outgoing_space.tabs.iter().find(|tab| tab.id == id)
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    if !split_members.is_empty() {
+                        let active_is_member = split_members.iter().any(|tab| {
+                            outgoing_space.active.as_deref() == Some(tab.id.as_str())
+                        });
                         outgoing_rows.push((
-                            tab_list::group_label(&first.title, &second.title),
+                            tab_list::group_labels(
+                                &split_members.iter().map(|tab| tab.title.clone()).collect::<Vec<_>>(),
+                            ),
                             None,
                             active_is_member && !self.split_group_expanded,
                         ));
                         if self.split_group_expanded {
-                            for member in [first, second] {
+                            for member in &split_members {
                                 outgoing_rows.push((
                                     member.title.clone(),
                                     self.engine.get_favicon_image(&member.id, Some(&member.url)),
@@ -894,11 +914,7 @@ impl Render for Lumen {
                         }
                     }
                     for tab in &outgoing_space.tabs {
-                        if outgoing_space
-                            .split
-                            .as_ref()
-                            .is_some_and(|pair| tab.id == pair.first || tab.id == pair.second)
-                        {
+                        if split_members.iter().any(|member| member.id == tab.id) {
                             continue;
                         }
                         outgoing_rows.push((
@@ -981,14 +997,19 @@ impl Render for Lumen {
 }
 
 #[cfg(not(test))]
-impl Lumen {
-    fn visible_browser_panes(&self) -> (smallvec::SmallVec<[String; 3]>, bool, Option<String>) {
+impl Anarc {
+    fn visible_browser_panes(&self) -> (smallvec::SmallVec<[String; 5]>, bool, Option<String>) {
         let visible_ids = crate::plugins::split_view_enabled()
             .then(|| self.current_split_pair())
             .flatten()
             .map_or_else(
                 || smallvec::smallvec![self.active_tab_id().to_string()],
-                |pair| smallvec::smallvec![pair.first, pair.second],
+                |pair| {
+                    pair.panes()
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect::<smallvec::SmallVec<[String; 5]>>()
+                },
             );
         let split_active = visible_ids.len() > 1;
         let peek_id = self.peek.as_ref().map(|peek| peek.id.clone());
@@ -1030,21 +1051,32 @@ impl Lumen {
                 }
             });
         }
-        if let Some(second_tab) = visible_ids
-            .get(1)
-            .filter(|id| split_active && dirty_tabs.contains(&id.as_str()))
-        {
-            let (image, cursor) = self.engine.take_viewport_frame(second_tab, &mut retired_images);
-            self.second_web_viewport.update(cx, |viewport, cx| {
-                if viewport.set_content(
-                    second_tab.clone(),
-                    image,
-                    cursor,
-                    std::mem::take(&mut retired_images),
-                ) {
-                    cx.notify();
+        if split_active {
+            // Skip the primary slot before checking dirtiness so an idle
+            // primary pane can't suppress a secondary pane's frame.
+            for (pane_index, pane_tab) in visible_ids.iter().take(4).enumerate().skip(1) {
+                if peek_id == Some(pane_tab.as_str()) || !dirty_tabs.contains(&pane_tab.as_str()) {
+                    continue;
                 }
-            });
+                let (image, cursor) = self
+                    .engine
+                    .take_viewport_frame(pane_tab, &mut retired_images);
+                let viewport = match pane_index {
+                    1 => &self.second_web_viewport,
+                    2 => &self.third_web_viewport,
+                    _ => &self.fourth_web_viewport,
+                };
+                viewport.update(cx, |viewport, cx| {
+                    if viewport.set_content(
+                        pane_tab.clone(),
+                        image,
+                        cursor,
+                        std::mem::take(&mut retired_images),
+                    ) {
+                        cx.notify();
+                    }
+                });
+            }
         }
         if let Some(peek_id) = peek_id.filter(|id| dirty_tabs.contains(id)) {
             let (image, cursor) = self.engine.take_viewport_frame(peek_id, &mut retired_images);

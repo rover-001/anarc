@@ -69,23 +69,23 @@ impl NavigationService {
 pub(crate) struct TabsService;
 
 impl TabsService {
-    pub(crate) fn add(&self, app: &mut crate::app::Lumen) {
+    pub(crate) fn add(&self, app: &mut crate::app::Anarc) {
         app.add_tab();
     }
 
-    pub(crate) fn close_active(&self, app: &mut crate::app::Lumen) {
+    pub(crate) fn close_active(&self, app: &mut crate::app::Anarc) {
         app.close_active_tab();
     }
 
-    pub(crate) fn reopen_closed(&self, app: &mut crate::app::Lumen) {
+    pub(crate) fn reopen_closed(&self, app: &mut crate::app::Anarc) {
         app.reopen_closed_tab();
     }
 
-    pub(crate) fn cycle(&self, app: &mut crate::app::Lumen, reverse: bool) {
+    pub(crate) fn cycle(&self, app: &mut crate::app::Anarc, reverse: bool) {
         app.cycle_tab(reverse);
     }
 
-    pub(crate) fn activate_number(&self, app: &mut crate::app::Lumen, number: usize) {
+    pub(crate) fn activate_number(&self, app: &mut crate::app::Anarc, number: usize) {
         app.activate_tab_number(number);
     }
 }
@@ -94,11 +94,11 @@ impl TabsService {
 pub(crate) struct SpacesService;
 
 impl SpacesService {
-    pub(crate) fn activate(&self, app: &mut crate::app::Lumen, id: &str) {
+    pub(crate) fn activate(&self, app: &mut crate::app::Anarc, id: &str) {
         app.activate_space(id);
     }
 
-    pub(crate) fn active_id<'a>(&self, app: &'a crate::app::Lumen) -> &'a str {
+    pub(crate) fn active_id<'a>(&self, app: &'a crate::app::Anarc) -> &'a str {
         &app.active_space().id
     }
 }
@@ -107,17 +107,17 @@ impl SpacesService {
 pub(crate) struct EngineService;
 
 impl EngineService {
-    pub(crate) fn execute_script(&self, app: &crate::app::Lumen, tab_id: &str, script: &str) {
+    pub(crate) fn execute_script(&self, app: &crate::app::Anarc, tab_id: &str, script: &str) {
         app.engine.execute_script(tab_id, script);
     }
 
-    pub(crate) fn reload(&self, app: &crate::app::Lumen, tab_id: &str, ignore_cache: bool) {
+    pub(crate) fn reload(&self, app: &crate::app::Anarc, tab_id: &str, ignore_cache: bool) {
         app.engine.reload(tab_id, ignore_cache);
     }
 
     pub(crate) fn find(
         &self,
-        app: &crate::app::Lumen,
+        app: &crate::app::Anarc,
         tab_id: &str,
         query: &str,
         forward: bool,
@@ -126,13 +126,13 @@ impl EngineService {
         app.engine.find(tab_id, query, forward, next);
     }
 
-    pub(crate) fn set_zoom_level(&self, app: &crate::app::Lumen, tab_id: &str, level: f64) {
+    pub(crate) fn set_zoom_level(&self, app: &crate::app::Anarc, tab_id: &str, level: f64) {
         app.engine.set_zoom_level(tab_id, level);
     }
 
     pub(crate) fn evaluate(
         &self,
-        app: &crate::app::Lumen,
+        app: &crate::app::Anarc,
         tab_id: &str,
         script: &str,
     ) -> async_channel::Receiver<Result<String, String>> {
@@ -141,7 +141,7 @@ impl EngineService {
 
     pub(crate) fn devtools(
         &self,
-        app: &crate::app::Lumen,
+        app: &crate::app::Anarc,
         tab_id: &str,
         method: &str,
         params: Option<&str>,
@@ -151,7 +151,7 @@ impl EngineService {
 
     pub(crate) fn input_click(
         &self,
-        app: &mut crate::app::Lumen,
+        app: &mut crate::app::Anarc,
         tab_id: &str,
         x: i32,
         y: i32,
@@ -162,7 +162,7 @@ impl EngineService {
 
     pub(crate) fn input_move(
         &self,
-        app: &crate::app::Lumen,
+        app: &crate::app::Anarc,
         tab_id: &str,
         x: i32,
         y: i32,
@@ -172,7 +172,7 @@ impl EngineService {
 
     pub(crate) fn input_type(
         &self,
-        app: &crate::app::Lumen,
+        app: &crate::app::Anarc,
         tab_id: &str,
         text: &str,
     ) -> async_channel::Receiver<Result<String, String>> {
@@ -181,7 +181,7 @@ impl EngineService {
 
     pub(crate) fn input_key(
         &self,
-        app: &crate::app::Lumen,
+        app: &crate::app::Anarc,
         tab_id: &str,
         key: &str,
         modifiers: &gpui_kit::Modifiers,
@@ -192,7 +192,7 @@ impl EngineService {
 
     pub(crate) fn input_scroll(
         &self,
-        app: &crate::app::Lumen,
+        app: &crate::app::Anarc,
         tab_id: &str,
         x: i32,
         y: i32,
@@ -209,7 +209,7 @@ pub(crate) struct CommandsService;
 impl CommandsService {
     pub(crate) fn items(
         &self,
-        app: &crate::app::Lumen,
+        app: &crate::app::Anarc,
         query: &str,
     ) -> Vec<crate::ui::command_palette::PaletteItem> {
         app.command_items(query)
@@ -217,10 +217,10 @@ impl CommandsService {
 
     pub(crate) fn execute(
         &self,
-        app: &mut crate::app::Lumen,
+        app: &mut crate::app::Anarc,
         item: crate::ui::command_palette::PaletteItem,
         window: &mut gpui_kit::Window,
-        cx: &mut gpui_kit::Context<crate::app::Lumen>,
+        cx: &mut gpui_kit::Context<crate::app::Anarc>,
     ) {
         app.execute_palette_item(item, window, cx);
     }
@@ -231,12 +231,12 @@ pub(crate) struct KeymapService;
 
 impl KeymapService {
     pub(crate) fn is_app_shortcut(&self, key: &str, control: bool, shift: bool) -> bool {
-        crate::app::Lumen::is_app_shortcut(key, control, shift)
+        crate::app::Anarc::is_app_shortcut(key, control, shift)
     }
 
     pub(crate) fn dispatch(
         &self,
-        app: &mut crate::app::Lumen,
+        app: &mut crate::app::Anarc,
         key: &str,
         control: bool,
         shift: bool,
@@ -249,7 +249,7 @@ impl KeymapService {
 pub(crate) struct ThemeService;
 
 impl ThemeService {
-    pub(crate) fn current(&self, app: &crate::app::Lumen) -> crate::ui::visual::SpaceTheme {
+    pub(crate) fn current(&self, app: &crate::app::Anarc) -> crate::ui::visual::SpaceTheme {
         crate::ui::visual::theme_for_space(app.theme_picker_space())
     }
 }

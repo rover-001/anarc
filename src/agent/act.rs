@@ -15,6 +15,8 @@ pub enum ScrollDirection {
     Ref(String),
 }
 
+/// Tab actions for the agent DSL. `Favorite`/`Unfavorite` are aliases of
+/// `Pin`/`Unpin`: favorites and pins are the same sidebar section.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TabAction {
     New { url: Option<String> },
@@ -866,7 +868,7 @@ enum WaitMode {
 }
 
 pub fn execute_dsl(
-    app: &mut crate::app::Lumen,
+    app: &mut crate::app::Anarc,
     tab_id: &str,
     ops: &[ActionOp],
     response: async_channel::Sender<AgentResponse>,
@@ -995,7 +997,7 @@ pub fn execute_dsl(
 }
 
 fn execute_single_op(
-    app: &mut crate::app::Lumen,
+    app: &mut crate::app::Anarc,
     tab_id: &str,
     op: &ActionOp,
     state_lock: &std::sync::Arc<std::sync::Mutex<super::plugin::AgentState>>,
@@ -1497,7 +1499,7 @@ fn execute_single_op(
     }
 }
 
-fn resolve_tab_target(app: &crate::app::Lumen, target: Option<&str>) -> Result<String, String> {
+fn resolve_tab_target(app: &crate::app::Anarc, target: Option<&str>) -> Result<String, String> {
     if let Some(t) = target {
         let t = t.trim();
         if let Ok(n) = t.parse::<usize>() {
@@ -1529,7 +1531,7 @@ fn resolve_tab_target(app: &crate::app::Lumen, target: Option<&str>) -> Result<S
 }
 
 fn check_click_policy(
-    app: &crate::app::Lumen,
+    app: &crate::app::Anarc,
     tab: &str,
     x: i32,
     y: i32,
@@ -1544,7 +1546,7 @@ fn check_click_policy(
 }
 
 fn check_action_policy(
-    app: &crate::app::Lumen,
+    app: &crate::app::Anarc,
     tab: &str,
     target: &str,
     policy: &PolicyConfig,
@@ -1561,7 +1563,7 @@ fn check_action_policy(
 }
 
 fn click_at(
-    app: &crate::app::Lumen,
+    app: &crate::app::Anarc,
     tab: &str,
     x: i32,
     y: i32,
@@ -1585,14 +1587,14 @@ fn click_at(
     Ok(())
 }
 
-fn press_key(app: &crate::app::Lumen, tab: &str, key: &str, mods: &gpui_kit::Modifiers) {
+fn press_key(app: &crate::app::Anarc, tab: &str, key: &str, mods: &gpui_kit::Modifiers) {
     app.engine.set_focus(tab, true);
     app.engine.input_key(tab, key, mods, true);
     app.engine.input_key(tab, key, mods, false);
 }
 
 fn type_at(
-    app: &crate::app::Lumen,
+    app: &crate::app::Anarc,
     tab: &str,
     x: i32,
     y: i32,
@@ -1720,7 +1722,7 @@ fn type_at(
     Ok(())
 }
 
-fn evaluate_action(app: &crate::app::Lumen, tab: &str, script: &str) -> Result<String, String> {
+fn evaluate_action(app: &crate::app::Anarc, tab: &str, script: &str) -> Result<String, String> {
     app.engine
         .evaluate(tab, script)
         .recv_blocking()
@@ -1730,7 +1732,7 @@ fn evaluate_action(app: &crate::app::Lumen, tab: &str, script: &str) -> Result<S
 }
 
 fn submit(
-    app: &crate::app::Lumen,
+    app: &crate::app::Anarc,
     tab: &str,
     policy: &PolicyConfig,
 ) -> Result<&'static str, String> {
@@ -1810,7 +1812,7 @@ fn resolve_ref_coords(
 
 /// Find a live interactive element by the name stored in the ref index.
 /// Walks shadow roots because Discord-style editors often live inside them.
-fn live_coords_for_name(app: &crate::app::Lumen, tab_id: &str, name: &str) -> Option<(i32, i32)> {
+fn live_coords_for_name(app: &crate::app::Anarc, tab_id: &str, name: &str) -> Option<(i32, i32)> {
     if name.is_empty() {
         return None;
     }
@@ -1843,7 +1845,7 @@ fn live_coords_for_name(app: &crate::app::Lumen, tab_id: &str, name: &str) -> Op
 
 /// Cached ref centers go stale the moment an SPA re-renders. Check that the
 /// point still sits on an interactive element before trusting it.
-fn coords_still_valid(app: &crate::app::Lumen, tab_id: &str, (x, y): (i32, i32)) -> bool {
+fn coords_still_valid(app: &crate::app::Anarc, tab_id: &str, (x, y): (i32, i32)) -> bool {
     let script = format!(
         r#"(() => {{
             const el = document.elementFromPoint({x}, {y});
@@ -1856,7 +1858,7 @@ fn coords_still_valid(app: &crate::app::Lumen, tab_id: &str, (x, y): (i32, i32))
 }
 
 fn resolve_target_coords(
-    app: &crate::app::Lumen,
+    app: &crate::app::Anarc,
     target: &str,
     tab_id: &str,
     state_lock: &std::sync::Arc<std::sync::Mutex<super::plugin::AgentState>>,
@@ -2021,7 +2023,7 @@ fn ref_name(
 /// Scroll a field into view and give it DOM focus before input events fire.
 /// Re-resolves by accessible name so a generation-bumped ref still finds its element.
 fn focus_field(
-    app: &crate::app::Lumen,
+    app: &crate::app::Anarc,
     tab_id: &str,
     x: i32,
     y: i32,
@@ -2053,7 +2055,7 @@ fn focus_field(
 /// Dispatch a direct DOM click. SPAs with delegated synthetic handlers can
 /// swallow CDP mouse events even when the element is visually at the right point.
 fn dom_click(
-    app: &crate::app::Lumen,
+    app: &crate::app::Anarc,
     tab: &str,
     x: i32,
     y: i32,
@@ -2078,7 +2080,7 @@ fn dom_click(
 }
 
 fn check_occlusion(
-    app: &crate::app::Lumen,
+    app: &crate::app::Anarc,
     tab_id: &str,
     x: i32,
     y: i32,

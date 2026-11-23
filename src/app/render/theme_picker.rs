@@ -122,7 +122,7 @@ fn color_position(color: u32) -> (f32, f32) {
     (hue, 1.0 - if max > 0.0 { delta / max / 0.8 } else { 0.0 })
 }
 
-impl Lumen {
+impl Anarc {
     pub(super) fn render_theme_picker(
         &self,
         _theme: visual::SpaceTheme,
@@ -172,7 +172,7 @@ impl Lumen {
             .h(px(220.0 * UI_SCALE))
             .flex_shrink_0()
             .rounded_lg()
-            .bg(rgb(picker_theme.surface))
+            .bg(crate::ui::visual::translucent_surface(picker_theme.surface, 0x30))
             .overflow_hidden()
             .child(measured(bounds.clone(), 0, true, 0.0))
             .on_mouse_down(

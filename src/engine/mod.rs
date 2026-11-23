@@ -52,6 +52,11 @@ struct EngineEvents {
     created: Vec<(String, Browser)>,
     plugin_events: Vec<(String, String)>,
     close_requests: Vec<String>,
+    /// Counts CEF close-request echoes expected from app-initiated
+    /// `close_browser` calls. Each echo is consumed once so it cannot close the
+    /// same tab twice (which re-unloads pinned tabs and cascades into opening
+    /// other tabs).
+    expected_close_requests: HashMap<String, usize>,
     live_share_space_request: Option<LiveShareSpaceRequest>,
     live_share_switch_space: Option<String>,
 }
@@ -281,7 +286,7 @@ pub fn should_store_favicon(
 
 fn favicon_debug(message: std::fmt::Arguments<'_>) {
     if std::env::var_os("ANARC_DEBUG_FAVICON").is_some_and(|value| value == "1") {
-        eprintln!("Lumen favicon: {message}");
+        eprintln!("Anarc favicon: {message}");
     }
 }
 
@@ -552,7 +557,7 @@ cef::wrap_app! {
                     "disable-sync",
                     "disable-breakpad",
                     "no-first-run",
-                    // Lumen's chrome is dark, so web content should request the
+                    // Anarc's chrome is dark, so web content should request the
                     // dark color scheme by default (prefers-color-scheme: dark).
                     "force-dark-mode",
                     "disable-chrome-runtime",
@@ -841,6 +846,18 @@ pub fn windows_key_code_for_key(key: &str) -> i32 {
         "\\" | "|" => 0xdc,
         "]" | "}" => 0xdd,
         "'" | "\"" => 0xde,
+        // Shifted digits share the physical US key of their unshifted digit.
+        // Without these, `#` maps to 0x23 (VK_END) and the CHAR event is lost.
+        ")" => 0x30,
+        "!" => 0x31,
+        "@" => 0x32,
+        "#" => 0x33,
+        "$" => 0x34,
+        "%" => 0x35,
+        "^" => 0x36,
+        "&" => 0x37,
+        "*" => 0x38,
+        "(" => 0x39,
         // Function keys
         "f1" => 0x70,
         "f2" => 0x71,
@@ -1044,7 +1061,7 @@ impl Drop for Engine {
                     .wait_timeout_while(count, Duration::from_secs(10), |count| *count != 0)
                     .unwrap();
                 if result.timed_out() && *count != 0 {
-                    eprintln!("Lumen CEF shutdown deferred: {count} browsers still closing");
+                    eprintln!("Anarc CEF shutdown deferred: {count} browsers still closing");
                     return;
                 }
             }
@@ -1127,6 +1144,20 @@ mod tests {
         assert!(!engine.pending_browsers.contains_key("personal-popup-1"));
         assert!(engine.canceled_browsers.contains("personal-popup-1"));
         assert!(!engine.has_browser("personal-popup-1"));
+    }
+
+    #[test]
+    fn app_initiated_close_echo_is_consumed_once() {
+        let mut engine = Engine::new();
+        engine.close_browser("tab-1");
+        {
+            let mut events = engine.events.lock().unwrap();
+            // First request is CEF's echo of our close; the second is a real
+            // page-initiated close that must still reach the app.
+            events.close_requests.push("tab-1".into());
+            events.close_requests.push("tab-1".into());
+        }
+        assert_eq!(engine.take_close_requests(), vec!["tab-1".to_owned()]);
     }
 
     #[test]
@@ -1284,6 +1315,28 @@ mod tests {
         assert_eq!(windows_key_code_for_key("Z"), 0x5a);
         assert_eq!(windows_key_code_for_key("0"), 0x30);
         assert_eq!(windows_key_code_for_key("9"), 0x39);
+    }
+
+    #[test]
+    fn windows_key_code_maps_shifted_digits_to_their_physical_keys() {
+        // Each symbol must reuse its digit's key code instead of colliding with
+        // a navigation key (`#` used to map to VK_END and could not be typed).
+        let cases = [
+            ("!", 0x31),
+            ("@", 0x32),
+            ("#", 0x33),
+            ("$", 0x34),
+            ("%", 0x35),
+            ("^", 0x36),
+            ("&", 0x37),
+            ("*", 0x38),
+            ("(", 0x39),
+            (")", 0x30),
+        ];
+        for (key, code) in cases {
+            assert_eq!(windows_key_code_for_key(key), code, "key {key}");
+        }
+        assert_ne!(windows_key_code_for_key("#"), windows_key_code_for_key("end"));
     }
 
     #[test]

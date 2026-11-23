@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Lumen MCP Server
+"""Anarc MCP Server
 
-Model Context Protocol (MCP) server for Lumen / Anarc browser plugin development.
+Model Context Protocol (MCP) server for Anarc / Anarc browser plugin development.
 Exposes tools, resources, and templates to scaffold, validate, test, build,
 install, package, and manage plugins, as well as inspect browser state.
 """
@@ -45,7 +45,7 @@ for candidate in [
 LUMEN_ROOT = ANARC_ROOT
 
 # Documentation References
-SPEC_MANIFEST = """# Lumen Plugin Manifest Specification (`lumen-plugin.toml`)
+SPEC_MANIFEST = """# Anarc Plugin Manifest Specification (`lumen-plugin.toml`)
 
 All plugins require a root `lumen-plugin.toml` manifest.
 
@@ -65,7 +65,7 @@ description = "Brief summary"      # Optional description
 3. `kind = "panel"`: HTML/CSS/JS sidebar views served via CEF under `lumen-plugin://<id>/`.
 """
 
-SPEC_PACKS = """# Lumen Declarative Packs Reference
+SPEC_PACKS = """# Anarc Declarative Packs Reference
 
 Declarative packs modify styles, scripts, keymaps, and themes without WASM overhead.
 
@@ -123,7 +123,7 @@ spring_damping = 32
 ```
 """
 
-SPEC_WASM = """# Lumen WASM Component Plugins Reference
+SPEC_WASM = """# Anarc WASM Component Plugins Reference
 
 WASM plugins run sandboxed WebAssembly components (`wasm32-wasip2`) with host imports defined in `wit/lumen.wit`.
 
@@ -160,7 +160,7 @@ cargo component build --target wasm32-wasip2 --release
 ```
 """
 
-SPEC_PANELS = """# Lumen Web Panels Reference
+SPEC_PANELS = """# Anarc Web Panels Reference
 
 Web panels provide embedded sidebar views rendered inside CEF with a secure `lumen-plugin://<id>/` origin and CSP.
 
@@ -287,7 +287,7 @@ def tool_spec(topic: str = "overview") -> str:
     elif topic in ("panel", "panels"):
         return SPEC_PANELS
     elif topic == "tokens":
-        return """# Lumen Theme Tokens
+        return """# Anarc Theme Tokens
 
 ```toml
 [pack.theme.tokens]
@@ -306,9 +306,9 @@ spring_stiffness = 380   # Spring responsiveness
 spring_damping = 32      # Oscillation damping
 ```
 """
-    return f"""# Lumen Plugin System Overview
+    return f"""# Anarc Plugin System Overview
 
-Lumen supports three plugin kinds:
+Anarc supports three plugin kinds:
 1. **Packs (`kind = "pack"`)**: Declarative themes, userstyles (CSS), userscripts (JS), search engines, and keymaps.
 2. **WASM Plugins (`kind = "wasm"`)**: Sandboxed WebAssembly components implementing `wit/lumen.wit`.
 3. **Web Panels (`kind = "panel"`)**: CEF sidebar views under `lumen-plugin://<id>/`.
@@ -345,7 +345,7 @@ def tool_scaffold(
     created_files: List[str] = []
 
     if not description:
-        description = f"{name} plugin for Lumen"
+        description = f"{name} plugin for Anarc"
 
     if kind == "pack":
         if not match_urls:
@@ -369,7 +369,7 @@ run_at = "document_start"
             styles_dir = out_dir / "styles"
             styles_dir.mkdir(exist_ok=True)
             css_file = styles_dir / "style.css"
-            css_file.write_text("/* Custom userstyle for Lumen */\nbody {\n  /* Add overrides here */\n}\n", encoding="utf-8")
+            css_file.write_text("/* Custom userstyle for Anarc */\nbody {\n  /* Add overrides here */\n}\n", encoding="utf-8")
             created_files.append("styles/style.css")
 
         elif pack_type == "userscript":
@@ -382,7 +382,7 @@ run_at = "document_idle"
             scripts_dir = out_dir / "scripts"
             scripts_dir.mkdir(exist_ok=True)
             js_file = scripts_dir / "main.js"
-            js_file.write_text("// Custom userscript for Lumen\nconsole.log('Lumen userscript active on:', window.location.href);\n", encoding="utf-8")
+            js_file.write_text("// Custom userscript for Anarc\nconsole.log('Anarc userscript active on:', window.location.href);\n", encoding="utf-8")
             created_files.append("scripts/main.js")
 
         elif pack_type == "theme":
@@ -565,7 +565,7 @@ Kind: `{kind}`
 {description}
 
 ### How to Install
-Run with the Lumen MCP tool:
+Run with the Anarc MCP tool:
 ```sh
 lumen-mcp install --plugin-path "{out_dir}" --symlink
 ```
@@ -630,7 +630,7 @@ def tool_validate(plugin_path: str) -> Dict[str, Any]:
             errors.append(err)
 
     if papi != "1":
-        errors.append(f"Unsupported 'plugin.api' '{papi}'; Lumen host currently requires api = '1'")
+        errors.append(f"Unsupported 'plugin.api' '{papi}'; Anarc host currently requires api = '1'")
 
     if pkind not in ("pack", "wasm", "panel"):
         errors.append(f"Invalid 'plugin.kind' '{pkind}'; must be 'pack', 'wasm', or 'panel'")
@@ -863,7 +863,7 @@ def tool_list(include_builtins: bool = True) -> Dict[str, Any]:
         ("lumen.stats", "Stats", "Performance metrics and resource counters"),
         ("lumen.reader", "Reader Mode", "Clean article distraction-free viewer"),
         ("lumen.shield", "Ad & Tracker Shield", "Built-in adblocking filters"),
-        ("lumen.split-view", "Split View", "Side-by-side tab panes"),
+        ("lumen.split-view", "Split View", "Up to four tab panes"),
     ]
     if include_builtins:
         for bid, bname, bdesc in builtins:
@@ -887,13 +887,14 @@ def tool_list(include_builtins: bool = True) -> Dict[str, Any]:
                         m = tomllib.loads(manifest_file.read_text(encoding="utf-8"))
                         p = m.get("plugin", {})
                         pid = p.get("id", item.name)
+                        enabled_by_default = bool(p.get("enabled_by_default", True))
                         installed.append({
                             "id": pid,
                             "name": p.get("name", item.name),
                             "version": p.get("version", "unknown"),
                             "kind": p.get("kind", "pack"),
                             "description": p.get("description", ""),
-                            "enabled": config_enabled.get(pid, True),
+                            "enabled": config_enabled.get(pid, enabled_by_default),
                             "path": str(item),
                             "is_symlink": item.is_symlink(),
                         })
@@ -1010,8 +1011,11 @@ def tool_browser_spaces(space_id: Optional[str] = None) -> Dict[str, Any]:
                 "id": t.get("id"),
                 "title": t.get("title", ""),
                 "url": t.get("url", ""),
-                "pinned": t.get("pinned", False),
-                "favorite": t.get("favorite", False),
+                # Favorites and pins are one kept-tab section. Emit both keys
+                # for backwards compatibility with older MCP clients.
+                "pinned": bool(t.get("pinned", False) or t.get("favorite", False)),
+                "favorite": bool(t.get("pinned", False) or t.get("favorite", False)),
+                "kept_group": t.get("kept_group"),
                 "state": t.get("state", "Loaded"),
             }
             for t in sp.get("tabs", [])
@@ -1234,25 +1238,25 @@ RESOURCES_REGISTRY = [
     },
     {
         "uri": "lumen://spec/manifest",
-        "name": "Lumen Plugin Manifest Specification (Legacy)",
+        "name": "Anarc Plugin Manifest Specification (Legacy)",
         "mimeType": "text/markdown",
         "description": "Documentation of lumen-plugin.toml configuration options and constraints.",
     },
     {
         "uri": "lumen://spec/wit",
-        "name": "Lumen WIT Guest-Host Interface (Legacy)",
+        "name": "Anarc WIT Guest-Host Interface (Legacy)",
         "mimeType": "text/plain",
         "description": "Canonical WebAssembly Component Model WIT interface definition.",
     },
     {
         "uri": "lumen://plugins/installed",
-        "name": "Installed Lumen Plugins (Legacy)",
+        "name": "Installed Anarc Plugins (Legacy)",
         "mimeType": "application/json",
         "description": "Live JSON list of all installed and active plugins.",
     },
     {
         "uri": "lumen://browser/spaces",
-        "name": "Lumen Open Spaces & Tabs (Legacy)",
+        "name": "Anarc Open Spaces & Tabs (Legacy)",
         "mimeType": "application/json",
         "description": "Live JSON state of all browser spaces and open tabs.",
     },
