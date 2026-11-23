@@ -2,6 +2,35 @@ use super::actions::single_line_paste;
 use super::*;
 use gpui_kit::{Focusable, WindowOptions};
 
+/// Tests that enable plugins call PluginConfig::save(), which targets the real
+/// user config by default. Redirect ANARC_CONFIG_DIR to a temporary directory
+/// so running the suite can never wipe the user's plugin toggles.
+struct IsolatedConfigDir {
+    previous: Option<std::ffi::OsString>,
+    path: std::path::PathBuf,
+}
+
+impl Drop for IsolatedConfigDir {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.previous {
+                Some(value) => std::env::set_var("ANARC_CONFIG_DIR", value),
+                None => std::env::remove_var("ANARC_CONFIG_DIR"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn isolated_config_dir(test: &str) -> IsolatedConfigDir {
+    let path = std::env::temp_dir().join(format!("anarc-plugin-config-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    let previous = std::env::var_os("ANARC_CONFIG_DIR");
+    unsafe { std::env::set_var("ANARC_CONFIG_DIR", &path) };
+    IsolatedConfigDir { previous, path }
+}
+
 fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
     crate::plugins::set_split_view_enabled_for_test(true);
     let address = cx.new(|cx| InputState::new(window, cx));
@@ -234,6 +263,7 @@ fn clicking_plugins_keeps_settings_open_over_a_blank_tab(cx: &mut gpui::TestAppC
 #[cfg(debug_assertions)]
 #[gpui::test]
 fn opening_a_panel_from_plugins_settings_focuses_its_tab(cx: &mut gpui::TestAppContext) {
+    let _config_guard = isolated_config_dir("open-panel");
     let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());

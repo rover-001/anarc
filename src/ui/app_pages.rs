@@ -166,26 +166,6 @@ fn settings_content(
             }),
         ))
         .child(settings_tab(
-            "Search",
-            SettingsSection::Search,
-            selected_section,
-            theme,
-            cx.listener(|this, _, _, cx| {
-                this.set_settings_section(SettingsSection::Search);
-                cx.notify();
-            }),
-        ))
-        .child(settings_tab(
-            "Privacy",
-            SettingsSection::Privacy,
-            selected_section,
-            theme,
-            cx.listener(|this, _, _, cx| {
-                this.set_settings_section(SettingsSection::Privacy);
-                cx.notify();
-            }),
-        ))
-        .child(settings_tab(
             "Shortcuts",
             SettingsSection::Shortcuts,
             selected_section,
@@ -216,14 +196,92 @@ fn settings_content(
                     cx.notify();
                 }),
             );
+            let search_choices = div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .child(action_button(
+                    if search_engine == SearchEngine::Google {
+                        "✓ Google"
+                    } else {
+                        "Google"
+                    },
+                    theme,
+                    cx.listener(|this, _, _, cx| {
+                        this.set_search_engine(SearchEngine::Google);
+                        cx.notify();
+                    }),
+                ))
+                .child(action_button(
+                    if search_engine == SearchEngine::Bing {
+                        "✓ Bing"
+                    } else {
+                        "Bing"
+                    },
+                    theme,
+                    cx.listener(|this, _, _, cx| {
+                        this.set_search_engine(SearchEngine::Bing);
+                        cx.notify();
+                    }),
+                ))
+                .child(action_button(
+                    if search_engine == SearchEngine::DuckDuckGo {
+                        "✓ DuckDuckGo"
+                    } else {
+                        "DuckDuckGo"
+                    },
+                    theme,
+                    cx.listener(|this, _, _, cx| {
+                        this.set_search_engine(SearchEngine::DuckDuckGo);
+                        cx.notify();
+                    }),
+                ));
+            let shield_control = if has_web_site {
+                crate::ui::plugin_manager::toggle_switch(
+                    "settings-site-protection".to_owned(),
+                    site_protection_enabled,
+                    theme,
+                    cx.listener(|this, _, _, cx| {
+                        this.toggle_shield_for_active_tab();
+                        cx.notify();
+                    }),
+                )
+            } else {
+                div()
+                    .text_sm()
+                    .text_color(rgb(theme.muted))
+                    .child("Open a site to change")
+                    .into_any_element()
+            };
+            let protection_text = if !has_web_site {
+                "Open a site to change"
+            } else if site_protection_enabled {
+                "On for this site"
+            } else {
+                "Off for this site"
+            };
             div()
                 .flex()
                 .flex_col()
                 .gap_4()
                 .child(setting_card(
+                    "Search",
+                    "Default engine",
+                    "Used for address-bar searches.",
+                    search_choices,
+                    theme,
+                ))
+                .child(setting_card(
+                    "Privacy",
+                    "Tracking protection",
+                    protection_text,
+                    shield_control,
+                    theme,
+                ))
+                .child(setting_card(
                     "Browsing data",
-                    "History and search suggestions",
-                    "Remove visited pages and saved address-bar searches.",
+                    "History & suggestions",
+                    "Clear visited pages and saved searches.",
                     clear_button,
                     theme,
                 ))
@@ -274,8 +332,8 @@ fn settings_content(
             );
             let theme_card = setting_card(
                 "Theme",
-                "Space accent color",
-                "Choose the accent used by this space's browser chrome.",
+                "Space accent",
+                "Accent color for this space.",
                 color_controls,
                 theme,
             );
@@ -284,13 +342,9 @@ fn settings_content(
                 if has_web_site {
                     "Current website"
                 } else {
-                    "Default zoom for new websites"
+                    "New websites"
                 },
-                if has_web_site {
-                    "Use + or − to adjust this website in 10% steps."
-                } else {
-                    "This default applies to new websites; + or − changes it in 10% steps."
-                },
+                "Adjust in 10% steps.",
                 zoom_controls,
                 theme,
             );
@@ -337,7 +391,7 @@ fn settings_content(
             let sidebar_card = setting_card(
                 "Sidebar",
                 "Collapsed appearance",
-                "Choose whether a collapsed sidebar is hidden, keeps tab icons, or opens when you point at the window edge.",
+                "Hidden, tab icons, or reveal on hover.",
                 sidebar_choices,
                 theme,
             );
@@ -349,90 +403,6 @@ fn settings_content(
                 .child(zoom_card)
                 .child(sidebar_card)
                 .into_any_element()
-        }
-        SettingsSection::Search => {
-            let choices = div()
-                .flex()
-                .flex_wrap()
-                .gap_2()
-                .child(action_button(
-                    if search_engine == SearchEngine::Google {
-                        "✓ Google"
-                    } else {
-                        "Google"
-                    },
-                    theme,
-                    cx.listener(|this, _, _, cx| {
-                        this.set_search_engine(SearchEngine::Google);
-                        cx.notify();
-                    }),
-                ))
-                .child(action_button(
-                    if search_engine == SearchEngine::Bing {
-                        "✓ Bing"
-                    } else {
-                        "Bing"
-                    },
-                    theme,
-                    cx.listener(|this, _, _, cx| {
-                        this.set_search_engine(SearchEngine::Bing);
-                        cx.notify();
-                    }),
-                ))
-                .child(action_button(
-                    if search_engine == SearchEngine::DuckDuckGo {
-                        "✓ DuckDuckGo"
-                    } else {
-                        "DuckDuckGo"
-                    },
-                    theme,
-                    cx.listener(|this, _, _, cx| {
-                        this.set_search_engine(SearchEngine::DuckDuckGo);
-                        cx.notify();
-                    }),
-                ));
-            setting_card(
-                "Address bar",
-                "Search engine",
-                &format!("Current: {}", search_engine.label()),
-                choices,
-                theme,
-            )
-            .into_any_element()
-        }
-        SettingsSection::Privacy => {
-            let shield_text = if !has_web_site {
-                "Open a website to change its protection setting".to_owned()
-            } else if site_protection_enabled {
-                "Protection is on for this website".to_owned()
-            } else {
-                "Protection is off for this website".to_owned()
-            };
-            let shield_control = if has_web_site {
-                crate::ui::plugin_manager::toggle_switch(
-                    "settings-site-protection".to_owned(),
-                    site_protection_enabled,
-                    theme,
-                    cx.listener(|this, _, _, cx| {
-                        this.toggle_shield_for_active_tab();
-                        cx.notify();
-                    }),
-                )
-            } else {
-                div()
-                    .text_sm()
-                    .text_color(rgb(theme.muted))
-                    .child("Unavailable")
-                    .into_any_element()
-            };
-            setting_card(
-                "Site protection",
-                "Tracking protection",
-                &shield_text,
-                shield_control,
-                theme,
-            )
-            .into_any_element()
         }
         SettingsSection::Shortcuts => section(
             "Keyboard shortcuts",

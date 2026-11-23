@@ -11,8 +11,6 @@ pub(crate) enum SettingsSection {
     #[default]
     General,
     Appearance,
-    Search,
-    Privacy,
     Shortcuts,
     Plugins,
 }

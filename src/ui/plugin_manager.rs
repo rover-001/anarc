@@ -434,7 +434,6 @@ fn plugin_row(
                         .gap_2()
                         .flex_shrink_0()
                         .debug_selector(|| format!("plugin-actions-{plugin_id}"))
-                        .child(control)
                         .child(if row.descriptor.kind == crate::plugin::PluginKind::Panel && row.enabled {
                             let callback = on_open.clone();
                             let handled = handled_by_control.clone();
@@ -486,7 +485,8 @@ fn plugin_row(
                                 .into_any_element()
                         } else {
                             div().into_any_element()
-                        }),
+                        })
+                        .child(control),
                 ),
         )
         .when(expanded, |card| {
