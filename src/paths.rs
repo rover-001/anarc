@@ -74,7 +74,7 @@ fn profile_from_cef_root(cef_root: PathBuf, space_id: &str) -> PathBuf {
     normalize_path_separators(cef_root.join(format!("space-{sanitized_id}")))
 }
 
-/// General Lumen cache location, reserved for non-profile caches.
+/// General Anarc cache location, reserved for non-profile caches.
 #[allow(dead_code)]
 pub fn cache_dir() -> PathBuf {
     resolve_cache_dir(

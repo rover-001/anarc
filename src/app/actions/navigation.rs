@@ -1,6 +1,6 @@
 use super::super::*;
 
-impl Lumen {
+impl Anarc {
     pub(crate) fn set_ad_blocker_enabled(&mut self, enabled: bool) {
         self.preferences.ad_blocker_enabled = enabled;
         self.engine.set_ad_blocker_enabled(enabled);
@@ -21,7 +21,7 @@ impl Lumen {
         if let Some(url) = url {
             let enabled = self.engine.toggle_shield_for_tab(&id, &url);
             eprintln!(
-                "Lumen shield {} for {}",
+                "Anarc shield {} for {}",
                 if enabled { "enabled" } else { "disabled" },
                 crate::shield::url_host(&url).as_deref().unwrap_or(&url)
             );
@@ -321,7 +321,7 @@ pub(in crate::app) fn single_line_paste(text: &str) -> Option<String> {
 }
 
 fn read_address_clipboard(
-    app: &gpui_kit::WeakEntity<Lumen>,
+    app: &gpui_kit::WeakEntity<Anarc>,
     cx: &mut gpui_kit::AsyncWindowContext,
 ) -> Option<String> {
     app.update(cx, |_app, cx| {

@@ -164,7 +164,7 @@ impl ShieldState {
                 }
             })
         {
-            eprintln!("Lumen filter engine thread failed to start: {error}");
+            eprintln!("Anarc filter engine thread failed to start: {error}");
         }
         if let Ok(mut instances) = shield_instances().lock() {
             instances.push(Arc::downgrade(&state));
@@ -173,7 +173,7 @@ impl ShieldState {
     }
 
     /// Replace only plugin-provided rules in this worker. Bundled EasyList,
-    /// Lumen's starter list and user filter files are rebuilt alongside them.
+    /// Anarc's starter list and user filter files are rebuilt alongside them.
     pub(crate) fn replace_pack_filter_lists(&self, lists: Vec<String>) {
         if let Ok(mut cache) = self.cache.lock() {
             cache.clear();
@@ -185,7 +185,7 @@ impl ShieldState {
             .matcher
             .try_send(MatcherMessage::ReplacePackLists(lists))
         {
-            eprintln!("Lumen could not queue pack filter update: {error}");
+            eprintln!("Anarc could not queue pack filter update: {error}");
         }
     }
 
@@ -354,7 +354,7 @@ impl ShieldState {
             true
         };
         if let Err(error) = persist_allowlist(&allowlist) {
-            eprintln!("Lumen cannot save shield settings: {error}");
+            eprintln!("Anarc cannot save shield settings: {error}");
         }
         enabled
     }
@@ -382,7 +382,7 @@ fn read_user_filter_lists() -> Vec<String> {
         .filter_map(|path| match std::fs::read_to_string(&path) {
             Ok(text) => Some(text),
             Err(error) => {
-                eprintln!("Lumen cannot read filter list {}: {error}", path.display());
+                eprintln!("Anarc cannot read filter list {}: {error}", path.display());
                 None
             }
         })
@@ -597,7 +597,7 @@ mod tests {
             assert!(engine.check_network_request(&request).should_block());
         }
         eprintln!(
-            "Lumen shield match cost: {:.3} µs/request",
+            "Anarc shield match cost: {:.3} µs/request",
             started.elapsed().as_secs_f64() * 1_000_000.0 / 10_000.0
         );
     }
@@ -614,7 +614,7 @@ mod tests {
             assert!(state.should_block(url, source, "script", "GET", "tab-a"));
         }
         eprintln!(
-            "Lumen shield request match (worker handoff): {:.3} µs/request",
+            "Anarc shield request match (worker handoff): {:.3} µs/request",
             started.elapsed().as_secs_f64() * 1_000_000.0 / 500.0
         );
         assert_eq!(state.blocked_counts().get("tab-a"), Some(&501));

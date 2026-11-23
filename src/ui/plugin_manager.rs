@@ -3,11 +3,14 @@
 
 use std::{cell::Cell, collections::HashSet, rc::Rc};
 
-use gpui_kit::{App, ClickEvent, IntoElement, Window, div, prelude::*, px, rgb};
+use gpui_kit::{AnimationExt as _, App, ClickEvent, IntoElement, Window, div, prelude::*, px, rgb};
 
 use crate::{
     plugin::{PluginKind, PluginRow, RuntimeStatus},
-    ui::visual::{SpaceTheme, UI_SCALE},
+    ui::{
+        motion,
+        visual::{SpaceTheme, UI_SCALE},
+    },
 };
 
 pub(crate) type ToggleCallback = Rc<dyn Fn(String, bool, &ClickEvent, &mut Window, &mut App)>;
@@ -538,35 +541,62 @@ fn plugin_row(
 }
 
 /// Compact on/off switch matching the toggle used by the Extensions menu.
+/// The thumb and track share a spring so a flip reads as a state change
+/// instead of an instant jump, and rapid re-toggles keep their momentum.
 pub(crate) fn toggle_switch(
     id: String,
     checked: bool,
     theme: SpaceTheme,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> gpui_kit::AnyElement {
+    let spring_id = format!("toggle-spring-{id}");
     div()
         .id(id)
         .flex_shrink_0()
         .w(px(34.0 * UI_SCALE))
         .h(px(20.0 * UI_SCALE))
         .rounded_full()
-        .bg(rgb(if checked { theme.accent } else { theme.border }))
         .flex()
         .items_center()
         .justify_start()
         .px(px(2.0 * UI_SCALE))
-        .child(
-            div()
-                .size(px(16.0 * UI_SCALE))
-                .rounded_full()
-                .bg(rgb(0xffffff))
-                .when(checked, |thumb| thumb.ml(px(14.0 * UI_SCALE))),
-        )
         .cursor_pointer()
         .hover(|style| style.opacity(0.92))
         .active(|style| style.opacity(0.88))
         .on_click(on_click)
+        .with_spring(
+            spring_id,
+            motion::toggle().to(if checked { 1.0 } else { 0.0 }),
+            move |track, value| {
+                let color_progress = motion::clamp_percentage(value);
+                // Let the thumb keep the spring's small overshoot; clamp only
+                // the colour channels so they always land inside the palette.
+                let offset_progress = if value.is_finite() {
+                    value.clamp(0.0, 1.1)
+                } else {
+                    0.0
+                };
+                track
+                    .bg(rgb(mix_color(theme.border, theme.accent, color_progress)))
+                    .child(
+                        div()
+                            .size(px(16.0 * UI_SCALE))
+                            .rounded_full()
+                            .bg(rgb(0xffffff))
+                            .ml(px(14.0 * UI_SCALE * offset_progress)),
+                    )
+            },
+        )
         .into_any_element()
+}
+
+fn mix_color(from: u32, to: u32, progress: f32) -> u32 {
+    let channel = |shift: u32| {
+        let a = ((from >> shift) & 0xff_u32) as f32;
+        let b = ((to >> shift) & 0xff_u32) as f32;
+        (a + (b - a) * progress).round() as u32
+    };
+    (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
 fn action_button(

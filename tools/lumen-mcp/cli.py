@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI interface for Lumen Plugin Tools & MCP Server.
+"""CLI interface for Anarc Plugin Tools & MCP Server.
 
 Can be run in terminal directly or spawned by MCP clients (Claude, Antigravity, Cursor, Zed).
 """
@@ -28,7 +28,7 @@ from server import (
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Lumen Browser Plugin Tool & MCP Server",
+        description="Anarc Browser Plugin Tool & MCP Server",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command", help="Subcommand to run")
@@ -58,7 +58,7 @@ def main():
     subparsers.add_parser("list", help="List installed plugins")
 
     # install
-    inst_parser = subparsers.add_parser("install", help="Install a plugin into Lumen")
+    inst_parser = subparsers.add_parser("install", help="Install a plugin into Anarc")
     inst_parser.add_argument("path", help="Plugin folder")
     inst_parser.add_argument("--symlink", action="store_true", help="Symlink for live editing")
     inst_parser.add_argument("--no-enable", action="store_true", help="Do not auto-enable in plugins.toml")

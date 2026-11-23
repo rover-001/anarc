@@ -34,21 +34,21 @@
 
 Output:
 ```text
-[Lumen Live Share] Running on http://0.0.0.0:7433
+[Anarc Live Share] Running on http://0.0.0.0:7433
 [Tailscale IP] 100.120.139.17
 [Share Address] 100.120.139.17:7433
 ```
 
 ### 2. Share a Space (User A / Host)
 
-1. Open the Live Share panel in Lumen (`lumen-plugin://com.lumen.live-share/index.html`) or visit `http://localhost:7433`.
+1. Open the Live Share panel in Anarc (`lumen-plugin://com.lumen.live-share/index.html`) or visit `http://localhost:7433`.
 2. Under **"1. Share a Space"**, select the space you want to share from the dropdown.
 3. Click **"Share Space"**.
 4. Click **"Copy Share Link"** (or give your partner your Tailscale IP: `100.120.139.17:7433`).
 
 ### 3. Connect to a Space (User B / Peer)
 
-1. Open the Live Share panel in your Lumen browser.
+1. Open the Live Share panel in your Anarc browser.
 2. Under **"2. Or Connect to Peer's Tailscale Space"**, enter User A's Tailscale address (e.g. `100.120.139.17:7433`).
 3. Click **"Connect"**.
 4. The shared space will automatically sync into your browser as `[Shared] <Space Name>`.
@@ -56,7 +56,7 @@ Output:
 ### 4. Co-Browsing & Searching
 
 - **Search**: Type any query into the search box and click **"Launch"** (or press Enter). It opens a new tab in the shared space on both machines simultaneously.
-- **Open in Lumen**: Click **"Open"** on any tab to view it in your local browser window.
+- **Open in Anarc**: Click **"Open"** on any tab to view it in your local browser window.
 - **Close**: Click **"×"** to close the tab for both peers.
 
 ---

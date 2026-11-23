@@ -286,7 +286,7 @@ pub fn should_store_favicon(
 
 fn favicon_debug(message: std::fmt::Arguments<'_>) {
     if std::env::var_os("ANARC_DEBUG_FAVICON").is_some_and(|value| value == "1") {
-        eprintln!("Lumen favicon: {message}");
+        eprintln!("Anarc favicon: {message}");
     }
 }
 
@@ -557,7 +557,7 @@ cef::wrap_app! {
                     "disable-sync",
                     "disable-breakpad",
                     "no-first-run",
-                    // Lumen's chrome is dark, so web content should request the
+                    // Anarc's chrome is dark, so web content should request the
                     // dark color scheme by default (prefers-color-scheme: dark).
                     "force-dark-mode",
                     "disable-chrome-runtime",
@@ -1061,7 +1061,7 @@ impl Drop for Engine {
                     .wait_timeout_while(count, Duration::from_secs(10), |count| *count != 0)
                     .unwrap();
                 if result.timed_out() && *count != 0 {
-                    eprintln!("Lumen CEF shutdown deferred: {count} browsers still closing");
+                    eprintln!("Anarc CEF shutdown deferred: {count} browsers still closing");
                     return;
                 }
             }

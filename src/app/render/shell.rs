@@ -2,7 +2,7 @@ use super::*;
 
 use super::super::actions::peek::{PEEK_HEADER_HEIGHT, peek_layout};
 
-impl Lumen {
+impl Anarc {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn render_shell(
         &mut self,
@@ -98,7 +98,7 @@ impl Lumen {
                             cx,
                         );
                     }
-                    if this.split_resizing {
+                    if this.split_resizing || this.split_resizing_horizontal {
                         let bounds = window.bounds();
                         let sidebar = this.effective_sidebar_width();
                         let card_left = if sidebar_on_right {
@@ -108,11 +108,23 @@ impl Lumen {
                         };
                         let card_width =
                             f32::from(bounds.size.width) - sidebar - 2.0 * CONTENT_BEZEL_X;
-                        this.split_ratio = split_view::ratio_at_pointer(
-                            f32::from(event.position.x),
-                            card_left,
-                            card_width,
-                        );
+                        if this.split_resizing {
+                            this.split_ratio = split_view::ratio_at_pointer(
+                                f32::from(event.position.x),
+                                card_left,
+                                card_width,
+                            );
+                        }
+                        if this.split_resizing_horizontal {
+                            let card_height = f32::from(bounds.size.height)
+                                - topbar_height
+                                - CONTENT_BEZEL_BOTTOM;
+                            this.split_ratio_y = split_view::ratio_y_at_pointer(
+                                f32::from(event.position.y),
+                                topbar_height,
+                                card_height,
+                            );
+                        }
                         cx.notify();
                     }
                     if this.sidebar_resizing {
@@ -132,7 +144,7 @@ impl Lumen {
                 gpui_kit::MouseButton::Left,
                 cx.listener(move |this, _, _window, cx| {
                     #[cfg(not(test))]
-                    let finish_split_resize = this.split_resizing;
+                    let finish_split_resize = this.split_resizing || this.split_resizing_horizontal;
                     #[cfg(not(test))]
                     if this.sidebar_resizing || finish_split_resize {
                         let bounds = _window.bounds();
@@ -144,20 +156,14 @@ impl Lumen {
                             (f32::from(bounds.size.height) - topbar_height - CONTENT_BEZEL_BOTTOM)
                                 .max(100.0) as i32;
                         let exact_sizes = if let Some(pair) = this.current_split_pair() {
-                            let (left, right) =
-                                split_view::pane_widths(content_width, this.split_ratio);
-                            vec![
-                                split_view::BrowserSize {
-                                    tab_id: pair.first,
-                                    width: left.max(1.0) as i32,
-                                    height,
-                                },
-                                split_view::BrowserSize {
-                                    tab_id: pair.second,
-                                    width: right.max(1.0) as i32,
-                                    height,
-                                },
-                            ]
+                            this.split_browser_sizes(&pair, content_width, height as f32)
+                                .into_iter()
+                                .map(|(tab_id, width, pane_height)| split_view::BrowserSize {
+                                    tab_id,
+                                    width,
+                                    height: pane_height,
+                                })
+                                .collect()
                         } else {
                             this.active_space()
                                 .active
@@ -180,9 +186,13 @@ impl Lumen {
                             },
                         );
                     }
-                    if this.sidebar_resizing || this.split_resizing {
+                    if this.sidebar_resizing
+                        || this.split_resizing
+                        || this.split_resizing_horizontal
+                    {
                         this.sidebar_resizing = false;
                         this.split_resizing = false;
+                        this.split_resizing_horizontal = false;
                         this.save_state();
                         cx.notify();
                     }
@@ -535,8 +545,13 @@ impl Lumen {
                 let total_width = f32::from(window.bounds().size.width)
                     - viewport_sidebar
                     - 2.0 * CONTENT_BEZEL_X;
+                let total_height =
+                    f32::from(window.bounds().size.height) - topbar_height - CONTENT_BEZEL_BOTTOM;
                 let (left_width, right_width) =
                     split_view::pane_widths(total_width, self.split_ratio);
+                let (top_height, bottom_height) =
+                    split_view::pane_heights(total_height, self.split_ratio_y);
+                let quad = split_pair.as_ref().is_some_and(|pair| pair.is_quad());
                 let left_tab_id = split_pair
                     .as_ref()
                     .map(|pair| pair.first.clone())
@@ -558,6 +573,8 @@ impl Lumen {
                     self.web_viewport.update(cx, |viewport, cx| {
                         let mut changed = viewport.set_theme(theme);
                         changed |= viewport.set_fullscreen(false);
+                        changed |= viewport.set_split_grid(quad);
+                        changed |= viewport.set_pane_y_offset(0.0);
                         if left_image.is_none()
                             && (active_tab_url.is_empty()
                                 || active_tab_url == "about:blank"
@@ -599,6 +616,8 @@ impl Lumen {
                     let right_edge_color = None;
                     self.second_web_viewport.update(cx, |viewport, cx| {
                         let mut changed = viewport.set_theme(theme);
+                        changed |= viewport.set_split_grid(quad);
+                        changed |= viewport.set_pane_y_offset(0.0);
                         changed |= viewport.set_frame(
                             right_tab_id.clone(),
                             viewport_sidebar,
@@ -615,6 +634,53 @@ impl Lumen {
                         }
                     });
                 }
+                if quad
+                    && let Some(pair) = split_pair.as_ref()
+                {
+                    let bottom_ids = [pair.third.clone(), pair.fourth.clone()];
+                    for (offset, tab_id) in bottom_ids.into_iter().flatten().enumerate() {
+                        let pane_index = offset + 2;
+                        let image = self.engine.get_image(&tab_id);
+                        let cursor = self.engine.get_cursor(&tab_id);
+                        #[cfg(not(test))]
+                        let frame_matches = self
+                            .resize_drag
+                            .target_size(&tab_id)
+                            .is_some_and(|(w, h)| self.engine.frame_matches_size(&tab_id, w, h));
+                        #[cfg(not(test))]
+                        let edge_color = self.resize_drag.edge_color_until_frame(&tab_id, frame_matches);
+                        #[cfg(test)]
+                        let edge_color = None;
+                        let viewport = if pane_index == 2 {
+                            &self.third_web_viewport
+                        } else {
+                            &self.fourth_web_viewport
+                        };
+                        viewport.update(cx, |viewport, cx| {
+                            let mut changed = viewport.set_theme(theme);
+                            changed |= viewport.set_split_grid(true);
+                            changed |= viewport.set_pane_y_offset(top_height + DIVIDER_WIDTH);
+                            changed |= viewport.set_frame(
+                                tab_id,
+                                viewport_sidebar,
+                                image,
+                                cursor,
+                                Vec::new(),
+                                if pane_index == 2 {
+                                    0.0
+                                } else {
+                                    left_width + DIVIDER_WIDTH
+                                },
+                                pane_index,
+                                true,
+                                edge_color,
+                            );
+                            if changed {
+                                cx.notify();
+                            }
+                        });
+                    }
+                }
                 div()
                     .id("web-content-card")
                     .flex_1()
@@ -624,6 +690,116 @@ impl Lumen {
                     .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
                     .overflow_hidden()
                     .child(if let Some(split_pair) = split_pair.as_ref() {
+                        if quad {
+                            // No per-pane entrance spring: four concurrent springs
+                            // force full-window animation frames on every split into
+                            // the grid, which is visible as jank on slower machines.
+                            let pane =
+                                |view: gpui_kit::AnyView, width: f32, height: f32, _key: String| {
+                                    div()
+                                        .w(px(width))
+                                        .h(px(height))
+                                        .child(view.cached(StyleRefinement::default().size_full()))
+                                };
+                            let top_row = div()
+                                .id("split-row-top")
+                                .w_full()
+                                .h(px(top_height))
+                                .flex()
+                                .child(pane(
+                                    AnyView::from(self.web_viewport.clone()),
+                                    left_width,
+                                    top_height,
+                                    split_pair.first.clone(),
+                                ))
+                                .child(
+                                    div()
+                                        .id("split-divider")
+                                        .w(px(DIVIDER_HIT_WIDTH))
+                                        .mx(px((DIVIDER_WIDTH - DIVIDER_HIT_WIDTH) / 2.0))
+                                        .h_full()
+                                        .cursor_col_resize()
+                                        .on_mouse_down(
+                                            gpui_kit::MouseButton::Left,
+                                            cx.listener(|this, _, _window, cx| {
+                                                this.split_resizing = true;
+                                                #[cfg(not(test))]
+                                                this.begin_browser_resize_drag(
+                                                    _window, true, true,
+                                                );
+                                                cx.notify();
+                                            }),
+                                        ),
+                                )
+                                .child(pane(
+                                    AnyView::from(self.second_web_viewport.clone()),
+                                    right_width,
+                                    top_height,
+                                    split_pair.second.clone(),
+                                ));
+                            let bottom_row = div()
+                                .id("split-row-bottom")
+                                .w_full()
+                                .h(px(bottom_height))
+                                .flex()
+                                .child(pane(
+                                    AnyView::from(self.third_web_viewport.clone()),
+                                    left_width,
+                                    bottom_height,
+                                    split_pair.third.clone().unwrap_or_default(),
+                                ))
+                                .child(
+                                    div()
+                                        .id("split-divider-bottom")
+                                        .w(px(DIVIDER_HIT_WIDTH))
+                                        .mx(px((DIVIDER_WIDTH - DIVIDER_HIT_WIDTH) / 2.0))
+                                        .h_full()
+                                        .cursor_col_resize()
+                                        .on_mouse_down(
+                                            gpui_kit::MouseButton::Left,
+                                            cx.listener(|this, _, _window, cx| {
+                                                this.split_resizing = true;
+                                                #[cfg(not(test))]
+                                                this.begin_browser_resize_drag(
+                                                    _window, true, true,
+                                                );
+                                                cx.notify();
+                                            }),
+                                        ),
+                                )
+                                .child(pane(
+                                    AnyView::from(self.fourth_web_viewport.clone()),
+                                    right_width,
+                                    bottom_height,
+                                    split_pair.fourth.clone().unwrap_or_default(),
+                                ));
+                            div()
+                                .id("split-viewports-quad")
+                                .size_full()
+                                .flex()
+                                .flex_col()
+                                .child(top_row)
+                                .child(
+                                    div()
+                                        .id("split-divider-horizontal")
+                                        .h(px(DIVIDER_HIT_WIDTH))
+                                        .my(px((DIVIDER_WIDTH - DIVIDER_HIT_WIDTH) / 2.0))
+                                        .w_full()
+                                        .cursor_row_resize()
+                                        .on_mouse_down(
+                                            gpui_kit::MouseButton::Left,
+                                            cx.listener(|this, _, _window, cx| {
+                                                this.split_resizing_horizontal = true;
+                                                #[cfg(not(test))]
+                                                this.begin_browser_resize_drag(
+                                                    _window, true, true,
+                                                );
+                                                cx.notify();
+                                            }),
+                                        ),
+                                )
+                                .child(bottom_row)
+                        } else {
                         div()
                             .id("split-viewports")
                             .size_full()
@@ -656,7 +832,7 @@ impl Lumen {
                                         cx.listener(|this, _, _window, cx| {
                                             this.split_resizing = true;
                                             #[cfg(not(test))]
-                                            this.begin_browser_resize_drag(_window, true, false);
+                                            this.begin_browser_resize_drag(_window, true, true);
                                             cx.notify();
                                         }),
                                     )
@@ -686,6 +862,7 @@ impl Lumen {
                                             .cached(StyleRefinement::default().size_full()),
                                     ),
                             )
+                    }
                     } else if active_tab_url == "lumen://welcome"
                         || active_tab_url == "anarc://welcome"
                         || active_tab_url == "about:blank"
@@ -1350,15 +1527,19 @@ impl Lumen {
                 && this.current_split_pair().is_some()
                 && matches!(key.as_str(), "left" | "arrowleft" | "right" | "arrowright")
             {
+                let pane_count = this
+                    .current_split_pair()
+                    .map_or(2, |pair| pair.pane_count());
                 let pane_index = if matches!(key.as_str(), "left" | "arrowleft") {
-                    0
+                    this.focused_pane.saturating_sub(1)
                 } else {
-                    1
+                    (this.focused_pane + 1).min(pane_count - 1)
                 };
                 this.set_focused_pane(pane_index);
                 if let Some(pair) = this.current_split_pair() {
-                    this.engine.set_focus(&pair.first, false);
-                    this.engine.set_focus(&pair.second, false);
+                    for tab_id in pair.panes() {
+                        this.engine.set_focus(tab_id, false);
+                    }
                 }
                 let focused = this.focused_tab_id().to_string();
                 this.engine.set_focus(&focused, true);

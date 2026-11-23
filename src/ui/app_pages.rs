@@ -6,7 +6,7 @@ use gpui_kit::{
 };
 
 use crate::app::SettingsSection;
-use crate::app::{AppPage, Lumen};
+use crate::app::{AppPage, Anarc};
 use crate::engine::DownloadRecord;
 use crate::settings::{SearchEngine, SidebarMode};
 use crate::ui::visual::{self, SpaceTheme, UI_SCALE};
@@ -27,7 +27,7 @@ pub fn render(
     pending_plugin_review: Option<crate::ui::plugin_manager::PluginReview>,
     plugin_action_error: Option<String>,
     expanded_plugins: HashSet<String>,
-    cx: &mut Context<Lumen>,
+    cx: &mut Context<Anarc>,
 ) -> gpui_kit::AnyElement {
     let (title, icon) = match page {
         AppPage::Settings => ("Settings", IconName::Settings),
@@ -138,7 +138,7 @@ fn settings_content(
     pending_plugin_review: Option<crate::ui::plugin_manager::PluginReview>,
     plugin_action_error: Option<String>,
     expanded_plugins: HashSet<String>,
-    cx: &mut Context<Lumen>,
+    cx: &mut Context<Anarc>,
 ) -> gpui_kit::AnyElement {
     let tabs = div()
         .w_full()
@@ -409,7 +409,7 @@ fn settings_content(
                         ("Ctrl + Tab", "Next tab"),
                         ("Ctrl + Shift + Tab", "Previous tab"),
                         ("Ctrl + 1 … 9", "Jump to tab (9 = last)"),
-                        ("Ctrl + Shift + S", "Split active tab"),
+                        ("Ctrl + Shift + S", "Split / add pane pair (up to 4)"),
                         ("Ctrl + Shift + W", "Exit split view"),
                         ("Ctrl + Alt + ← / →", "Focus split pane"),
                     ],
@@ -513,7 +513,7 @@ fn plugin_manager_content(
     pending_review: Option<crate::ui::plugin_manager::PluginReview>,
     feedback: Option<String>,
     expanded: HashSet<String>,
-    cx: &mut Context<Lumen>,
+    cx: &mut Context<Anarc>,
 ) -> gpui_kit::AnyElement {
     use std::rc::Rc;
 

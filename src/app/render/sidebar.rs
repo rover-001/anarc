@@ -1,6 +1,6 @@
 use super::*;
 
-impl Lumen {
+impl Anarc {
     pub(super) fn render_sidebar(
         &mut self,
         theme: visual::SpaceTheme,
@@ -164,7 +164,7 @@ impl Lumen {
             let is_split_member = |id: &str| {
                 stored_split_pair
                     .as_ref()
-                    .is_some_and(|pair| pair.first == id || pair.second == id)
+                    .is_some_and(|pair| pair.panes().contains(&id))
             };
             let tab_flags = |id: &str| -> Option<(bool, Option<String>)> {
                 active_space
@@ -352,7 +352,7 @@ impl Lumen {
                         .rounded_xl()
                         .border_1()
                         .border_dashed()
-                        .border_color(rgb(theme.border_hover))
+                        .border_color(rgb(0x00000000))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -629,10 +629,17 @@ impl Lumen {
             sidebar_content = sidebar_content.child(folders_section);
 
             if let Some(pair) = &stored_split_pair {
-                let first = tabs.iter().find(|(id, _, _)| id == &pair.first);
-                let second = tabs.iter().find(|(id, _, _)| id == &pair.second);
-                if let (Some(first), Some(second)) = (first, second) {
-                    let group_name = tab_list::group_label(&first.1, &second.1);
+                let members = pair
+                    .panes()
+                    .into_iter()
+                    .filter_map(|id| tabs.iter().find(|(tab_id, _, _)| tab_id == id))
+                    .collect::<Vec<_>>();
+                if !members.is_empty() {
+                    let first = members[0];
+                    let second = members[1];
+                    let group_name = tab_list::group_labels(
+                        &members.iter().map(|tab| tab.1.clone()).collect::<Vec<_>>(),
+                    );
                     let group_key = format!("split-{}-{}", pair.first, pair.second);
                     let expanded = self.split_group_expanded;
                     crate::engine::log_favicon_row_rendered(&first.0, first.2.is_some());
@@ -661,8 +668,7 @@ impl Lumen {
                             .into_any_element()
                     };
                     let group_active = !expanded
-                        && (active_tab_id.as_deref() == Some(pair.first.as_str())
-                            || active_tab_id.as_deref() == Some(pair.second.as_str()));
+                        && pair.panes().contains(&active_tab_id.as_deref().unwrap_or_default());
                     let group_row = div()
                         .id("split-tab-group")
                         .w_full()
@@ -745,7 +751,7 @@ impl Lumen {
                                 at.elapsed() < ui::motion::row_enter().duration() * 2
                             });
                         let mut member_rows = Vec::new();
-                        for (pane_index, member) in [first, second].into_iter().enumerate() {
+                        for (pane_index, member) in members.into_iter().enumerate() {
                             let member_id = member.0.clone();
                             let member_selected =
                                 active_tab_id.as_deref() == Some(member_id.as_str());
@@ -895,6 +901,11 @@ impl Lumen {
                 let close_id = tab_id.clone();
                 let before_target = id.clone();
                 let after_target = id.clone();
+                let is_blank_tab = active_space
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.id == *id)
+                    .is_some_and(|tab| tab.url.is_empty() || tab.url == "about:blank");
                 let drag_value = TabDrag {
                     tab_id: id.clone(),
                     favicon: favicon.clone(),
@@ -1007,25 +1018,30 @@ impl Lumen {
                                 },
                             ),
                         )
-                        .on_drag(
-                            drag_value,
-                            move |drag: &TabDrag, pointer_offset, _window, cx: &mut gpui_kit::App| {
-                                drag_app_view
-                                    .update(cx, |this, cx| {
-                                        this.kept_drag_source_id = None;
-                                        this.kept_drag_hovered_tab = None;
-                                        this.kept_drag_hover_after = false;
-                                        this.kept_section_drag_hovered = false;
-                                        cx.notify();
+                        .when(!is_blank_tab, |row| {
+                            row.on_drag(
+                                drag_value,
+                                move |drag: &TabDrag,
+                                      pointer_offset,
+                                      _window,
+                                      cx: &mut gpui_kit::App| {
+                                    drag_app_view
+                                        .update(cx, |this, cx| {
+                                            this.kept_drag_source_id = None;
+                                            this.kept_drag_hovered_tab = None;
+                                            this.kept_drag_hover_after = false;
+                                            this.kept_section_drag_hovered = false;
+                                            cx.notify();
+                                        })
+                                        .ok();
+                                    let favicon = drag.favicon.clone();
+                                    cx.new(|_| TabDragGhost {
+                                        favicon,
+                                        pointer_offset,
                                     })
-                                    .ok();
-                                let favicon = drag.favicon.clone();
-                                cx.new(|_| TabDragGhost {
-                                    favicon,
-                                    pointer_offset,
-                                })
-                            },
-                        )
+                                },
+                            )
+                        })
                         .drag_over::<TabDrag>(move |style, _, _, app| {
                             drag_over_view
                                 .update(app, |this, cx| {

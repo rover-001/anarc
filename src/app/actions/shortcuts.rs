@@ -1,6 +1,6 @@
 use super::super::*;
 
-impl Lumen {
+impl Anarc {
     pub(crate) fn cycle_tab(&mut self, reverse: bool) {
         let Some(space) = self
             .spaces

@@ -1,13 +1,13 @@
 # Anarc
 
-**Anarc is a keyboard-first browser for Linux.** Organize tabs into spaces, keep your go-to sites in the sidebar, and work across two pages in a split view. Anarc uses a native Rust interface built with GPUI Kit and renders web pages with Chromium Embedded Framework (CEF).
+**Anarc is a keyboard-first browser for Linux.** Organize tabs into spaces, keep your go-to sites in the sidebar, and work across up to four pages in a split view. Anarc uses a native Rust interface built with GPUI Kit and renders web pages with Chromium Embedded Framework (CEF).
 
 [![Anarc browser demo showing the Personal space and sidebar](assets/anarc-screenshot.png)](https://anarc.pages.dev/#workspace)
 
 ## Features
 
 - **Spaces** with their own colors, pinned tabs, favorites, folders, and browser profiles.
-- **Split views** for viewing tabs side by side with a draggable divider.
+- **Split views** for up to four tabs in a 2x2 grid with draggable dividers.
 - **Command palette** for switching tabs, searching history, and running browser commands.
 - **Built-in Shield** for blocking ads and trackers and upgrading eligible HTTP URLs to HTTPS.
 - **Reader mode** and an importer for bookmarks from Chrome, Chromium, Brave, and Edge.
@@ -63,7 +63,7 @@ To run directly from the checkout, use `cargo run --locked --release`. For a bui
 | `Ctrl+T` / `Ctrl+W` | Open or close a tab |
 | `Ctrl+Shift+T` | Reopen a closed tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Cycle through tabs |
-| `Ctrl+Shift+S` | Split the view |
+| `Ctrl+Shift+S` | Split the view / add the next pane pair (max 4) |
 | `Ctrl+F` | Find on the current page |
 | `Ctrl+Shift+B` | Toggle Shield for the active tab |
 

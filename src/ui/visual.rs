@@ -1,9 +1,9 @@
-/// Global density adjustment for all Lumen UI dimensions.
+/// Global density adjustment for all Anarc UI dimensions.
 pub const UI_SCALE: f32 = 0.85;
 
 /// Shared chrome and viewport geometry, in GPUI logical pixels.
-pub const TOPBAR_HEIGHT: f32 = 52.0 * UI_SCALE;
-pub const ADDRESS_BAR_HEIGHT: f32 = 36.0 * UI_SCALE;
+pub const TOPBAR_HEIGHT: f32 = 44.0 * UI_SCALE;
+pub const ADDRESS_BAR_HEIGHT: f32 = 30.0 * UI_SCALE;
 pub const NAV_BUTTON_SIZE: f32 = 28.0 * UI_SCALE;
 pub const TAB_ROW_HEIGHT: f32 = 36.0 * UI_SCALE;
 /// Shared horizontal geometry for tab, split, and new-tab rows.
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn viewport_origin_matches_scaled_topbar_height() {
-        assert_eq!(TOPBAR_HEIGHT, 52.0 * UI_SCALE);
+        assert_eq!(TOPBAR_HEIGHT, 44.0 * UI_SCALE);
     }
 
     #[test]

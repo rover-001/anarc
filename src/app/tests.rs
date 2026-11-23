@@ -31,12 +31,12 @@ fn isolated_config_dir(test: &str) -> IsolatedConfigDir {
     IsolatedConfigDir { previous, path }
 }
 
-fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
+fn test_app(window: &mut Window, cx: &mut Context<Anarc>) -> Anarc {
     crate::plugins::set_split_view_enabled_for_test(true);
     let address = cx.new(|cx| InputState::new(window, cx));
     address.update(cx, |input, cx| input.focus(window, cx));
     let address_subscription =
-        cx.subscribe(&address, |app: &mut Lumen, _, event: &InputEvent, cx| {
+        cx.subscribe(&address, |app: &mut Anarc, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 app.address_editing = true;
                 let text = app.address.read(cx).value().to_string();
@@ -48,7 +48,7 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
     let find_input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in page"));
     let command_input =
         cx.new(|cx| InputState::new(window, cx).placeholder("Search tabs, history, and actions"));
-    let command_subscription = cx.subscribe(&command_input, |this: &mut Lumen, _, event, cx| {
+    let command_subscription = cx.subscribe(&command_input, |this: &mut Anarc, _, event, cx| {
         if matches!(event, InputEvent::Change) {
             this.selected_command = 0;
             cx.notify();
@@ -58,7 +58,7 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
     let panel_registry = crate::plugin::new_panel_registry();
     let mut engine = engine::Engine::new();
     engine.set_panel_registry(panel_registry.clone());
-    Lumen {
+    Anarc {
         spaces,
         active_space,
         sidebar_collapsed: false,
@@ -95,6 +95,16 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
             let focus_handle = cx.focus_handle();
             cx.new(|_| WebViewport::new(root_entity, focus_handle))
         },
+        third_web_viewport: {
+            let root_entity = cx.weak_entity();
+            let focus_handle = cx.focus_handle();
+            cx.new(|_| WebViewport::new(root_entity, focus_handle))
+        },
+        fourth_web_viewport: {
+            let root_entity = cx.weak_entity();
+            let focus_handle = cx.focus_handle();
+            cx.new(|_| WebViewport::new(root_entity, focus_handle))
+        },
         peek_web_viewport: {
             let root_entity = cx.weak_entity();
             let focus_handle = cx.focus_handle();
@@ -105,7 +115,9 @@ fn test_app(window: &mut Window, cx: &mut Context<Lumen>) -> Lumen {
         peek_focused: false,
         focused_pane: 0,
         split_ratio: 0.5,
+        split_ratio_y: 0.5,
         split_resizing: false,
+        split_resizing_horizontal: false,
         _address_subscription: address_subscription,
         _command_subscription: command_subscription,
         show_find: false,
@@ -339,10 +351,7 @@ fn split_shortcuts_create_focus_and_exit_the_pane_pair(cx: &mut gpui::TestAppCon
     view.read_with(cx, |app, _| {
         assert_eq!(
             app.current_split_pair(),
-            Some(SplitPair {
-                first: "tab-1".into(),
-                second: "tab-2".into(),
-            })
+            Some(SplitPair::new("tab-1".into(), "tab-2".into()))
         );
     });
     dispatch_test_key(cx, handle, "ctrl-shift-w");
@@ -362,6 +371,77 @@ fn split_shortcuts_create_focus_and_exit_the_pane_pair(cx: &mut gpui::TestAppCon
     view.read_with(cx, |app, _| {
         assert_eq!(app.focused_pane, 0);
         assert!(app.current_split_pair().is_none());
+    });
+}
+
+#[gpui::test]
+fn split_can_extend_to_four_panes(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.add_tab();
+        app.active_space_mut().active = Some("tab-1".into());
+        app.split_active_with_next();
+        assert_eq!(app.current_split_pair().unwrap().pane_count(), 2);
+
+        app.split_active_with_next();
+        let pair = app.current_split_pair().unwrap();
+        assert!(pair.is_quad());
+        assert_eq!(pair.panes().len(), 4);
+
+        // A fifth split is a no-op; focus cycles through all four panes.
+        app.split_active_with_next();
+        assert_eq!(app.current_split_pair().unwrap().pane_count(), 4);
+        app.set_focused_pane(3);
+        assert_eq!(app.focused_tab_id(), pair.panes()[3]);
+
+        app.exit_split();
+        assert!(app.current_split_pair().is_none());
+        assert_eq!(app.focused_pane, 0);
+    });
+}
+
+#[gpui::test]
+fn dropping_a_tab_on_a_pane_builds_the_split(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.add_tab();
+        app.add_tab();
+        for tab in &mut app.active_space_mut().tabs {
+            if tab.url == "about:blank" {
+                tab.url = "https://example.com/".into();
+            }
+        }
+        app.active_space_mut().active = Some("tab-1".into());
+        app.drop_tab_into_pane("tab-2", 1);
+        let pair = app.current_split_pair().unwrap();
+        assert_eq!(pair.first, "tab-1");
+        assert_eq!(pair.second, "tab-2");
+        assert_eq!(app.focused_pane, 1);
+
+        app.drop_tab_into_pane("tab-3", 1);
+        let pair = app.current_split_pair().unwrap();
+        assert!(pair.is_quad());
+        assert_eq!(pair.fourth.as_deref(), Some("tab-3"));
     });
 }
 
@@ -794,10 +874,7 @@ fn split_with_context_flow_uses_the_clicked_tab_and_selected_target(cx: &mut gpu
     view.read_with(cx, |app, _| {
         assert_eq!(
             app.current_split_pair(),
-            Some(SplitPair {
-                first: "tab-1".into(),
-                second: "tab-2".into(),
-            })
+            Some(SplitPair::new("tab-1".into(), "tab-2".into()))
         );
     });
 }

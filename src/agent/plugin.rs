@@ -191,7 +191,7 @@ impl Plugin for AgentPlugin {
 }
 
 pub(crate) fn handle_agent_request(
-    app: &mut crate::app::Lumen,
+    app: &mut crate::app::Anarc,
     mut req: AgentRequest,
     resp_tx: async_channel::Sender<AgentResponse>,
 ) {
@@ -636,7 +636,7 @@ pub(crate) fn handle_agent_request(
     }
 }
 
-fn browser_state(app: &crate::app::Lumen, id: &str) -> &'static str {
+fn browser_state(app: &crate::app::Anarc, id: &str) -> &'static str {
     if app.engine.has_browser(id) {
         "live"
     } else if app.engine.agent_browser_pending(id) {
@@ -653,7 +653,7 @@ pub(crate) fn no_such_tab(tabs: &str) -> String {
     format!("no such tab. tabs: {tabs}. use: do \"tab 1\"")
 }
 
-pub(crate) fn compact_tabs(app: &crate::app::Lumen) -> String {
+pub(crate) fn compact_tabs(app: &crate::app::Anarc) -> String {
     let space = app.active_space();
     let active = space.active.as_deref();
     let active_index = space

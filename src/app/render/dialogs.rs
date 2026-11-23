@@ -1,6 +1,6 @@
 use super::*;
 
-impl Lumen {
+impl Anarc {
     pub(super) fn render_dialogs(
         &mut self,
         theme: visual::SpaceTheme,
@@ -47,10 +47,10 @@ impl Lumen {
                 .border_1()
                 .border_color(rgb(modal_theme.border))
                 .rounded_xl()
-                .p_3()
+                .p_2()
                 .flex()
                 .flex_col()
-                .gap_3()
+                .gap_2()
                 .on_mouse_down(
                     gpui_kit::MouseButton::Left,
                     cx.listener(|_, _, _, cx| cx.stop_propagation()),
@@ -116,7 +116,7 @@ impl Lumen {
                         .child({
                             let mut icons_grid = div()
                                 .id("svg-picker-grid")
-                                .h(px(144.0 * UI_SCALE))
+                                .h(px(128.0 * UI_SCALE))
                                 .overflow_y_scroll()
                                 .p_1()
                                 .rounded_md()
@@ -133,20 +133,20 @@ impl Lumen {
                                 icons_grid = icons_grid.child(
                                     div()
                                         .id(format!("space-icon-choice-{i}"))
-                                        .size(px(26.0 * UI_SCALE))
+                                        .size(px(24.0 * UI_SCALE))
                                         .rounded_lg()
                                         .flex()
                                         .items_center()
                                         .justify_center()
                                         .bg(if is_selected {
                                             crate::ui::visual::translucent_surface(
-                                                modal_theme.surface_hover,
-                                                0x55,
+                                                modal_theme.accent,
+                                                0x3a,
                                             )
                                         } else {
                                             crate::ui::visual::translucent_surface(
                                                 modal_theme.surface,
-                                                0x44,
+                                                0x30,
                                             )
                                         })
                                         .border_1()
@@ -155,14 +155,10 @@ impl Lumen {
                                         } else {
                                             modal_theme.border
                                         }))
-                                        .text_color(rgb(if is_selected {
-                                            modal_theme.text
-                                        } else {
-                                            modal_theme.muted
-                                        }))
+                                        .text_color(rgb(modal_theme.accent))
                                         .hover(|s| {
-                                            s.bg(crate::ui::visual::translucent_surface(modal_theme.surface_hover, 0x40))
-                                                .text_color(rgb(modal_theme.text))
+                                            s.bg(crate::ui::visual::translucent_surface(modal_theme.surface_hover, 0x60))
+                                                .text_color(rgb(visual::tint_rgb(modal_theme.accent, 0xffffff, 0.3)))
                                         })
                                         .cursor_pointer()
                                         .child(space_switcher::render_space_icon(icon))
@@ -247,7 +243,9 @@ impl Lumen {
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(modal_theme.base))
-                                .hover(|s| s.bg(rgb(0xb4bcff)))
+                                .hover(|s| {
+                                    s.bg(rgb(visual::tint_rgb(modal_theme.accent, 0xffffff, 0.25)))
+                                })
                                 .cursor_pointer()
                                 .child(action_label)
                                 .on_click(cx.listener(|this, _, _, cx| {

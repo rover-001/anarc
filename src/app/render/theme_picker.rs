@@ -122,7 +122,7 @@ fn color_position(color: u32) -> (f32, f32) {
     (hue, 1.0 - if max > 0.0 { delta / max / 0.8 } else { 0.0 })
 }
 
-impl Lumen {
+impl Anarc {
     pub(super) fn render_theme_picker(
         &self,
         _theme: visual::SpaceTheme,

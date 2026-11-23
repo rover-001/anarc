@@ -1,6 +1,6 @@
-# Lumen MCP Server (`lumen-mcp`)
+# Anarc MCP Server (`lumen-mcp`)
 
-The **Lumen MCP Server** provides tools, resources, and templates for AI coding agents (and human developers) to build, validate, test, package, install, and manage plugins for the Lumen / Anarc browser.
+The **Anarc MCP Server** provides tools, resources, and templates for AI coding agents (and human developers) to build, validate, test, package, install, and manage plugins for the Anarc / Anarc browser.
 
 It implements the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) over `stdio`, making it compatible with any MCP-capable client:
 - **Google Antigravity**
@@ -18,14 +18,14 @@ It implements the [Model Context Protocol (MCP)](https://modelcontextprotocol.io
 | :--- | :--- |
 | `lumen_plugin_spec` | Returns official specifications for manifests, declarative packs, WASM WIT bindings, web panels, or theme tokens. |
 | `lumen_plugin_scaffold` | Generates a complete, ready-to-run plugin folder with valid `lumen-plugin.toml`, CSS/JS assets, or WASM component bindings. |
-| `lumen_plugin_validate` | Validates a plugin directory or `lumen-plugin.toml` against Lumen's strict engine requirements (reverse-DNS, SemVer, file paths, permissions). |
+| `lumen_plugin_validate` | Validates a plugin directory or `lumen-plugin.toml` against Anarc's strict engine requirements (reverse-DNS, SemVer, file paths, permissions). |
 | `lumen_plugin_build` | Compiles a WebAssembly component plugin to `wasm32-wasip2`. |
-| `lumen_plugin_install` | Installs a plugin into Lumen's live plugins directory (`$ANARC_DATA_DIR/plugins/<id>`), with support for `--symlink` during development. |
+| `lumen_plugin_install` | Installs a plugin into Anarc's live plugins directory (`$ANARC_DATA_DIR/plugins/<id>`), with support for `--symlink` during development. |
 | `lumen_plugin_uninstall` | Uninstalls a plugin and cleans up configuration. |
 | `lumen_plugin_list` | Lists all installed third-party and built-in plugins with active status. |
 | `lumen_plugin_toggle` | Enables or disables an installed plugin in `plugins.toml`. |
 | `lumen_plugin_package` | Packages a plugin into a standard `.lumenplugin` zip bundle. |
-| `lumen_browser_spaces` | Inspects currently open spaces and tabs in Lumen (`spaces.json`). |
+| `lumen_browser_spaces` | Inspects currently open spaces and tabs in Anarc (`spaces.json`). |
 | `lumen_browser_history` | Searches local SQLite browsing history (`history.sqlite`). |
 
 ---
@@ -108,7 +108,7 @@ lumen-mcp scaffold --dir ./my-tab-manager \
 # Validate a plugin
 lumen-mcp validate ./my-youtube-theme
 
-# Install for live development (symlinked into Lumen)
+# Install for live development (symlinked into Anarc)
 lumen-mcp install ./my-youtube-theme --symlink
 
 # List all plugins

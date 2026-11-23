@@ -1,6 +1,6 @@
 use super::super::*;
 
-impl Lumen {
+impl Anarc {
     pub(crate) fn command_items(&self, query: &str) -> Vec<PaletteItem> {
         let tabs: Vec<_> = self
             .spaces

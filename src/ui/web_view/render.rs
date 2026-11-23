@@ -1,6 +1,7 @@
 use gpui_kit::{AnimationExt as _, Context, Corners, Render, Window, div, prelude::*, px, rgb};
 
 use crate::app::CARD_RADIUS;
+use crate::ui::sidebar::rows::TabDrag;
 use crate::ui::split_view::frame_logical_size;
 
 use super::pinch::clamp_pinch_offset;
@@ -184,6 +185,7 @@ impl Render for WebViewport {
         let tab_id_exit = self.tab_id.clone();
         let down_sidebar = self.sidebar_width;
         let pane_offset = self.pane_offset;
+        let pane_y_offset = self.pane_y_offset;
         let pane_index = self.pane_index;
         let up_sidebar = self.sidebar_width;
         let move_sidebar = self.sidebar_width;
@@ -217,6 +219,7 @@ impl Render for WebViewport {
         let origin_override = self.origin_override;
         let peek_mode = self.peek_mode;
         let drop_parent = self.parent.clone();
+        let pane_drop_parent = self.parent.clone();
         let drop_tab_id = self.tab_id.clone();
         let drop_sidebar = self.sidebar_width;
 
@@ -232,7 +235,16 @@ impl Render for WebViewport {
                 bottom_left: px(inner_r),
             }
         } else if self.split_layout {
-            if self.pane_index == 0 {
+            if self.split_grid {
+                let top = matches!(self.pane_index, 0 | 1);
+                let left = matches!(self.pane_index, 0 | 2);
+                Corners {
+                    top_left: px(if top && left { radius } else { 0.0 }),
+                    top_right: px(if top && !left { radius } else { 0.0 }),
+                    bottom_right: px(if !top && !left { radius } else { 0.0 }),
+                    bottom_left: px(if !top && left { radius } else { 0.0 }),
+                }
+            } else if self.pane_index == 0 {
                 Corners {
                     top_left: px(radius),
                     top_right: px(0.0),
@@ -282,6 +294,22 @@ impl Render for WebViewport {
                 12 => gpui_kit::CursorStyle::ContextualMenu,
                 _ => gpui_kit::CursorStyle::Arrow,
             })
+            .drag_over::<TabDrag>(move |style, _, _, _| {
+                style
+                    .bg(rgb(0x2a9aa6ff))
+                    .border_2()
+                    .border_color(rgb(0x9aa6ff))
+            })
+            .on_drop(cx.listener(move |_, drag: &TabDrag, _, cx| {
+                let dragged = drag.tab_id.clone();
+                let parent = pane_drop_parent.clone();
+                parent
+                    .update(cx, |app, cx| {
+                        app.drop_tab_into_pane(&dragged, pane_index);
+                        cx.notify();
+                    })
+                    .ok();
+            }))
             .on_key_down(
                 cx.listener(move |_, event: &gpui_kit::KeyDownEvent, window, cx| {
                     let handled = parent_key_down
@@ -293,7 +321,7 @@ impl Render for WebViewport {
                             };
                             if !this.browser_focused
                                 || !focus_matches
-                                || Lumen::is_app_shortcut_for_view(
+                                || Anarc::is_app_shortcut_for_view(
                                     &event.keystroke.key.to_lowercase(),
                                     event.keystroke.modifiers.control
                                         || event.keystroke.modifiers.platform,
@@ -452,7 +480,7 @@ impl Render for WebViewport {
                             };
                             if !this.browser_focused
                                 || !focus_matches
-                                || Lumen::is_app_shortcut_for_view(
+                                || Anarc::is_app_shortcut_for_view(
                                     &event.keystroke.key.to_lowercase(),
                                     event.keystroke.modifiers.control
                                         || event.keystroke.modifiers.platform,
@@ -483,6 +511,7 @@ impl Render for WebViewport {
                         event.position,
                         down_sidebar,
                         pane_offset,
+                        pane_y_offset,
                         fullscreen,
                         origin_override,
                     ));
@@ -515,6 +544,7 @@ impl Render for WebViewport {
                         event.position,
                         up_sidebar,
                         pane_offset,
+                        pane_y_offset,
                         fullscreen,
                         origin_override,
                     ));
@@ -540,6 +570,7 @@ impl Render for WebViewport {
                         event.position,
                         sidebar_right_down,
                         pane_offset,
+                        pane_y_offset,
                         fullscreen,
                         origin_override,
                     ));
@@ -576,6 +607,7 @@ impl Render for WebViewport {
                         event.position,
                         sidebar_right_up,
                         pane_offset,
+                        pane_y_offset,
                         fullscreen,
                         origin_override,
                     ));
@@ -601,6 +633,7 @@ impl Render for WebViewport {
                         event.position,
                         sidebar_middle_down,
                         pane_offset,
+                        pane_y_offset,
                         fullscreen,
                         origin_override,
                     ));
@@ -632,6 +665,7 @@ impl Render for WebViewport {
                         event.position,
                         sidebar_middle_up,
                         pane_offset,
+                        pane_y_offset,
                         fullscreen,
                         origin_override,
                     ));
@@ -672,6 +706,7 @@ impl Render for WebViewport {
                         event.position,
                         move_sidebar,
                         pane_offset,
+                        pane_y_offset,
                         fullscreen,
                         origin_override,
                     ));
@@ -721,6 +756,7 @@ impl Render for WebViewport {
                         event.position,
                         this.sidebar_width,
                         pane_offset,
+                        pane_y_offset,
                         fullscreen,
                         origin_override,
                     );
@@ -758,6 +794,7 @@ impl Render for WebViewport {
                         event.position,
                         scroll_sidebar,
                         pane_offset,
+                        pane_y_offset,
                         fullscreen,
                         origin_override,
                     );
@@ -827,6 +864,7 @@ impl Render for WebViewport {
                         window.mouse_position(),
                         drop_sidebar,
                         pane_offset,
+                        pane_y_offset,
                         fullscreen,
                         origin_override,
                     ));
@@ -1012,6 +1050,31 @@ impl Render for WebViewport {
             }
         }
 
+        if cx.has_active_drag() && !peek_mode && !self.fullscreen {
+            viewport = viewport.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .px_4()
+                            .py_2()
+                            .rounded_lg()
+                            .border_1()
+                            .border_dashed()
+                            .border_color(rgb(0x9aa6ff))
+                            .bg(rgb(0xe624262d))
+                            .text_sm()
+                            .font_weight(gpui_kit::FontWeight::MEDIUM)
+                            .text_color(rgb(0xffffff))
+                            .child("Drop here to split"),
+                    ),
+            );
+        }
+
         viewport.into_any_element()
     }
 }
@@ -1029,7 +1092,7 @@ fn browser_frame(
             }
             let image_bounds = gpui_kit::ObjectFit::Fill.get_bounds(bounds, size);
             if let Err(error) = window.paint_image(bounds, image_bounds, corner_radii, image, 0, false) {
-                eprintln!("Lumen browser frame paint failed: {error}");
+                eprintln!("Anarc browser frame paint failed: {error}");
             }
         },
     )

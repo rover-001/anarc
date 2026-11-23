@@ -1,7 +1,7 @@
 use super::super::*;
 use super::seed_pinned_destination;
 
-impl Lumen {
+impl Anarc {
     pub(crate) fn open_tab_context_menu(
         &mut self,
         tab_id: String,
@@ -349,10 +349,12 @@ impl Lumen {
         let closing_snapshot = space.tabs[index].clone();
         let closed_tab_id = closing_snapshot.id.clone();
         let split_other = space.split.as_ref().and_then(|pair| {
-            if pair.first == tab_id {
-                Some(pair.second.clone())
-            } else if pair.second == tab_id {
-                Some(pair.first.clone())
+            let panes = pair.panes();
+            if panes.iter().any(|id| *id == tab_id) {
+                panes
+                    .iter()
+                    .find(|id| **id != tab_id)
+                    .map(|id| (*id).to_owned())
             } else {
                 None
             }
@@ -451,10 +453,12 @@ impl Lumen {
 
         let was_active = space.active.as_deref() == Some(tab_id);
         let split_other = space.split.as_ref().and_then(|pair| {
-            if pair.first == tab_id {
-                Some(pair.second.clone())
-            } else if pair.second == tab_id {
-                Some(pair.first.clone())
+            let panes = pair.panes();
+            if panes.iter().any(|id| *id == tab_id) {
+                panes
+                    .iter()
+                    .find(|id| **id != tab_id)
+                    .map(|id| (*id).to_owned())
             } else {
                 None
             }
@@ -546,15 +550,102 @@ impl Lumen {
         {
             return false;
         }
-        self.active_space_mut().split = Some(SplitPair {
-            first: first.to_owned(),
-            second: second.to_owned(),
-        });
+        let space = self.active_space_mut();
+        if let Some(mut pair) = space.split.clone() {
+            if pair.is_quad() {
+                return false;
+            }
+            if pair.panes().contains(&first) || pair.panes().contains(&second) {
+                return false;
+            }
+            let extra = space
+                .tabs
+                .iter()
+                .map(|tab| tab.id.clone())
+                .find(|id| !pair.panes().contains(&id.as_str()) && id != second);
+            let Some(extra) = extra else {
+                return false;
+            };
+            pair.third = Some(second.to_owned());
+            pair.fourth = Some(extra);
+            space.split = Some(pair);
+        } else {
+            space.split = Some(SplitPair::new(first.to_owned(), second.to_owned()));
+        }
         self.focused_pane = 0;
         self.split_ratio = 0.5;
+        self.split_ratio_y = 0.5;
         self.save_state();
         true
     }
+    /// Drop a sidebar tab onto a content pane. With no split this creates a
+    /// two-pane split with the dropped tab in the target pane; an existing
+    /// split grows to the 2x2 grid, and a full grid replaces that pane.
+    pub(crate) fn drop_tab_into_pane(&mut self, tab_id: &str, pane_index: usize) {
+        if !crate::plugins::split_view_enabled() {
+            return;
+        }
+        let space = self.active_space();
+        if !space.tabs.iter().any(|tab| {
+            tab.id == tab_id && tab.url != "about:blank" && !tab.url.is_empty()
+        }) {
+            return;
+        }
+        let active = space.active.clone().unwrap_or_default();
+        let Some(mut pair) = space.split.clone() else {
+            if tab_id == active {
+                return;
+            }
+            let new_pair = if pane_index == 0 {
+                SplitPair::new(tab_id.to_owned(), active.clone())
+            } else {
+                SplitPair::new(active.clone(), tab_id.to_owned())
+            };
+            self.active_space_mut().split = Some(new_pair);
+            self.focused_pane = pane_index.min(1);
+            self.split_ratio = 0.5;
+            self.split_ratio_y = 0.5;
+            self.save_state();
+            return;
+        };
+        if let Some(existing) = pair
+            .panes()
+            .iter()
+            .position(|id| *id == tab_id)
+        {
+            self.set_focused_pane(existing);
+            return;
+        }
+        if pair.is_quad() {
+            match pane_index {
+                0 => pair.first = tab_id.to_owned(),
+                1 => pair.second = tab_id.to_owned(),
+                2 => pair.third = Some(tab_id.to_owned()),
+                _ => pair.fourth = Some(tab_id.to_owned()),
+            }
+            self.active_space_mut().split = Some(pair);
+            self.set_focused_pane(pane_index);
+            self.save_state();
+            return;
+        }
+        // The free quadrant gets a fresh blank tab. Reusing an existing tab
+        // here silently pulls in unrelated pages (for example a pinned inbox).
+        let space = self.active_space_mut();
+        let blank_id = next_tab_id(space);
+        space.tabs.push(Tab::new(&blank_id, "New tab", "about:blank"));
+        let (third, fourth) = if pane_index == 0 {
+            (tab_id.to_owned(), blank_id)
+        } else {
+            (blank_id, tab_id.to_owned())
+        };
+        pair.third = Some(third);
+        pair.fourth = Some(fourth);
+        self.active_space_mut().split = Some(pair);
+        self.focused_pane = pane_index.min(3);
+        self.split_ratio_y = 0.5;
+        self.save_state();
+    }
+
     pub(in crate::app) fn choose_split_target(&mut self, target_id: &str) -> bool {
         let Some(menu) = self.tab_context_menu.as_ref() else {
             return false;

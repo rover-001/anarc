@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Lumen MCP Server
+"""Anarc MCP Server
 
-Model Context Protocol (MCP) server for Lumen / Anarc browser plugin development.
+Model Context Protocol (MCP) server for Anarc / Anarc browser plugin development.
 Exposes tools, resources, and templates to scaffold, validate, test, build,
 install, package, and manage plugins, as well as inspect browser state.
 """
@@ -31,7 +31,7 @@ PLUGINS_CONFIG_FILE = ANARC_CONFIG_DIR / "plugins.toml"
 SPACES_FILE = ANARC_CONFIG_DIR / "spaces.json"
 HISTORY_FILE = ANARC_DATA_DIR / "history.sqlite"
 
-# Find Lumen source root if available
+# Find Anarc source root if available
 LUMEN_ROOT: Optional[Path] = None
 for candidate in [
     Path.cwd(),
@@ -43,7 +43,7 @@ for candidate in [
         break
 
 # Documentation References
-SPEC_MANIFEST = """# Lumen Plugin Manifest Specification (`lumen-plugin.toml`)
+SPEC_MANIFEST = """# Anarc Plugin Manifest Specification (`lumen-plugin.toml`)
 
 All plugins require a root `lumen-plugin.toml` manifest.
 
@@ -63,7 +63,7 @@ description = "Brief summary"      # Optional description
 3. `kind = "panel"`: HTML/CSS/JS sidebar views served via CEF under `lumen-plugin://<id>/`.
 """
 
-SPEC_PACKS = """# Lumen Declarative Packs Reference
+SPEC_PACKS = """# Anarc Declarative Packs Reference
 
 Declarative packs modify styles, scripts, keymaps, and themes without WASM overhead.
 
@@ -121,7 +121,7 @@ spring_damping = 32
 ```
 """
 
-SPEC_WASM = """# Lumen WASM Component Plugins Reference
+SPEC_WASM = """# Anarc WASM Component Plugins Reference
 
 WASM plugins run sandboxed WebAssembly components (`wasm32-wasip2`) with host imports defined in `wit/lumen.wit`.
 
@@ -158,7 +158,7 @@ cargo component build --target wasm32-wasip2 --release
 ```
 """
 
-SPEC_PANELS = """# Lumen Web Panels Reference
+SPEC_PANELS = """# Anarc Web Panels Reference
 
 Web panels provide embedded sidebar views rendered inside CEF with a secure `lumen-plugin://<id>/` origin and CSP.
 
@@ -285,7 +285,7 @@ def tool_spec(topic: str = "overview") -> str:
     elif topic in ("panel", "panels"):
         return SPEC_PANELS
     elif topic == "tokens":
-        return """# Lumen Theme Tokens
+        return """# Anarc Theme Tokens
 
 ```toml
 [pack.theme.tokens]
@@ -304,9 +304,9 @@ spring_stiffness = 380   # Spring responsiveness
 spring_damping = 32      # Oscillation damping
 ```
 """
-    return f"""# Lumen Plugin System Overview
+    return f"""# Anarc Plugin System Overview
 
-Lumen supports three plugin kinds:
+Anarc supports three plugin kinds:
 1. **Packs (`kind = "pack"`)**: Declarative themes, userstyles (CSS), userscripts (JS), search engines, and keymaps.
 2. **WASM Plugins (`kind = "wasm"`)**: Sandboxed WebAssembly components implementing `wit/lumen.wit`.
 3. **Web Panels (`kind = "panel"`)**: CEF sidebar views under `lumen-plugin://<id>/`.
@@ -343,7 +343,7 @@ def tool_scaffold(
     created_files: List[str] = []
 
     if not description:
-        description = f"{name} plugin for Lumen"
+        description = f"{name} plugin for Anarc"
 
     if kind == "pack":
         if not match_urls:
@@ -367,7 +367,7 @@ run_at = "document_start"
             styles_dir = out_dir / "styles"
             styles_dir.mkdir(exist_ok=True)
             css_file = styles_dir / "style.css"
-            css_file.write_text("/* Custom userstyle for Lumen */\nbody {\n  /* Add overrides here */\n}\n", encoding="utf-8")
+            css_file.write_text("/* Custom userstyle for Anarc */\nbody {\n  /* Add overrides here */\n}\n", encoding="utf-8")
             created_files.append("styles/style.css")
 
         elif pack_type == "userscript":
@@ -380,7 +380,7 @@ run_at = "document_idle"
             scripts_dir = out_dir / "scripts"
             scripts_dir.mkdir(exist_ok=True)
             js_file = scripts_dir / "main.js"
-            js_file.write_text("// Custom userscript for Lumen\nconsole.log('Lumen userscript active on:', window.location.href);\n", encoding="utf-8")
+            js_file.write_text("// Custom userscript for Anarc\nconsole.log('Anarc userscript active on:', window.location.href);\n", encoding="utf-8")
             created_files.append("scripts/main.js")
 
         elif pack_type == "theme":
@@ -563,7 +563,7 @@ Kind: `{kind}`
 {description}
 
 ### How to Install
-Run with the Lumen MCP tool:
+Run with the Anarc MCP tool:
 ```sh
 lumen-mcp install --plugin-path "{out_dir}" --symlink
 ```
@@ -625,7 +625,7 @@ def tool_validate(plugin_path: str) -> Dict[str, Any]:
             errors.append(err)
 
     if papi != "1":
-        errors.append(f"Unsupported 'plugin.api' '{papi}'; Lumen host currently requires api = '1'")
+        errors.append(f"Unsupported 'plugin.api' '{papi}'; Anarc host currently requires api = '1'")
 
     if pkind not in ("pack", "wasm", "panel"):
         errors.append(f"Invalid 'plugin.kind' '{pkind}'; must be 'pack', 'wasm', or 'panel'")
@@ -855,7 +855,7 @@ def tool_list(include_builtins: bool = True) -> Dict[str, Any]:
         ("lumen.stats", "Stats", "Performance metrics and resource counters"),
         ("lumen.reader", "Reader Mode", "Clean article distraction-free viewer"),
         ("lumen.shield", "Ad & Tracker Shield", "Built-in adblocking filters"),
-        ("lumen.split-view", "Split View", "Side-by-side tab panes"),
+        ("lumen.split-view", "Split View", "Up to four tab panes"),
     ]
     if include_builtins:
         for bid, bname, bdesc in builtins:
@@ -1056,7 +1056,7 @@ def tool_browser_history(query: Optional[str] = None, limit: int = 20) -> Dict[s
 TOOLS_REGISTRY = [
     {
         "name": "lumen_plugin_spec",
-        "description": "Get official specifications and references for Lumen plugins (manifests, packs, WASM WIT, web panels, theme tokens).",
+        "description": "Get official specifications and references for Anarc plugins (manifests, packs, WASM WIT, web panels, theme tokens).",
         "parameters": {
             "type": "object",
             "properties": {
@@ -1070,7 +1070,7 @@ TOOLS_REGISTRY = [
     },
     {
         "name": "lumen_plugin_scaffold",
-        "description": "Scaffold a brand new Lumen plugin with all files, manifest, templates, and scripts.",
+        "description": "Scaffold a brand new Anarc plugin with all files, manifest, templates, and scripts.",
         "parameters": {
             "type": "object",
             "required": ["target_dir", "plugin_id", "name"],
@@ -1096,7 +1096,7 @@ TOOLS_REGISTRY = [
     },
     {
         "name": "lumen_plugin_validate",
-        "description": "Validate a plugin directory or lumen-plugin.toml manifest against Lumen engine constraints.",
+        "description": "Validate a plugin directory or lumen-plugin.toml manifest against Anarc engine constraints.",
         "parameters": {
             "type": "object",
             "required": ["plugin_path"],
@@ -1118,7 +1118,7 @@ TOOLS_REGISTRY = [
     },
     {
         "name": "lumen_plugin_install",
-        "description": "Install a plugin into Lumen's live plugins directory (~/.local/share/anarc/plugins/<id>).",
+        "description": "Install a plugin into Anarc's live plugins directory (~/.local/share/anarc/plugins/<id>).",
         "parameters": {
             "type": "object",
             "required": ["plugin_path"],
@@ -1131,7 +1131,7 @@ TOOLS_REGISTRY = [
     },
     {
         "name": "lumen_plugin_uninstall",
-        "description": "Remove an installed plugin from Lumen's plugins directory.",
+        "description": "Remove an installed plugin from Anarc's plugins directory.",
         "parameters": {
             "type": "object",
             "required": ["plugin_id"],
@@ -1176,7 +1176,7 @@ TOOLS_REGISTRY = [
     },
     {
         "name": "lumen_browser_spaces",
-        "description": "Inspect open spaces and active tabs in the Lumen browser.",
+        "description": "Inspect open spaces and active tabs in the Anarc browser.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -1200,25 +1200,25 @@ TOOLS_REGISTRY = [
 RESOURCES_REGISTRY = [
     {
         "uri": "lumen://spec/manifest",
-        "name": "Lumen Plugin Manifest Specification",
+        "name": "Anarc Plugin Manifest Specification",
         "mimeType": "text/markdown",
         "description": "Documentation of lumen-plugin.toml configuration options and constraints.",
     },
     {
         "uri": "lumen://spec/wit",
-        "name": "Lumen WIT Guest-Host Interface",
+        "name": "Anarc WIT Guest-Host Interface",
         "mimeType": "text/plain",
         "description": "Canonical WebAssembly Component Model WIT interface definition.",
     },
     {
         "uri": "lumen://plugins/installed",
-        "name": "Installed Lumen Plugins",
+        "name": "Installed Anarc Plugins",
         "mimeType": "application/json",
         "description": "Live JSON list of all installed and active plugins.",
     },
     {
         "uri": "lumen://browser/spaces",
-        "name": "Lumen Open Spaces & Tabs",
+        "name": "Anarc Open Spaces & Tabs",
         "mimeType": "application/json",
         "description": "Live JSON state of all browser spaces and open tabs.",
     },

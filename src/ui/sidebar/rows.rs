@@ -3,7 +3,7 @@ use gpui_kit::{
     component::Icon, div, prelude::*, px, relative, rgb,
 };
 
-use crate::app::Lumen;
+use crate::app::Anarc;
 use crate::ui::visual::UI_SCALE;
 use crate::ui::{tab_list, visual};
 
@@ -66,7 +66,7 @@ pub(crate) fn section_tab_row(
     show_selection_background: bool,
     theme: visual::SpaceTheme,
     indent: f32,
-    cx: &mut Context<Lumen>,
+    cx: &mut Context<Anarc>,
 ) -> impl IntoElement {
     let click_id = tab_id.clone();
     let close_id = tab_id.clone();
@@ -223,7 +223,7 @@ pub(crate) fn kept_tab_box(
     selected: bool,
     expand: bool,
     theme: visual::SpaceTheme,
-    cx: &mut Context<Lumen>,
+    cx: &mut Context<Anarc>,
 ) -> impl IntoElement {
     let click_id = tab_id.clone();
     let context_id = tab_id.clone();
@@ -270,6 +270,9 @@ pub(crate) fn kept_tab_box(
         })
         .hover(|el| el.bg(visual::translucent_surface(tile_hover, 0x50)))
         .child(tab_list::favorite_favicon(favicon.clone()))
+        // Dropping on the tile body inserts *after* it, so the hovered tile
+        // slides left to make room for the incoming tab. Only the narrow left
+        // edge inserts before it.
         .when(expand, |el| {
             el.child(
                 div()
@@ -289,7 +292,7 @@ pub(crate) fn kept_tab_box(
                 .top_0()
                 .left_0()
                 .bottom_0()
-                .right(px(16.0 * UI_SCALE))
+                .w(px(16.0 * UI_SCALE))
                 .rounded_lg()
                 .drag_over::<TabDrag>(move |style, _, _, app| {
                     before_hover_view
@@ -322,7 +325,7 @@ pub(crate) fn kept_tab_box(
                 .top_0()
                 .right_0()
                 .bottom_0()
-                .w(px(16.0 * UI_SCALE))
+                .left(px(16.0 * UI_SCALE))
                 .rounded_lg()
                 .drag_over::<TabDrag>(move |style, _, _, app| {
                     after_hover_view
@@ -338,7 +341,7 @@ pub(crate) fn kept_tab_box(
                             }
                         })
                         .ok();
-                    style.bg(visual::translucent_surface(drop_hint, 0x30))
+                    style.bg(visual::translucent_surface(drop_hint, 0x18))
                 })
                 .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
                     this.kept_drag_hovered_tab = None;
@@ -404,7 +407,7 @@ pub(crate) fn kept_drop_slot(
     slot_fraction: f32,
     active: bool,
     theme: visual::SpaceTheme,
-    cx: &mut Context<Lumen>,
+    cx: &mut Context<Anarc>,
 ) -> impl IntoElement {
     let hover_view = cx.weak_entity();
     let hover_anchor = anchor.clone();

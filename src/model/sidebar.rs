@@ -12,7 +12,7 @@ pub(crate) fn closing_tab_row_index(
     closed: &Tab,
     closed_index: usize,
 ) -> usize {
-    let is_member = |id: &str| split.is_some_and(|pair| pair.first == id || pair.second == id);
+    let is_member = |id: &str| split.is_some_and(|pair| pair.panes().contains(&id));
     let kept_tabs = space
         .tabs
         .iter()

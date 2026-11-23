@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Integration tests for Lumen Live Share over Tailscale / Loopback."""
+"""Integration tests for Anarc Live Share over Tailscale / Loopback."""
 
 import json
 import shutil

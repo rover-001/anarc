@@ -1,6 +1,6 @@
 use super::super::*;
 
-impl Lumen {
+impl Anarc {
     pub(in crate::app) fn animate_sidebar_toggle(
         &mut self,
         window: &mut Window,

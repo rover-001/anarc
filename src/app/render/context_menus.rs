@@ -1,6 +1,6 @@
 use super::*;
 
-impl Lumen {
+impl Anarc {
     pub(in crate::app) fn render_context_menus(
         &mut self,
         theme: visual::SpaceTheme,
@@ -711,7 +711,7 @@ impl Lumen {
                 .active_space()
                 .split
                 .as_ref()
-                .is_some_and(|pair| pair.first == target_id || pair.second == target_id);
+                .is_some_and(|pair| pair.panes().contains(&target_id.as_str()));
             // Favorites and pins are one section; `fav`/`pin` stay aliases.
             let target_kept = target_tab.is_some_and(|tab| tab.is_pinned());
             let target_grouped = target_tab.is_some_and(|tab| tab.kept_group.is_some());

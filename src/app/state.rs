@@ -109,7 +109,7 @@ pub(super) struct FolderModal {
     pub(super) anchor_y: f32,
 }
 
-pub(crate) struct Lumen {
+pub(crate) struct Anarc {
     pub(super) spaces: Vec<Space>,
     pub(super) active_space: String,
     pub(super) sidebar_collapsed: bool,
@@ -156,13 +156,17 @@ pub(crate) struct Lumen {
     pub(crate) engine: crate::engine::Engine,
     pub(super) web_viewport: gpui_kit::Entity<WebViewport>,
     pub(super) second_web_viewport: gpui_kit::Entity<WebViewport>,
+    pub(super) third_web_viewport: gpui_kit::Entity<WebViewport>,
+    pub(super) fourth_web_viewport: gpui_kit::Entity<WebViewport>,
     pub(super) peek_web_viewport: gpui_kit::Entity<WebViewport>,
     pub(super) peek: Option<PeekState>,
     pub(super) peek_serial: u64,
     pub(crate) peek_focused: bool,
     pub(crate) focused_pane: usize,
     pub(super) split_ratio: f32,
+    pub(super) split_ratio_y: f32,
     pub(super) split_resizing: bool,
+    pub(super) split_resizing_horizontal: bool,
     pub(super) space_modal: Option<SpaceModal>,
     pub(super) space_context_menu: Option<SpaceContextMenu>,
     pub(super) sidebar_context_menu: Option<SidebarContextMenu>,
@@ -207,7 +211,7 @@ pub(crate) struct Lumen {
     pub(super) cef_task_started: bool,
 }
 
-impl Drop for Lumen {
+impl Drop for Anarc {
     fn drop(&mut self) {
         self.plugins.emit(
             "app.quit",

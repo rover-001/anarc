@@ -5,7 +5,7 @@ use super::super::*;
 static SHARED_COOKIE_FINGERPRINT: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
-impl Lumen {
+impl Anarc {
     pub(crate) fn spaces(&self) -> &[Space] {
         &self.spaces
     }
@@ -227,6 +227,14 @@ impl Lumen {
             viewport.clear_transition_image();
             cx.notify();
         });
+        self.third_web_viewport.update(cx, |viewport, cx| {
+            viewport.clear_transition_image();
+            cx.notify();
+        });
+        self.fourth_web_viewport.update(cx, |viewport, cx| {
+            viewport.clear_transition_image();
+            cx.notify();
+        });
         let previous_space = self.active_space.clone();
         self.close_peek();
         self.close_app_page();
@@ -263,7 +271,7 @@ impl Lumen {
             input.focus(window, cx);
         });
 
-        let sub = cx.subscribe(&name_input, |this: &mut Lumen, _, event, cx| {
+        let sub = cx.subscribe(&name_input, |this: &mut Anarc, _, event, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
                 this.commit_space_modal(cx);
                 cx.notify();
@@ -298,7 +306,7 @@ impl Lumen {
             input.focus(window, cx);
         });
 
-        let sub = cx.subscribe(&name_input, |this: &mut Lumen, _, event, cx| {
+        let sub = cx.subscribe(&name_input, |this: &mut Anarc, _, event, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
                 this.commit_space_modal(cx);
                 cx.notify();

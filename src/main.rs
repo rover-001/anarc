@@ -88,7 +88,7 @@ fn main() {
                 cx,
                 |window, cx| {
                     window.set_window_title("Anarc");
-                    cx.new(|cx| app::Lumen::new(window, cx))
+                    cx.new(|cx| app::Anarc::new(window, cx))
                 },
             )
             .expect("open Anarc window");

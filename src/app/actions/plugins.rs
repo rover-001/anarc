@@ -3,7 +3,7 @@ use crate::app::state::PendingPluginReview;
 use crate::ui::plugin_manager::{InstallSource, PluginReview};
 use std::{fs, path::Path};
 
-impl Lumen {
+impl Anarc {
     #[cfg(not(test))]
     pub(crate) fn inject_pack_assets(&self, tab_id: &str, url: &str) {
         for asset in crate::plugin::matched_page_assets(url) {

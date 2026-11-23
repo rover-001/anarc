@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI interface for Lumen Plugin Tools & MCP Server.
+"""CLI interface for Anarc Plugin Tools & MCP Server.
 
 Can be run in terminal directly or spawned by MCP clients (Claude, Antigravity, Cursor, Zed).
 """

@@ -35,7 +35,7 @@ pub struct ImportSummary {
 
 const CHROMIUM_EPOCH_MICROS: i64 = 11_644_473_600_000_000;
 
-/// Imports profile bookmarks and visit records into the Lumen data directory.
+/// Imports profile bookmarks and visit records into the Anarc data directory.
 pub fn import(browser: &str) -> Result<ImportSummary, String> {
     let roots = browser_roots(browser)?;
     let profiles = roots.into_iter().flat_map(profile_dirs).collect::<Vec<_>>();

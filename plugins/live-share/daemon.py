@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lumen Live Share Daemon
+"""Anarc Live Share Daemon
 
 Peer-to-peer browser space sharing and real-time tab sync over Tailscale.
 Provides HTTP/SSE API, watches local spaces.json, and synchronizes with peers.
@@ -851,7 +851,7 @@ class LiveShareState:
                 self.suppress_local_watch = False
 
     def watch_spaces_file(self):
-        """Background thread watching for local changes made inside Lumen."""
+        """Background thread watching for local changes made inside Anarc."""
         while True:
             time.sleep(0.25)
             if not self.spaces_file.is_file() or not self.shared_space_id:
@@ -885,7 +885,7 @@ class LiveShareState:
                                 self.theme = fresh_theme
                             if diff:
                                 self.tabs = fresh_tabs
-                                self.log_activity("Lumen", f"Host space updated ({len(fresh_tabs)} tabs)")
+                                self.log_activity("Anarc", f"Host space updated ({len(fresh_tabs)} tabs)")
 
                         if diff:
                             self.broadcast_to_peers("sync_state", {
@@ -1163,13 +1163,13 @@ def start_daemon(host: str = "0.0.0.0", port: int = DEFAULT_PORT, spaces_file: P
     except Exception:
         pass
 
-    print(f"[Lumen Live Share] Running on http://{host}:{port}")
+    print(f"[Anarc Live Share] Running on http://{host}:{port}")
     print(f"[Tailscale IP] {state.tailscale_ip}")
     print(f"[Share Address] {state.tailscale_ip}:{port}")
     return server
 
 def main():
-    parser = argparse.ArgumentParser(description="Lumen Live Share Daemon")
+    parser = argparse.ArgumentParser(description="Anarc Live Share Daemon")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default 0.0.0.0)")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Port (default 7433)")
     parser.add_argument("--spaces", default=str(SPACES_FILE), help="Path to spaces.json")
