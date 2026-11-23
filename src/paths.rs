@@ -362,3 +362,159 @@ pub(crate) mod agent_socket {
             && fs::remove_file(socket).is_ok()
     }
 }
+
+#[cfg(windows)]
+pub(crate) mod agent_socket {
+    use super::{PathBuf, resolve_instance_slot};
+    use crate::agent::transport::{Endpoint, loopback_addr};
+    use std::ffi::OsString;
+    use std::fs::{self, File, OpenOptions};
+    use std::io::{self, Write};
+    use std::path::Path;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(desired_access: u32, inherit_handle: i32, process_id: u32) -> isize;
+        fn GetExitCodeProcess(process: isize, exit_code: *mut u32) -> i32;
+        fn CloseHandle(handle: isize) -> i32;
+    }
+
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+
+    fn process_alive(pid: u32) -> bool {
+        if pid == 0 {
+            return false;
+        }
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle == 0 {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = unsafe { GetExitCodeProcess(handle, &mut code) } != 0;
+        unsafe { CloseHandle(handle) };
+        ok && code == STILL_ACTIVE
+    }
+
+    // Kept identical in shape to the Unix Discovery so anarc-ctl needs no
+    // platform-specific branching around discovery.
+    #[allow(dead_code)]
+    pub(crate) struct Discovery {
+        pub(crate) resolved: PathBuf,
+        pub(crate) bind: PathBuf,
+        pub(crate) environment: [(&'static str, Option<OsString>); 6],
+    }
+
+    pub(crate) fn resolve_socket(explicit: Option<&Path>, instance: Option<u32>) -> Discovery {
+        let environment = [
+            "ANARC_CTL_SOCKET", "ANARC_SOCKET_PATH", "ANARC_DATA_DIR",
+            "USERPROFILE", "LOCALAPPDATA", "ANARC_INSTANCE_SLOT",
+        ].map(|name| (name, std::env::var_os(name)));
+        let [override_path, legacy_override, data, home, local, slot] =
+            environment.each_ref().map(|(_, value)| value.as_deref());
+        if let Some(path) = explicit.or_else(|| override_path.or(legacy_override).map(Path::new)) {
+            return Discovery { resolved: path.into(), bind: path.into(), environment };
+        }
+
+        let instance = instance.or_else(|| resolve_instance_slot(slot.map(OsString::from)));
+        let filename = match instance {
+            Some(slot) if slot > 1 => format!("ctl-{slot}.port"),
+            _ => "ctl.port".into(),
+        };
+        let directories: Vec<PathBuf> = [
+            data.map(PathBuf::from).map(|dir| dir.join("agent")),
+            home.map(PathBuf::from).map(|dir| dir.join(".local/share/anarc/agent")),
+            local.map(PathBuf::from).map(|dir| dir.join("anarc/agent")),
+        ].into_iter().flatten().collect();
+        let bind = directories.first()
+            .cloned()
+            .unwrap_or_else(|| std::env::temp_dir().join("anarc/agent"))
+            .join(&filename);
+        let mut candidates: Vec<PathBuf> = directories.iter().map(|dir| dir.join(&filename)).collect();
+        if instance.is_none() {
+            for slot in 2..=9 {
+                for dir in &directories {
+                    candidates.push(dir.join(format!("ctl-{slot}.port")));
+                }
+            }
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        let existing: Vec<PathBuf> = candidates.into_iter().filter(|path| path.is_file()).collect();
+        let resolved = if instance.is_some_and(|slot| slot > 1) {
+            existing.into_iter().find(|path| path.file_name().and_then(|n| n.to_str()) == Some(filename.as_str()))
+                .unwrap_or(bind.clone())
+        } else if existing.len() == 1 {
+            existing.into_iter().next().unwrap_or_else(|| bind.clone())
+        } else {
+            // Prefer the primary slot's endpoint if several instances are up.
+            existing.into_iter().find(|path| path.file_name().and_then(|n| n.to_str()) == Some("ctl.port"))
+                .unwrap_or_else(|| bind.clone())
+        };
+        Discovery { resolved, bind, environment }
+    }
+
+    fn owner_path(socket: &Path) -> PathBuf {
+        let mut path = socket.as_os_str().to_os_string();
+        path.push(".owner");
+        path.into()
+    }
+
+    pub(crate) fn lock_owner(socket: &Path, create: bool) -> io::Result<File> {
+        let path = owner_path(socket);
+        let file = if create {
+            OpenOptions::new().read(true).write(true).create_new(true).open(path)?
+        } else {
+            OpenOptions::new().read(true).open(path)?
+        };
+        if !file.metadata()?.is_file() {
+            return Err(io::Error::other("invalid socket owner file"));
+        }
+        file.try_lock().map_err(io::Error::from)?;
+        Ok(file)
+    }
+
+    #[allow(dead_code)] // used by the Unix server / CLI builds
+    pub(crate) fn record_owner(mut owner: &File, _socket: &Path) -> io::Result<()> {
+        writeln!(owner, "{}", std::process::id())
+    }
+
+    pub(crate) fn remove_dead_socket(socket: &Path, owner: &File) -> bool {
+        use std::io::Read;
+        let mut record = String::new();
+        if owner.take(128).read_to_string(&mut record).is_err() {
+            return false;
+        }
+        let Ok(pid) = record.trim().parse::<u32>() else { return false };
+        if process_alive(pid) {
+            return false;
+        }
+        cleanup(socket)
+    }
+
+    #[allow(dead_code)] // used by anarc-ctl and the Windows server test
+    pub(crate) fn read_endpoint(path: &Path) -> io::Result<Endpoint> {
+        let contents = fs::read_to_string(path)?;
+        let mut lines = contents.lines();
+        let port = lines.next().ok_or_else(|| io::Error::other("invalid agent endpoint"))?
+            .trim().parse::<u16>().map_err(|_| io::Error::other("invalid agent endpoint port"))?;
+        let token = lines.next().ok_or_else(|| io::Error::other("missing agent token"))?
+            .trim().to_string();
+        if token.is_empty() {
+            return Err(io::Error::other("empty agent token"));
+        }
+        Ok(Endpoint::Tcp { addr: loopback_addr(port), token })
+    }
+
+    pub(crate) fn write_endpoint(path: &Path, port: u16, token: &str) -> io::Result<()> {
+        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        writeln!(file, "{port}")?;
+        writeln!(file, "{token}")
+    }
+
+    pub(crate) fn cleanup(path: &Path) -> bool {
+        let endpoint = fs::remove_file(path).is_ok();
+        let owner = fs::remove_file(owner_path(path)).is_ok();
+        endpoint || owner
+    }
+}

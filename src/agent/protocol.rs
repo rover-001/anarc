@@ -37,7 +37,6 @@ pub enum AgentRequest {
 }
 
 impl AgentRequest {
-    #[cfg(target_family = "unix")]
     pub fn op(&self) -> &'static str {
         match self {
             Self::See { .. } => "see",

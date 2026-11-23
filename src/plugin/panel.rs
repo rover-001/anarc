@@ -303,6 +303,7 @@ mod tests {
             "lumen-panel-test-{}-{}",
             std::process::id(),
             std::thread::current().name().unwrap_or("test")
+                .replace(['<', '>', ':', '"', '/', '\\', '|', '?', '*'], "_")
         ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();

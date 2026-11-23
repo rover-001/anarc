@@ -12,23 +12,9 @@ pub mod plugin;
 pub mod policy;
 pub mod protocol;
 pub mod refs;
-#[cfg(target_family = "unix")]
 pub mod server;
-#[cfg(not(target_family = "unix"))]
-pub mod server {
-    use super::protocol::{AgentRequest, AgentResponse};
-    use std::path::PathBuf;
-
-    pub fn is_running() -> bool {
-        false
-    }
-    pub fn start_server(
-        _handler_tx: async_channel::Sender<(AgentRequest, async_channel::Sender<AgentResponse>)>,
-    ) -> Result<PathBuf, String> {
-        Ok(PathBuf::from("NUL"))
-    }
-    pub fn stop_server() {}
-}
+#[allow(dead_code)] // parts are used only by the anarc-ctl binary
+pub mod transport;
 
 #[cfg(test)]
 mod tests {
@@ -119,6 +105,48 @@ mod tests {
         stop_server();
         assert!(!super::server::is_running());
         assert!(!bound_path.exists(), "Socket file must be unlinked on stop");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(windows)]
+    #[allow(irrefutable_let_patterns)] // Endpoint has one variant on Windows
+    fn test_agent_server_lifecycle_and_endpoint_cleanup() -> Result<(), Box<dyn std::error::Error>> {
+        use super::server::{start_server, stop_server};
+        use super::transport::{Endpoint, Stream};
+        use std::io::{BufRead, BufReader, Write};
+
+        let dir = std::env::temp_dir().join(format!("anarc-agent-test-{}", std::process::id()));
+        unsafe {
+            std::env::set_var("ANARC_DATA_DIR", &dir);
+        }
+        let (req_tx, req_rx) = async_channel::bounded(8);
+        let endpoint_path = start_server(req_tx)?;
+        assert!(endpoint_path.exists());
+        assert!(super::server::is_running());
+
+        let endpoint = crate::paths::agent_socket::read_endpoint(&endpoint_path)?;
+        let Endpoint::Tcp { token, .. } = &endpoint else {
+            return Err("expected TCP endpoint".into());
+        };
+        let mut client = Stream::connect(&endpoint)?;
+        writeln!(client, "{token}")?;
+        std::thread::spawn(move || {
+            if let Ok((_req, resp_tx)) = futures_lite::future::block_on(async { req_rx.recv().await }) {
+                let _ = resp_tx.try_send(AgentResponse::success("ok from mock handler"));
+            }
+        });
+        let req_json = serde_json::to_string(&AgentRequest::Tabs)?;
+        writeln!(client, "{req_json}")?;
+        let mut line = String::new();
+        BufReader::new(client).read_line(&mut line)?;
+        let resp: AgentResponse = serde_json::from_str(line.trim())?;
+        assert!(resp.ok);
+        assert_eq!(resp.result.as_deref(), Some("ok from mock handler"));
+
+        stop_server();
+        assert!(!super::server::is_running());
+        assert!(!endpoint_path.exists(), "Endpoint file must be removed on stop");
         Ok(())
     }
 }

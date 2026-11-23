@@ -617,6 +617,7 @@ topbar = "default"
             "lumen-pack-test-{}-{}",
             std::process::id(),
             std::thread::current().name().unwrap_or("worker")
+                .replace(['<', '>', ':', '"', '/', '\\', '|', '?', '*'], "_")
         ));
         let _ = fs::remove_dir_all(&base);
         let root = base.join("pack");
@@ -647,6 +648,7 @@ topbar = "default"
             "lumen-pack-scan-{}-{}",
             std::process::id(),
             std::thread::current().name().unwrap_or("worker")
+                .replace(['<', '>', ':', '"', '/', '\\', '|', '?', '*'], "_")
         ));
         let _ = fs::remove_dir_all(&root);
         let good = root.join("good");

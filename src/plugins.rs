@@ -290,6 +290,9 @@ mod tests {
                 .discard_expired_many(start + crate::lifecycle::DISCARD_AFTER, &Vec::new())
                 .is_empty()
         );
+        // Other plugin tests mount the same builtin concurrently; clear their
+        // late registrations before checking this kernel's unmount effect.
+        crate::settings::unregister_owned_search_engines("lumen.search-engines");
         assert_eq!(crate::settings::custom_search_url("google", "query"), None);
         assert_eq!(
             crate::settings::SearchEngine::Google.search_url("query"),

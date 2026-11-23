@@ -1,13 +1,23 @@
 use std::io::{BufRead, BufReader, Write};
-#[cfg(target_family = "unix")]
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-#[cfg(unix)]
 #[allow(dead_code)]
 #[path = "../paths.rs"]
 mod paths;
+
+#[allow(dead_code)]
+#[path = "../agent/transport.rs"]
+mod transport;
+
+// paths.rs (included above) refers to crate::agent::transport so the browser
+// and CLI share one implementation; re-export it here for the CLI build.
+#[cfg(windows)]
+mod agent {
+    pub(crate) use crate::transport;
+}
+
+use transport::{Endpoint, Stream};
 
 #[derive(Default)]
 struct SocketTarget {
@@ -16,22 +26,23 @@ struct SocketTarget {
 }
 
 impl SocketTarget {
-    #[cfg(unix)]
     fn resolve(&self) -> paths::agent_socket::Discovery {
         paths::agent_socket::resolve_socket(self.explicit.as_deref(), self.instance)
     }
 
     fn path(&self) -> PathBuf {
-        #[cfg(unix)]
-        {
-            self.resolve().resolved
-        }
-        #[cfg(not(unix))]
-        {
-            self.explicit
-                .clone()
-                .unwrap_or_else(|| PathBuf::from("anarc-agent.sock"))
-        }
+        self.resolve().resolved
+    }
+}
+
+fn endpoint_for(discovery: &paths::agent_socket::Discovery) -> Result<Endpoint, String> {
+    #[cfg(windows)]
+    {
+        paths::agent_socket::read_endpoint(&discovery.resolved).map_err(|error| error.to_string())
+    }
+    #[cfg(unix)]
+    {
+        Ok(Endpoint::Unix(discovery.resolved.clone()))
     }
 }
 
@@ -99,29 +110,42 @@ fn launch_anarc() -> bool {
     run("omarchy-launch-or-focus", &["anarc", &launcher]) || socket_ready
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn launch_anarc() -> bool {
-    false
+    let launcher = std::env::var_os("ANARC_LAUNCHER")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|dir| dir.join("anarc.exe")))
+        })
+        .unwrap_or_else(|| PathBuf::from("anarc.exe"));
+    let mut command = std::process::Command::new(&launcher);
+    command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    command.spawn().is_ok()
 }
 
-#[cfg(unix)]
 fn socket_ready(target: &SocketTarget) -> bool {
-    UnixStream::connect(target.path()).is_ok()
+    let discovery = target.resolve();
+    match endpoint_for(&discovery) {
+        Ok(endpoint) => Stream::connect(&endpoint).is_ok(),
+        Err(_) => false,
+    }
 }
 
-#[cfg(not(unix))]
-fn socket_ready(_target: &SocketTarget) -> bool {
-    false
-}
-
-#[cfg(unix)]
 fn connect_socket(
     target: &SocketTarget,
     mcp: bool,
     doctor: bool,
-) -> Result<(UnixStream, PathBuf), String> {
+) -> Result<(Stream, PathBuf, Option<String>), String> {
+    use paths::agent_socket::{lock_owner, remove_dead_socket};
     use std::io::ErrorKind;
-    use std::time::Duration;
 
     let tries = if target.explicit.is_some() {
         1
@@ -132,18 +156,31 @@ fn connect_socket(
     };
     for attempt in 1..=tries {
         let discovery = target.resolve();
-        let path = discovery.resolved;
-        let result = UnixStream::connect(&path);
+        let path = discovery.resolved.clone();
+        let endpoint = endpoint_for(&discovery);
         if mcp {
             eprintln!(
                 "[anarc-mcp] connect {attempt}/{tries} path={path:?} instance={:?} env={:?} result={:?}",
                 target.instance,
                 discovery.environment,
-                result.as_ref().map(|_| ())
+                endpoint.as_ref().map(|_| ())
             );
         }
+        let result = match endpoint {
+            Ok(ref endpoint) => Stream::connect(endpoint),
+            Err(ref message) => Err(std::io::Error::new(ErrorKind::NotFound, message.clone())),
+        };
         let error = match result {
-            Ok(stream) => return Ok((stream, path)),
+            Ok(stream) => {
+                let token = match endpoint {
+                    #[cfg(windows)]
+                    Ok(Endpoint::Tcp { token, .. }) => Some(token),
+                    #[cfg(unix)]
+                    Ok(_) => None,
+                    Err(_) => None,
+                };
+                return Ok((stream, path, token));
+            }
             Err(error) => error,
         };
         let kind = error.kind();
@@ -171,7 +208,6 @@ fn connect_socket(
         let message = match kind {
             ErrorKind::NotFound => "anarc not running: start it. use: anarc-ctl doctor",
             ErrorKind::ConnectionRefused => {
-                use paths::agent_socket::{lock_owner, remove_dead_socket};
                 if lock_owner(&path, false).is_ok_and(|owner| remove_dead_socket(&path, &owner)) {
                     if attempt < tries {
                         std::thread::sleep(Duration::from_millis(300));
@@ -199,17 +235,15 @@ fn connect_socket(
     Err("connection failed. use: anarc-ctl doctor".into())
 }
 
-#[cfg(target_family = "unix")]
 fn send_socket_request(
     target: &SocketTarget,
     request_val: &serde_json::Value,
     mcp: bool,
 ) -> Result<String, String> {
     use std::io::ErrorKind;
-    use std::time::Duration;
 
     let doctor = request_val.get("cmd").and_then(|cmd| cmd.as_str()) == Some("doctor");
-    let (mut stream, socket_path) = connect_socket(target, mcp, doctor)?;
+    let (mut stream, socket_path, token) = connect_socket(target, mcp, doctor)?;
     let timeout = Some(Duration::from_secs(28));
     stream
         .set_read_timeout(timeout)
@@ -217,7 +251,10 @@ fn send_socket_request(
         .map_err(|_| "socket timeout configuration failed. use: anarc-ctl doctor")?;
     let req_str =
         serde_json::to_string(request_val).map_err(|_| "invalid request. use: anarc-ctl doctor")?;
-    let write_result = writeln!(stream, "{req_str}");
+    let write_result = match token {
+        Some(token) => writeln!(stream, "{token}").and_then(|()| writeln!(stream, "{req_str}")),
+        None => writeln!(stream, "{req_str}"),
+    };
 
     let mut reader = BufReader::new(stream);
     let mut resp_line = String::new();
@@ -263,15 +300,6 @@ fn send_socket_request(
             .to_string();
         Err(err)
     }
-}
-
-#[cfg(not(target_family = "unix"))]
-fn send_socket_request(
-    _target: &SocketTarget,
-    _request_val: &serde_json::Value,
-    _mcp: bool,
-) -> Result<String, String> {
-    Err("Unix required. use: anarc-ctl --help".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -775,6 +803,7 @@ fn handle_install(harness: Option<&str>, socket: &SocketTarget) {
             "# Antigravity\nAdd to ~/.gemini/config/mcp_config.json or .agents/mcp_config.json\n\n{json}"
         ),
         "codex" => println!("# Codex CLI\nAdd to ~/.codex/config.toml\n\n{codex}"),
+        #[cfg(unix)]
         "systemd" => {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/home/rover".into());
             let user_dir = std::path::Path::new(&home).join(".config/systemd/user");
@@ -793,6 +822,10 @@ fn handle_install(harness: Option<&str>, socket: &SocketTarget) {
                 user_dir.display()
             );
         }
+        #[cfg(windows)]
+        "systemd" => println!(
+            "systemd install is Linux-only. Use Task Scheduler instead:\n  schtasks /create /sc onlogon /tn Anarc /tr \"<path-to-anarc.exe>\""
+        ),
         _ => println!(
             "# Claude Code and Antigravity (JSON)\n\n{json}\n\n# Codex CLI (TOML)\n\n{codex}"
         ),
@@ -924,7 +957,10 @@ fn handle_version() {
     if total > shown.len() {
         println!("  ... +{} more", total - shown.len());
     }
+    #[cfg(unix)]
     println!("  rebuild: cargo build --release && ./install.sh");
+    #[cfg(windows)]
+    println!("  rebuild: cargo build --release");
 }
 
 fn main() {
@@ -1322,14 +1358,7 @@ fn save_screenshot(reply: &str) -> Result<String, String> {
 }
 
 fn read_stats() -> Result<String, String> {
-    let dir = std::env::var_os("ANARC_DATA_DIR")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .map(|home| PathBuf::from(home).join(".local/share/anarc"))
-        })
-        .unwrap_or_else(|| std::env::temp_dir().join(".local/share/anarc"));
+    let dir = paths::data_dir();
     let log = match std::fs::File::open(dir.join("agent/log.jsonl")) {
         Ok(log) => log,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

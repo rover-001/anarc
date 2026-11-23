@@ -88,7 +88,7 @@ cd anarc
 cargo build --locked --release
 ```
 
-Run `target\release\anarc.exe`. The CEF runtime files (`libcef.dll`, `*.pak`, `locales\`, etc.) are copied next to the executable by the CEF build script, so ship them together in any archive. The Windows build adds native minimize, maximize, and close buttons to the top bar. `anarc-ctl` currently requires Unix sockets and is not usable on Windows.
+Run `target\release\anarc.exe`. The CEF runtime files (`libcef.dll`, `*.pak`, `locales\`, etc.) are copied next to the executable by the CEF build script, so ship them together in any archive. The Windows build adds native minimize, maximize, and close buttons to the top bar. `anarc-ctl.exe` works on Windows through a loopback endpoint in the per-user data directory; see [Agent Control & MCP](#agent-control--mcp).
 
 <details>
 <summary>Cross-building Windows from Linux (experimental)</summary>
@@ -137,6 +137,47 @@ cd anarc
 ```
 
 Building from source on a macOS host is experimental and unsupported: do not run `install.sh`, and expect manual CEF work, since the project does not create an app bundle or load the CEF framework before initialization. No macOS support is provided.
+
+## Agent Control & MCP
+
+Anarc ships two binaries: the browser (`anarc`) and a control CLI (`anarc-ctl`). The CLI talks to a running browser over a local Unix socket on Linux or a loopback TCP endpoint guarded by a per-user token on Windows. Nothing is exposed outside the machine.
+
+### Set up the CLI
+
+On Linux the installer puts `anarc-ctl` on `PATH`. On Windows keep `anarc.exe` and `anarc-ctl.exe` in the same folder (or add that folder to `PATH`). Verify the install with:
+
+```sh
+anarc-ctl version
+anarc-ctl doctor
+```
+
+`doctor` reports the control endpoint, server version, CEF state, and open tabs, and is the first command to run when a call fails.
+
+### Control the browser
+
+```sh
+anarc-ctl tabs                          # list tabs and spaces
+anarc-ctl see [view|all]                # compact index of interactable elements
+anarc-ctl read page text                # read page content
+anarc-ctl find "submit button"          # locate elements
+anarc-ctl do 'click @b3; key Enter'     # run the action DSL
+anarc-ctl shot                          # save a screenshot
+anarc-ctl status | pause | resume
+anarc-ctl start                         # launch Anarc and wait for the endpoint
+```
+
+Use `--tab <id>`, `--instance <1-9>`, `--socket <path>` (the endpoint file on Windows), `--mode`, `--max`, and `--shot-as path` to target a tab or instance and shape the output. Run `anarc-ctl --help` for the full command list.
+
+### MCP servers
+
+- **Browser control** is a stdio MCP server: `anarc-ctl mcp`. It exposes `see`, `do`, `read`, `find`, `shot`, `tabs`, `tab`, `upload`, `doctor`, `status`, `pause`, and `resume`. Register it with your harness:
+  ```sh
+  anarc-ctl install --harness claude     # also: codex | antigravity | print
+  ```
+  This prints the config snippet with `ANARC_CTL_SOCKET` pointed at the active endpoint. The `systemd` harness target is Linux-only; on Windows start Anarc at logon with Task Scheduler.
+- **Plugin authoring** lives in [`tools/anarc-mcp`](tools/anarc-mcp) (the legacy [`tools/lumen-mcp`](tools/lumen-mcp) is still available). It provides `anarc_plugin_*` tools, with `lumen_*` aliases, for scaffolding, validating, building, installing, toggling, and packaging plugins, plus querying spaces and history. Setup details are in [tools/anarc-mcp/README.md](tools/anarc-mcp/README.md).
+
+Both MCP surfaces expose the same tool names and JSON schemas on Linux and Windows.
 
 ## Keyboard shortcuts
 

@@ -1,17 +1,67 @@
 use super::protocol::{AgentRequest, AgentResponse};
-use crate::paths::agent_socket::{lock_owner, record_owner, remove_dead_socket, resolve_socket};
-use std::fs::{create_dir_all, remove_file, set_permissions, Permissions};
+#[cfg(windows)]
+use super::transport;
+use super::transport::{Endpoint, Stream};
+use crate::paths::agent_socket::{lock_owner, remove_dead_socket, resolve_socket};
+#[cfg(unix)]
+use crate::paths::agent_socket::record_owner;
+use std::fs::{File, OpenOptions, create_dir_all, remove_file};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::AsRawFd;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-static RUNNING: AtomicBool = AtomicBool::new(false);
-static ACTIVE_SOCKET: std::sync::Mutex<Option<(PathBuf, std::fs::File)>> = std::sync::Mutex::new(None);
+#[cfg(windows)]
+use crate::paths::agent_socket::write_endpoint;
+#[cfg(windows)]
+use std::net::TcpListener;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::os::unix::io::{AsRawFd, FromRawFd};
+#[cfg(unix)]
+use std::os::unix::net::UnixListener;
 
+static RUNNING: AtomicBool = AtomicBool::new(false);
+static ACTIVE_SOCKET: std::sync::Mutex<Option<(PathBuf, File, Option<String>)>> =
+    std::sync::Mutex::new(None);
+
+enum Listener {
+    #[cfg(unix)]
+    Unix(UnixListener),
+    #[cfg(windows)]
+    Tcp(TcpListener),
+}
+
+impl Listener {
+    fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
+        match self {
+            #[cfg(unix)]
+            Self::Unix(listener) => listener.set_nonblocking(nonblocking),
+            #[cfg(windows)]
+            Self::Tcp(listener) => listener.set_nonblocking(nonblocking),
+        }
+    }
+
+    fn accept(&self) -> std::io::Result<Stream> {
+        match self {
+            #[cfg(unix)]
+            Self::Unix(listener) => listener.accept().map(|(stream, _)| Stream::Unix(stream)),
+            #[cfg(windows)]
+            Self::Tcp(listener) => listener.accept().map(|(stream, _)| Stream::Tcp(stream)),
+        }
+    }
+}
+
+struct Bound {
+    listener: Listener,
+    endpoint: Endpoint,
+    path: PathBuf,
+    owner: Option<File>,
+    token: Option<String>,
+}
+
+#[cfg(unix)]
 #[repr(C)]
 struct UCred {
     pid: i32,
@@ -19,6 +69,7 @@ struct UCred {
     gid: u32,
 }
 
+#[cfg(unix)]
 unsafe extern "C" {
     fn getsockopt(
         sockfd: std::os::raw::c_int,
@@ -30,14 +81,22 @@ unsafe extern "C" {
     fn getuid() -> u32;
 }
 
-fn verify_peer_uid(stream: &UnixStream) -> Result<(), &'static str> {
-    let mut cred = UCred { pid: 0, uid: 0, gid: 0 };
+#[cfg(unix)]
+#[allow(irrefutable_let_patterns)] // Stream has one variant on Unix
+fn verify_peer_uid(stream: &Stream) -> Result<(), &'static str> {
+    let Stream::Unix(stream) = stream else {
+        return Ok(());
+    };
+    let mut cred = UCred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
     let mut len = std::mem::size_of::<UCred>() as std::os::raw::c_uint;
-    let fd = stream.as_raw_fd();
     let ret = unsafe {
         getsockopt(
-            fd,
-            1, // SOL_SOCKET
+            stream.as_raw_fd(),
+            1,  // SOL_SOCKET
             17, // SO_PEERCRED
             &mut cred as *mut UCred as *mut std::os::raw::c_void,
             &mut len,
@@ -52,59 +111,121 @@ fn verify_peer_uid(stream: &UnixStream) -> Result<(), &'static str> {
     Ok(())
 }
 
-pub fn is_running() -> bool {
-    RUNNING.load(Ordering::SeqCst)
+#[cfg(windows)]
+fn verify_peer_uid(_stream: &Stream) -> Result<(), &'static str> {
+    Ok(())
 }
 
+#[cfg(unix)]
 fn get_systemd_listener() -> Option<UnixListener> {
     if let Ok(listen_pid) = std::env::var("LISTEN_PID")
-        && listen_pid.parse::<u32>().ok() != Some(std::process::id()) {
-            return None;
-        }
+        && listen_pid.parse::<u32>().ok() != Some(std::process::id())
+    {
+        return None;
+    }
     let fds: i32 = std::env::var("LISTEN_FDS").ok()?.parse().ok()?;
     if fds >= 1 {
-        use std::os::unix::io::FromRawFd;
         Some(unsafe { UnixListener::from_raw_fd(3) })
     } else {
         None
     }
 }
 
-pub fn start_server(
-    handler_tx: async_channel::Sender<(AgentRequest, async_channel::Sender<AgentResponse>)>,
-) -> Result<PathBuf, String> {
-    let mut active = ACTIVE_SOCKET.lock().map_err(|_| "socket unavailable. use: anarc-ctl doctor")?;
-    if let Some((path, _owner)) = active.as_ref() {
-        return Ok(path.clone());
-    }
-
-    let (listener, socket_path, socket_owner) = if let Some(sys_listener) = get_systemd_listener() {
-        let sock_path = std::env::var("ANARC_CTL_SOCKET")
+#[cfg(unix)]
+fn bind_platform() -> Result<Bound, String> {
+    if let Some(listener) = get_systemd_listener() {
+        let path = std::env::var("ANARC_CTL_SOCKET")
             .or_else(|_| std::env::var("ANARC_SOCKET_PATH"))
             .map(PathBuf::from)
             .unwrap_or_else(|_| resolve_socket(None, None).bind);
-        (sys_listener, sock_path, None)
-    } else {
-        let socket_path = resolve_socket(None, None).bind;
-        let unavailable = |_| "socket unavailable. use: anarc-ctl doctor";
-        if let Some(parent) = socket_path.parent().filter(|path| !path.as_os_str().is_empty()) {
-            create_dir_all(parent).map_err(unavailable)?;
-        }
-        let owner = lock_owner(&socket_path, true).map_err(unavailable)?;
-        let _ = remove_dead_socket(&socket_path, &owner);
-        let listener = UnixListener::bind(&socket_path).map_err(unavailable)?;
-        if let Err(error) = set_permissions(&socket_path, Permissions::from_mode(0o600))
-            .and_then(|()| record_owner(&owner, &socket_path))
-        {
-            let _ = remove_file(&socket_path);
-            return Err(unavailable(error).into());
-        }
-        (listener, socket_path, Some(owner))
-    };
+        return Ok(Bound {
+            listener: Listener::Unix(listener),
+            endpoint: Endpoint::Unix(path.clone()),
+            path,
+            owner: None,
+            token: None,
+        });
+    }
+
+    let unavailable = |_| "socket unavailable. use: anarc-ctl doctor";
+    let path = resolve_socket(None, None).bind;
+    if let Some(parent) = path.parent().filter(|path| !path.as_os_str().is_empty()) {
+        create_dir_all(parent).map_err(unavailable)?;
+    }
+    let owner = lock_owner(&path, true).map_err(unavailable)?;
+    let _ = remove_dead_socket(&path, &owner);
+    let listener = UnixListener::bind(&path).map_err(unavailable)?;
+    if let Err(error) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .and_then(|()| record_owner(&owner, &path))
+    {
+        let _ = remove_file(&path);
+        return Err(unavailable(error).into());
+    }
+    Ok(Bound {
+        listener: Listener::Unix(listener),
+        endpoint: Endpoint::Unix(path.clone()),
+        path,
+        owner: Some(owner),
+        token: None,
+    })
+}
+
+#[cfg(windows)]
+fn bind_platform() -> Result<Bound, String> {
+    let unavailable = |_| "socket unavailable. use: anarc-ctl doctor";
+    let path = resolve_socket(None, None).bind;
+    if let Some(parent) = path.parent().filter(|path| !path.as_os_str().is_empty()) {
+        create_dir_all(parent).map_err(unavailable)?;
+    }
+    let owner = lock_owner(&path, true).map_err(unavailable)?;
+    let _ = remove_dead_socket(&path, &owner);
+    // The TCP endpoint disappears with the owning process, so any file left
+    // behind is stale and safe to replace.
+    let _ = remove_file(&path);
+    let listener = TcpListener::bind(transport::loopback_addr(0)).map_err(unavailable)?;
+    let addr = listener.local_addr().map_err(unavailable)?;
+    let token = transport::new_token().map_err(|e| e.to_string())?;
+    if let Err(error) = write_endpoint(&path, addr.port(), &token) {
+        let _ = remove_file(&path);
+        return Err(unavailable(error).into());
+    }
+    Ok(Bound {
+        listener: Listener::Tcp(listener),
+        endpoint: Endpoint::Tcp {
+            addr,
+            token: token.clone(),
+        },
+        path,
+        owner: Some(owner),
+        token: Some(token),
+    })
+}
+
+pub fn is_running() -> bool {
+    RUNNING.load(Ordering::SeqCst)
+}
+
+pub fn start_server(
+    handler_tx: async_channel::Sender<(AgentRequest, async_channel::Sender<AgentResponse>)>,
+) -> Result<PathBuf, String> {
+    let mut active = ACTIVE_SOCKET
+        .lock()
+        .map_err(|_| "socket unavailable. use: anarc-ctl doctor")?;
+    if let Some((path, _, _)) = active.as_ref() {
+        return Ok(path.clone());
+    }
+
+    let Bound {
+        listener,
+        endpoint,
+        path,
+        owner,
+        token,
+    } = bind_platform()?;
 
     RUNNING.store(true, Ordering::SeqCst);
-    if let Some(owner) = socket_owner {
-        *active = Some((socket_path.clone(), owner));
+    if let Some(owner) = owner {
+        *active = Some((path.clone(), owner, token.clone()));
     }
     drop(active);
 
@@ -114,7 +235,7 @@ pub fn start_server(
             let _ = listener.set_nonblocking(true);
             while RUNNING.load(Ordering::SeqCst) && !handler_tx.is_closed() {
                 match listener.accept() {
-                    Ok((mut stream, _)) => {
+                    Ok(mut stream) => {
                         if let Err(reason) = verify_peer_uid(&stream) {
                             eprintln!("anarc-agent: connection rejected: {reason}");
                             let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
@@ -127,10 +248,11 @@ pub fn start_server(
                             continue;
                         }
                         let h_tx = handler_tx.clone();
+                        let auth = token.clone();
                         std::thread::Builder::new()
                             .name("anarc-agent-conn".into())
                             .spawn(move || {
-                                handle_connection(stream, h_tx);
+                                handle_connection(stream, h_tx, auth);
                             })
                             .ok();
                     }
@@ -152,25 +274,32 @@ pub fn start_server(
         return Err("server unavailable. use: status".into());
     }
 
-    Ok(socket_path)
+    let _ = endpoint;
+    Ok(path)
 }
 
 pub fn stop_server() {
     RUNNING.store(false, Ordering::SeqCst);
     if let Ok(mut guard) = ACTIVE_SOCKET.lock()
-        && let Some((path, _owner)) = guard.take() {
-            let _ = remove_file(path);
-        }
+        && let Some((path, _owner, _token)) = guard.take()
+    {
+        #[cfg(unix)]
+        let _ = remove_file(path);
+        #[cfg(windows)]
+        crate::paths::agent_socket::cleanup(&path);
+    }
 }
 
 fn handle_connection(
-    mut stream: UnixStream,
+    mut stream: Stream,
     handler_tx: async_channel::Sender<(AgentRequest, async_channel::Sender<AgentResponse>)>,
+    token: Option<String>,
 ) {
     let reader = match stream.try_clone() {
         Ok(s) => BufReader::new(s),
         Err(_) => return,
     };
+    let mut authenticated = token.is_none();
 
     for line in reader.lines() {
         if !RUNNING.load(Ordering::SeqCst) || handler_tx.is_closed() {
@@ -184,6 +313,19 @@ fn handle_connection(
         if trimmed.is_empty() {
             continue;
         }
+        if !authenticated {
+            if trimmed != token.as_deref().unwrap_or("") {
+                let reply = AgentResponse::err(
+                    "connection rejected: agent token mismatch. use: run Anarc and the harness as the same user",
+                );
+                if let Ok(json) = serde_json::to_string(&reply) {
+                    let _ = writeln!(stream, "{json}");
+                }
+                break;
+            }
+            authenticated = true;
+            continue;
+        }
 
         let parsed = parse_client_command(trimmed);
         let op = parsed.as_ref().map_or("unknown", AgentRequest::op);
@@ -193,12 +335,18 @@ fn handle_connection(
                 if handler_tx.try_send((request, resp_tx)).is_err() {
                     return AgentResponse::err("agent busy. use: status");
                 }
-                resp_rx.recv_blocking().unwrap_or_else(|_| AgentResponse::err("agent disconnected. use: status"))
+                resp_rx
+                    .recv_blocking()
+                    .unwrap_or_else(|_| AgentResponse::err("agent disconnected. use: status"))
             }),
             Err(message) => AgentResponse::err(message),
         };
 
-        let reply_bytes = response.result.as_ref().or(response.error.as_ref()).map_or(0, String::len);
+        let reply_bytes = response
+            .result
+            .as_ref()
+            .or(response.error.as_ref())
+            .map_or(0, String::len);
         log_call(op, response.ok, reply_bytes);
         let json = match serde_json::to_string(&response) {
             Ok(s) => s,
@@ -211,14 +359,18 @@ fn handle_connection(
 }
 
 fn log_call(op: &str, ok: bool, reply_bytes: usize) {
-    use std::os::unix::fs::OpenOptionsExt;
     let dir = crate::paths::data_dir().join("agent");
     if create_dir_all(&dir).is_err() {
         return;
     }
-    if let Ok(mut log) = std::fs::OpenOptions::new().create(true).append(true).mode(0o600)
-        .open(dir.join("log.jsonl"))
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    if let Ok(mut log) = options.open(dir.join("log.jsonl")) {
         let line = serde_json::json!({ "op": op, "ok": ok, "reply_bytes": reply_bytes,
                                       "est_tokens": reply_bytes as f64 / 3.5 });
         let _ = log.write_all(format!("{line}\n").as_bytes());
@@ -251,25 +403,38 @@ pub fn parse_client_command(input: &str) -> Result<AgentRequest, &'static str> {
         return Ok(req);
     }
 
-    // Support plain CLI command strings like "see view", "read page text", "find search", "tabs"
     let parts: Vec<&str> = input.split_whitespace().collect();
     let cmd = parts.first().copied().unwrap_or("");
 
     Ok(match cmd {
         "see" => {
             let scope = parts.get(1).map(|s| s.to_string());
-            AgentRequest::See { tab_id: None, scope }
+            AgentRequest::See {
+                tab_id: None,
+                scope,
+            }
         }
         "read" => {
             let target = parts.get(1).map(|s| s.to_string());
             let mode = parts.get(2).map(|s| s.to_string());
-            AgentRequest::Read { tab_id: None, target, mode, max: None }
+            AgentRequest::Read {
+                tab_id: None,
+                target,
+                mode,
+                max: None,
+            }
         }
         "find" => {
             let query = parts.get(1..).map(|s| s.join(" ")).unwrap_or_default();
-            AgentRequest::Find { tab_id: None, query }
+            AgentRequest::Find {
+                tab_id: None,
+                query,
+            }
         }
-        "wait" => AgentRequest::Do { tab_id: None, ops: input.to_string() },
+        "wait" => AgentRequest::Do {
+            tab_id: None,
+            ops: input.to_string(),
+        },
         "tabs" => AgentRequest::Tabs,
         "doctor" => AgentRequest::Doctor,
         "pause" => AgentRequest::Pause,
@@ -285,7 +450,10 @@ mod tests {
 
     #[test]
     fn waits_for_delayed_browser_and_returns_timeout() {
-        let request = AgentRequest::See { tab_id: None, scope: None };
+        let request = AgentRequest::See {
+            tab_id: None,
+            scope: None,
+        };
         let pending = || {
             let mut response = AgentResponse::err("tab not ready, retry in 1s");
             response.pending_tab = Some("test-tab".into());
@@ -297,14 +465,19 @@ mod tests {
             if calls == 1 {
                 return pending();
             }
-            assert!(matches!(request, AgentRequest::See { tab_id: Some(id), .. } if id == "test-tab"));
+            assert!(
+                matches!(request, AgentRequest::See { tab_id: Some(id), .. } if id == "test-tab")
+            );
             AgentResponse::success("ready")
         });
         assert!(response.ok);
         assert_eq!(calls, 2);
 
         let response = wait_for_tab(request.clone(), Duration::from_millis(10), |_| pending());
-        assert_eq!(response.error.as_deref(), Some("tab not ready, retry in 1s"));
+        assert_eq!(
+            response.error.as_deref(),
+            Some("tab not ready, retry in 1s")
+        );
 
         let mut calls = 0;
         let missing = super::super::plugin::no_such_tab("1* chatgpt.com, 2 about:blank");
@@ -318,7 +491,10 @@ mod tests {
 
     #[test]
     fn test_parse_client_command_json_and_plain() {
-        assert_eq!(parse_client_command("bogus").err(), Some("unknown command. use: tabs"));
+        assert_eq!(
+            parse_client_command("bogus").err(),
+            Some("unknown command. use: tabs")
+        );
         let json = r#"{"cmd":"see","scope":"all"}"#;
         let req = parse_client_command(json);
         assert!(matches!(req, Ok(AgentRequest::See { scope: Some(scope), .. }) if scope == "all"));
