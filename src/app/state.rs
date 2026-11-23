@@ -192,6 +192,11 @@ pub(crate) struct Lumen {
     pub(crate) last_spaces_mtime: std::sync::atomic::AtomicU64,
     pub(crate) last_shared_cookies_mtime: std::sync::atomic::AtomicU64,
     pub(crate) last_cookie_sync: std::time::Instant,
+    // Live Share session state mirrored from the daemon's live-share-session.json.
+    pub(crate) last_live_share_session_mtime: std::sync::atomic::AtomicU64,
+    pub(crate) live_share_session_generation: u64,
+    pub(crate) live_share_is_host: bool,
+    pub(crate) live_share_space_id: String,
     pub(crate) pending_auth_recovery: std::collections::HashMap<String, (String, std::time::Instant)>,
     pub(super) preferences: crate::settings::BrowserPreferences,
     pub(super) plugins: crate::plugin::PluginHost,

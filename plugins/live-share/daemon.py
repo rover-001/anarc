@@ -29,8 +29,20 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 DEFAULT_PORT = 7433
 CONFIG_DIR = Path(os.environ.get("ANARC_CONFIG_DIR", Path.home() / ".config" / "anarc"))
 SPACES_FILE = CONFIG_DIR / "spaces.json"
+COOKIES_FILE = CONFIG_DIR / "shared-cookies.json"
+SESSION_FILE = CONFIG_DIR / "live-share-session.json"
 PLUGIN_DIR = Path(__file__).resolve().parent
 WIN_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+# Tailnet discovery shells out to `tailscale status` and probes every peer's
+# port. Doing that on every /api/tailscale/peers request used to block the
+# browser's CEF IO thread (the plugin proxy is synchronous) for seconds at a
+# time. Cache the result and refresh it in the background instead.
+TS_CACHE_TTL = 20.0
+_ts_cache_lock = threading.Lock()
+_ts_cache = {"data": None, "at": 0.0}
+_ts_refresh_started = False
+
 
 def get_tailscale_ip() -> str:
     """Discovers IPv4 address from tailscale daemon."""
@@ -54,15 +66,42 @@ def get_tailscale_ip() -> str:
 
 def check_browser(ip: str) -> bool:
     try:
-        with socket.create_connection((ip, DEFAULT_PORT), timeout=0.35):
+        with socket.create_connection((ip, DEFAULT_PORT), timeout=0.2):
             return True
     except Exception:
         return False
 
-def get_tailscale_peers() -> Dict[str, Any]:
+
+def get_tailscale_peers(force: bool = False) -> Dict[str, Any]:
+    """Cached tailnet discovery. Returns the cached snapshot instantly; the
+    snapshot is refreshed by a background thread every TS_CACHE_TTL seconds."""
+    now = time.monotonic()
+    with _ts_cache_lock:
+        cached = _ts_cache["data"]
+        if not force and cached is not None and (now - _ts_cache["at"]) < TS_CACHE_TTL:
+            return cached
+    data = _query_tailscale_peers()
+    with _ts_cache_lock:
+        # Keep the older snapshot when a refresh fails (tailscale daemon busy).
+        if not data.get("error") or _ts_cache["data"] is None:
+            _ts_cache["data"] = data
+            _ts_cache["at"] = now
+        else:
+            data = _ts_cache["data"]
+    return data
+
+
+def _ts_refresh_loop():
+    """Warm the discovery cache at startup and keep it fresh off the request path."""
+    while True:
+        get_tailscale_peers(force=True)
+        time.sleep(TS_CACHE_TTL)
+
+
+def _query_tailscale_peers() -> Dict[str, Any]:
     """Discovers self machine and peers via tailscale status --json, filtering for online browser peers."""
     try:
-        res = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=3, creationflags=WIN_NO_WINDOW)
+        res = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=2, creationflags=WIN_NO_WINDOW)
         if res.returncode != 0:
             return {"self": None, "peers": []}
         data = json.loads(res.stdout)
@@ -174,16 +213,52 @@ class LiveShareState:
         self.tabs: List[Dict[str, Any]] = []
         self.theme: Optional[Dict[str, Any]] = None
         self.cookies: List[Dict[str, Any]] = []
-        cookies_file = CONFIG_DIR / "shared-cookies.json"
-        if cookies_file.is_file():
+        if COOKIES_FILE.is_file():
             try:
-                self.cookies = json.loads(cookies_file.read_text(encoding="utf-8"))
+                self.cookies = json.loads(COOKIES_FILE.read_text(encoding="utf-8"))
             except Exception:
                 pass
         self.activity: List[Dict[str, Any]] = []
         self.sse_subscribers: Set[Any] = set()
         self.last_spaces_mtime: float = 0.0
         self.suppress_local_watch: bool = False
+        # Bumped on every session transition. The browser watches this file and
+        # exports the host's full session (account cookies / page logins) as soon
+        # as sharing starts, before any peer connects.
+        self.session_generation = 0
+        self._write_session_file()
+
+
+    def _write_session_file(self):
+        """Publish session state so the embedded browser can react without polling HTTP."""
+        with self.lock:
+            payload = {
+                "active": bool(self.shared_space_id),
+                "is_host": self.is_host,
+                "generation": self.session_generation,
+                "space_id": self.shared_space_id,
+            }
+        try:
+            tmp = SESSION_FILE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            tmp.replace(SESSION_FILE)
+        except Exception:
+            pass
+
+    def bump_session_generation(self):
+        with self.lock:
+            self.session_generation += 1
+        self._write_session_file()
+
+    @staticmethod
+    def _save_cookies(cookies: List[Dict[str, Any]]):
+        """Atomically persist the session snapshot shared with peers."""
+        try:
+            tmp = COOKIES_FILE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(cookies, indent=2), encoding="utf-8")
+            tmp.replace(COOKIES_FILE)
+        except Exception as e:
+            print(f"[Error saving shared-cookies.json] {e}", file=sys.stderr)
 
     def log_activity(self, actor: str, message: str):
         now_str = datetime.now().strftime("%H:%M:%S")
@@ -235,6 +310,7 @@ class LiveShareState:
             self.tabs = tabs
             self.theme = theme
             self.log_activity("Local", f"Started sharing space '{self.shared_space_name}' ({len(tabs)} tabs)")
+        self.bump_session_generation()
 
         # Broadcast update to peers
         self.broadcast_to_peers("sync_state", {
@@ -266,6 +342,7 @@ class LiveShareState:
             self.send_to_peer(peer, event, {"peer_address": f"{self.tailscale_ip}:{self.port}"})
 
         self._remove_shared_space_from_file()
+        self.bump_session_generation()
         self.notify_sse()
         return True
 
@@ -391,10 +468,7 @@ class LiveShareState:
                 self.theme = data.get("theme")
                 if data.get("cookies"):
                     self.cookies = data.get("cookies")
-                    try:
-                        (CONFIG_DIR / "shared-cookies.json").write_text(json.dumps(self.cookies, indent=2), encoding="utf-8")
-                    except Exception:
-                        pass
+                    self._save_cookies(self.cookies)
                 self.log_activity(peer_address, f"Connected to peer's space '{self.shared_space_name}'")
 
             # Merge into local spaces.json
@@ -406,6 +480,7 @@ class LiveShareState:
 
             # Notify the remote peer that we connected
             self.send_to_peer(peer_address, "peer_joined", {"peer_address": f"{self.tailscale_ip}:{self.port}"})
+            self.bump_session_generation()
             return True, None
         except Exception as e:
             return False, f"Connection failed: {e}"
@@ -448,7 +523,7 @@ class LiveShareState:
                                     diff = True
                                     self.cookies = new_cookies
                                     try:
-                                        (CONFIG_DIR / "shared-cookies.json").write_text(json.dumps(self.cookies, indent=2), encoding="utf-8")
+                                        self._save_cookies(self.cookies)
                                     except Exception:
                                         pass
                                 if diff:
@@ -531,10 +606,7 @@ class LiveShareState:
             cookies = payload.get("cookies", [])
             with self.lock:
                 self.cookies = cookies
-            try:
-                (CONFIG_DIR / "shared-cookies.json").write_text(json.dumps(cookies, indent=2), encoding="utf-8")
-            except Exception as e:
-                print(f"[Error saving shared-cookies.json] {e}", file=sys.stderr)
+            self._save_cookies(cookies)
             self.log_activity(origin, f"Synchronized {len(cookies)} session cookies")
 
         elif event_type == "sync_state":
@@ -550,7 +622,7 @@ class LiveShareState:
                 if payload.get("cookies"):
                     self.cookies = payload.get("cookies")
                     try:
-                        (CONFIG_DIR / "shared-cookies.json").write_text(json.dumps(self.cookies, indent=2), encoding="utf-8")
+                        self._save_cookies(self.cookies)
                     except Exception:
                         pass
                 self.log_activity(origin, f"Synchronized {len(self.tabs)} tabs from peer")
@@ -564,6 +636,7 @@ class LiveShareState:
                 self.connected_peers.clear()
                 self.log_activity(origin, "Session ended")
             self._remove_shared_space_from_file()
+            self.bump_session_generation()
             self.notify_sse()
 
         elif event_type == "peer_left":
@@ -988,12 +1061,23 @@ class LiveShareHandler(BaseHTTPRequestHandler):
             cookies = body.get("cookies", [])
             with self.state.lock:
                 self.state.cookies = cookies
-            try:
-                (CONFIG_DIR / "shared-cookies.json").write_text(json.dumps(cookies, indent=2), encoding="utf-8")
-            except Exception:
-                pass
+                space_id = self.state.shared_space_id
+                space_name = self.state.shared_space_name
+                tabs = copy.deepcopy(self.state.tabs)
+                theme = copy.deepcopy(self.state.theme)
+            self.state._save_cookies(cookies)
             if self.state.is_host:
+                # Push both the dedicated cookie event and a full state snapshot:
+                # a peer that connected before the browser finished exporting the
+                # account/session data still converges without waiting for a poll.
                 self.state.broadcast_to_peers("sync_cookies", {"cookies": cookies})
+                self.state.broadcast_to_peers("sync_state", {
+                    "space_id": space_id,
+                    "space_name": space_name,
+                    "tabs": tabs,
+                    "theme": theme,
+                    "cookies": cookies,
+                })
             self.send_json({"success": True, "count": len(cookies)})
 
         else:
@@ -1059,6 +1143,13 @@ def start_daemon(host: str = "0.0.0.0", port: int = DEFAULT_PORT, spaces_file: P
     # Start watcher
     watcher_thread = threading.Thread(target=state.watch_spaces_file, daemon=True)
     watcher_thread.start()
+
+    # Warm tailnet discovery off the request path so the synchronous CEF plugin
+    # proxy never blocks on `tailscale status` (up to seconds per call).
+    global _ts_refresh_started
+    if not _ts_refresh_started:
+        _ts_refresh_started = True
+        threading.Thread(target=_ts_refresh_loop, daemon=True).start()
 
     # Auto-resume peer connection if shared-space is in spaces.json
     try:

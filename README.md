@@ -81,7 +81,7 @@ Set both variables to fresh directories to test with a separate profile.
 - [`src/app`](src/app) contains browser actions, application state, and the window shell.
 - [`src/engine`](src/engine) integrates with CEF and handles input and page rendering.
 - [`src/plugin`](src/plugin), [`lumen-plugin-sdk`](lumen-plugin-sdk), and [`wit`](wit) define the plugin runtime and interfaces.
-- [`examples/plugins`](examples/plugins) contains example themes, styles, and other plugin packs.
+- [`plugins`](plugins) contains the shipped plugin packs (theme, YouTube userstyle, vim-style keymap, search pack) and the Live Share panel. [`examples/plugins/tidy-tabs`](examples/plugins/tidy-tabs) is the WebAssembly guest example; it needs `--features wasm-plugins` and a compiled component to run.
 
 Report bugs in [GitHub Issues](https://github.com/rover-001/anarc/issues). Include your Linux distribution, desktop environment, and steps to reproduce.
 

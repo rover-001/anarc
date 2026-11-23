@@ -1,12 +1,13 @@
 # Anarc Live Share (`com.anarc.live-share`)
 
-**Anarc Live Share** is a real-time collaborative space-sharing plugin for the Anarc browser. It connects two (or more) users directly peer-to-peer over **WebRTC / Tailscale**, allowing them to share a browser space, co-browse, search the web together, and access each other's live tabs directly inside the browser.
+**Anarc Live Share** is a real-time collaborative space-sharing plugin for the Anarc browser. It connects two (or more) users over a private **Tailscale** network via a small local daemon per machine, allowing them to share a browser space, co-browse, search the web together, and access each other's live tabs directly inside the browser.
 
 ---
 
 ## Features
 
-- **Direct In-Browser Peer-to-Peer**: Connects directly between browsers over WebRTC DataChannel (and private Tailscale IPv4 `100.x.y.z` or MagicDNS). Fully end-to-end encrypted with zero background servers.
+- **Direct Peer-to-Peer over Tailscale**: A local daemon exchanges state with peers over the private Tailnet (IPv4 `100.x.y.z` or MagicDNS), protected by WireGuard. No public server or signaling service is involved.
+- **Shared Account / Session Mirroring**: When a host starts sharing, the full session of that space's browser profile (account cookies and page logins, including Google) is exported and mirrored to the peer's `[Shared]` space on connect, so both browse under the same signed-in account.
 - **Bi-directional Space Sync**:
   - User A hosts a shared space (e.g., "Research", "Project Alpha", "Personal").
   - User B connects using User A's Share Code.
@@ -63,8 +64,10 @@ Output:
 ## Architecture & Security
 
 - **Network Boundary**: Binds to port `7433`. Because communication occurs over Tailscale, traffic is authenticated and encrypted by Tailscale's WireGuard mesh. Only machines on your Tailnet can connect.
-- **Lumen Persistence**: Reads and atomically merges tabs into `~/.config/anarc/spaces.json` with conflict-free update locks and loop suppression.
-- **Real-Time Push**: Uses Server-Sent Events (SSE) and HTTP event hooks to provide sub-50ms reactive updates.
+- **Anarc Persistence**: Reads and atomically merges tabs into `~/.config/anarc/spaces.json` with conflict-free update locks and loop suppression.
+- **Real-Time Push**: Uses Server-Sent Events (SSE) and HTTP event hooks for reactive updates. The embedded panel uses short adaptive polling because the `anarc-plugin://` proxy cannot stream SSE.
+- **Fast Discovery**: Tailnet peer discovery is cached and refreshed in the background so `tailscale status` never blocks the browser's IO thread.
+- **Session Handoff**: Session changes are published via `~/.config/anarc/live-share-session.json`; account cookies are mirrored through `~/.config/anarc/shared-cookies.json` into the peer's isolated `[Shared]` CEF profile.
 
 ---
 

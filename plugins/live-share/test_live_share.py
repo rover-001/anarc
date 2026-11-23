@@ -10,6 +10,7 @@ import unittest
 import urllib.request
 from pathlib import Path
 
+import daemon
 from daemon import start_daemon
 
 class TestLiveShare(unittest.TestCase):
@@ -17,6 +18,14 @@ class TestLiveShare(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp(prefix="lumen_live_share_test_")
         self.spaces_a = Path(self.temp_dir) / "spaces_a.json"
         self.spaces_b = Path(self.temp_dir) / "spaces_b.json"
+
+        # Keep cookie/session snapshots out of the real Anarc config.
+        config_dir = Path(self.temp_dir) / "config"
+        config_dir.mkdir()
+        self._daemon_paths = (daemon.CONFIG_DIR, daemon.COOKIES_FILE, daemon.SESSION_FILE)
+        daemon.CONFIG_DIR = config_dir
+        daemon.COOKIES_FILE = config_dir / "shared-cookies.json"
+        daemon.SESSION_FILE = config_dir / "live-share-session.json"
 
         # Mock spaces for Node A
         self.spaces_a.write_text(json.dumps({
@@ -58,6 +67,7 @@ class TestLiveShare(unittest.TestCase):
     def tearDown(self):
         self.server_a.shutdown()
         self.server_b.shutdown()
+        daemon.CONFIG_DIR, daemon.COOKIES_FILE, daemon.SESSION_FILE = self._daemon_paths
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_full_live_share_flow(self):
@@ -162,6 +172,64 @@ class TestLiveShare(unittest.TestCase):
             status_b_after = json.loads(resp.read().decode("utf-8"))
         self.assertEqual(len(status_b_after["tabs"]), 2)
         self.assertIsNone(next((t for t in status_b_after["tabs"] if t["id"] == tab_to_close), None))
+
+    def test_host_session_cookies_reach_peer(self):
+        """A peer joining a shared space must inherit the host's signed-in session."""
+        req = urllib.request.Request(
+            "http://127.0.0.1:17433/api/share",
+            data=json.dumps({"space_id": "personal"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            self.assertTrue(json.loads(resp.read().decode("utf-8")).get("success"))
+
+        session_cookies = [
+            {
+                "name": "SID",
+                "value": "host-google-session",
+                "domain": ".google.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": True,
+                "sameSite": "None",
+            },
+            {
+                "name": "sessionid",
+                "value": "host-site-login",
+                "domain": ".example.com",
+                "path": "/",
+            },
+        ]
+        req = urllib.request.Request(
+            "http://127.0.0.1:17433/api/cookies",
+            data=json.dumps({"cookies": session_cookies}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(json.loads(resp.read().decode("utf-8")).get("count"), 2)
+
+        req = urllib.request.Request(
+            "http://127.0.0.1:17434/api/connect",
+            data=json.dumps({"peer_address": "127.0.0.1:17433"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            self.assertTrue(json.loads(resp.read().decode("utf-8")).get("success"))
+
+        with urllib.request.urlopen("http://127.0.0.1:17434/api/status") as resp:
+            peer_cookies = json.loads(resp.read().decode("utf-8")).get("cookies", [])
+        self.assertEqual(
+            {c["name"] for c in peer_cookies},
+            {"SID", "sessionid"},
+        )
+
+        with urllib.request.urlopen("http://127.0.0.1:17433/api/peer/sync") as resp:
+            synced = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual({c["name"] for c in synced.get("cookies", [])}, {"SID", "sessionid"})
+
 
 if __name__ == "__main__":
     unittest.main()

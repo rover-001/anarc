@@ -30,6 +30,7 @@ function setMode(nextMode) {
   $("host-setup").hidden = mode !== "host";
   $("join-setup").hidden = mode === "host";
   setFeedback();
+  schedulePolling();
 }
 
 async function apiFetch(path, options = {}, retried = false) {
@@ -38,24 +39,35 @@ async function apiFetch(path, options = {}, retried = false) {
     const sep = url.includes("?") ? "&" : "?";
     url = `${url}${sep}__body=${encodeURIComponent(options.body)}`;
   }
+  // The panel proxy is synchronous on the CEF IO thread. Bound every request so
+  // a stalled daemon can never freeze the whole browser.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 7000);
   try {
     const res = await fetch(url, {
       headers: { "Content-Type": "application/json" },
       ...options,
+      signal: controller.signal,
+      cache: "no-store",
     });
     if (res.ok) {
       return await res.json();
     }
-  } catch (_) {}
-  if (!retried) {
-    try {
-      await fetch("anarc-plugin://com.anarc.live-share/__anarc_start_service").catch(() => {});
-      await new Promise((r) => setTimeout(r, 600));
-      return await apiFetch(path, options, true);
-    } catch (_) {}
+    // A real HTTP error will not be fixed by restarting the service.
+    console.warn("Live Share API error:", path, res.status);
+    return null;
+  } catch (_) {
+    // Only transport failures (daemon restarting) warrant a quick retry. The
+    // proxy already ensures the daemon is running on every request.
+    if (!retried) {
+      await new Promise((r) => setTimeout(r, 250));
+      return apiFetch(path, options, true);
+    }
+    console.warn("Live Share API unreachable:", path);
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
-  console.warn("Live Share API error:", path);
-  return null;
 }
 
 async function refreshTailscale() {
@@ -221,11 +233,35 @@ async function refreshStatus() {
       }
     }
   }
+  schedulePolling();
 }
 
-function initSSE() {
-  // SSE cannot tunnel through the anarc-plugin:// proxy; poll instead.
-  setInterval(refreshStatus, 5000);
+// SSE cannot tunnel through the synchronous anarc-plugin:// proxy. Poll only
+// as fast as the current view needs: fast while a session is live, slow while
+// idle, and never while the panel is hidden.
+let statusPollMs = 0;
+let peersPollMs = 0;
+let statusTimer = null;
+let peersTimer = null;
+
+function schedulePolling() {
+  const connected = Boolean(currentStatus?.shared_space_id);
+  const nextStatus = connected ? 1500 : 10000;
+  const nextPeers = mode === "join" && !connected ? 20000 : 60000;
+  if (nextStatus !== statusPollMs) {
+    clearInterval(statusTimer);
+    statusPollMs = nextStatus;
+    statusTimer = setInterval(() => {
+      if (!document.hidden) refreshStatus();
+    }, nextStatus);
+  }
+  if (nextPeers !== peersPollMs) {
+    clearInterval(peersTimer);
+    peersPollMs = nextPeers;
+    peersTimer = setInterval(() => {
+      if (!document.hidden && mode === "join") refreshTailscale();
+    }, nextPeers);
+  }
 }
 
 // Global paste fallback for inputs: prevent repeat triggers and double pasting
@@ -296,10 +332,8 @@ $("switch-space-btn").addEventListener("click", () => {
   window.location.href = `anarc-plugin://com.anarc.live-share/__anarc_switch_to_space?id=${encodeURIComponent(targetId)}`;
 });
 
-// Initialize
-fetch("anarc-plugin://com.anarc.live-share/__anarc_start_service").catch(() => {});
+// Initialize — the proxy already starts the daemon on first live-share request.
 loadSpaces();
 refreshTailscale();
 refreshStatus();
-initSSE();
-setInterval(refreshTailscale, 10000);
+schedulePolling();

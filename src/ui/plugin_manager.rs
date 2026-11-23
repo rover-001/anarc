@@ -406,19 +406,6 @@ fn plugin_row(
                                             row.descriptor.name.clone()
                                         }),
                                 )
-                                .when(row.descriptor.id == "com.anarc.live-share", |d| {
-                                    d.child(
-                                        div()
-                                            .px_1p5()
-                                            .py_0p5()
-                                            .rounded_sm()
-                                            .bg(rgb(theme.accent))
-                                            .text_color(rgb(theme.base))
-                                            .text_xs()
-                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                            .child("Top Recommended"),
-                                    )
-                                })
                                 .child(
                                     div()
                                         .text_xs()
