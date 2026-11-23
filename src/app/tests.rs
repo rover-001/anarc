@@ -411,6 +411,87 @@ fn split_can_extend_to_four_panes(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn closing_a_pane_in_a_four_way_split_only_removes_that_pane(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.add_tab();
+        app.active_space_mut().active = Some("tab-1".into());
+        app.split_active_with_next();
+        app.split_active_with_next();
+        assert_eq!(
+            app.current_split_pair().unwrap().panes(),
+            ["tab-1", "tab-2", "tab-3", "tab-4"]
+        );
+
+        // Ctrl+W in the bottom-right pane must leave the other three split.
+        app.set_focused_pane(3);
+        app.close_active_tab();
+        let pair = app.current_split_pair().unwrap();
+        assert_eq!(pair.panes(), ["tab-1", "tab-2", "tab-3"]);
+        assert!(!pair.is_quad());
+        assert_eq!(app.focused_pane, 2);
+        assert_eq!(app.focused_tab_id(), "tab-3");
+        assert_eq!(app.active_tab_id(), "tab-3");
+
+        // Closing a non-focused pane keeps the current pane focused.
+        app.close_tab_by_id("tab-1");
+        let pair = app.current_split_pair().unwrap();
+        assert_eq!(pair.panes(), ["tab-2", "tab-3"]);
+        assert_eq!(app.focused_pane, 1);
+        assert_eq!(app.focused_tab_id(), "tab-3");
+
+        app.close_active_tab();
+        assert!(app.current_split_pair().is_none());
+        assert_eq!(app.focused_pane, 0);
+        assert_eq!(app.active_tab_id(), "tab-2");
+    });
+}
+
+#[gpui::test]
+fn unloading_a_kept_pane_keeps_the_rest_of_the_split(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        app.add_tab();
+        app.active_space_mut().active = Some("tab-1".into());
+        app.split_active_with_next();
+        app.split_active_with_next();
+        app.active_space_mut()
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.id == "tab-4")
+            .unwrap()
+            .set_pinned(true);
+        app.set_focused_pane(3);
+        app.close_active_tab();
+
+        let pair = app.current_split_pair().unwrap();
+        assert_eq!(pair.panes(), ["tab-1", "tab-2", "tab-3"]);
+        assert_eq!(app.focused_pane, 2);
+        assert_eq!(app.active_tab_id(), "tab-3");
+    });
+}
+
+#[gpui::test]
 fn dropping_a_tab_on_a_pane_builds_the_split(cx: &mut gpui::TestAppContext) {
     let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
         .lock()

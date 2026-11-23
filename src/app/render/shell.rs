@@ -552,6 +552,9 @@ impl Anarc {
                 let (top_height, bottom_height) =
                     split_view::pane_heights(total_height, self.split_ratio_y);
                 let quad = split_pair.as_ref().is_some_and(|pair| pair.is_quad());
+                let triple = split_pair
+                    .as_ref()
+                    .is_some_and(|pair| pair.third.is_some() && pair.fourth.is_none());
                 let left_tab_id = split_pair
                     .as_ref()
                     .map(|pair| pair.first.clone())
@@ -573,6 +576,7 @@ impl Anarc {
                     self.web_viewport.update(cx, |viewport, cx| {
                         let mut changed = viewport.set_theme(theme);
                         changed |= viewport.set_fullscreen(false);
+                        changed |= viewport.set_focus_pane_index(0);
                         changed |= viewport.set_split_grid(quad);
                         changed |= viewport.set_pane_y_offset(0.0);
                         if left_image.is_none()
@@ -616,7 +620,8 @@ impl Anarc {
                     let right_edge_color = None;
                     self.second_web_viewport.update(cx, |viewport, cx| {
                         let mut changed = viewport.set_theme(theme);
-                        changed |= viewport.set_split_grid(quad);
+                        changed |= viewport.set_focus_pane_index(1);
+                        changed |= viewport.set_split_grid(quad || triple);
                         changed |= viewport.set_pane_y_offset(0.0);
                         changed |= viewport.set_frame(
                             right_tab_id.clone(),
@@ -634,44 +639,71 @@ impl Anarc {
                         }
                     });
                 }
-                if quad
-                    && let Some(pair) = split_pair.as_ref()
-                {
-                    let bottom_ids = [pair.third.clone(), pair.fourth.clone()];
-                    for (offset, tab_id) in bottom_ids.into_iter().flatten().enumerate() {
-                        let pane_index = offset + 2;
-                        let image = self.engine.get_image(&tab_id);
-                        let cursor = self.engine.get_cursor(&tab_id);
+                if let Some(pair) = split_pair.as_ref() {
+                    if let Some(third_id) = pair.third.as_ref() {
+                        let image = self.engine.get_image(third_id);
+                        let cursor = self.engine.get_cursor(third_id);
                         #[cfg(not(test))]
                         let frame_matches = self
                             .resize_drag
-                            .target_size(&tab_id)
-                            .is_some_and(|(w, h)| self.engine.frame_matches_size(&tab_id, w, h));
+                            .target_size(third_id)
+                            .is_some_and(|(w, h)| self.engine.frame_matches_size(third_id, w, h));
                         #[cfg(not(test))]
-                        let edge_color = self.resize_drag.edge_color_until_frame(&tab_id, frame_matches);
+                        let edge_color =
+                            self.resize_drag.edge_color_until_frame(third_id, frame_matches);
                         #[cfg(test)]
                         let edge_color = None;
-                        let viewport = if pane_index == 2 {
-                            &self.third_web_viewport
-                        } else {
-                            &self.fourth_web_viewport
-                        };
-                        viewport.update(cx, |viewport, cx| {
+                        self.third_web_viewport.update(cx, |viewport, cx| {
                             let mut changed = viewport.set_theme(theme);
+                            changed |= viewport.set_focus_pane_index(2);
                             changed |= viewport.set_split_grid(true);
-                            changed |= viewport.set_pane_y_offset(top_height + DIVIDER_WIDTH);
+                            changed |= viewport.set_pane_y_offset(if quad {
+                                top_height + DIVIDER_WIDTH
+                            } else {
+                                0.0
+                            });
                             changed |= viewport.set_frame(
-                                tab_id,
+                                third_id.clone(),
                                 viewport_sidebar,
                                 image,
                                 cursor,
                                 Vec::new(),
-                                if pane_index == 2 {
-                                    0.0
-                                } else {
-                                    left_width + DIVIDER_WIDTH
-                                },
-                                pane_index,
+                                if quad { 0.0 } else { left_width + DIVIDER_WIDTH },
+                                if quad { 2 } else { 3 },
+                                true,
+                                edge_color,
+                            );
+                            if changed {
+                                cx.notify();
+                            }
+                        });
+                    }
+                    if quad && let Some(fourth_id) = pair.fourth.as_ref() {
+                        let image = self.engine.get_image(fourth_id);
+                        let cursor = self.engine.get_cursor(fourth_id);
+                        #[cfg(not(test))]
+                        let frame_matches = self
+                            .resize_drag
+                            .target_size(fourth_id)
+                            .is_some_and(|(w, h)| self.engine.frame_matches_size(fourth_id, w, h));
+                        #[cfg(not(test))]
+                        let edge_color =
+                            self.resize_drag.edge_color_until_frame(fourth_id, frame_matches);
+                        #[cfg(test)]
+                        let edge_color = None;
+                        self.fourth_web_viewport.update(cx, |viewport, cx| {
+                            let mut changed = viewport.set_theme(theme);
+                            changed |= viewport.set_focus_pane_index(3);
+                            changed |= viewport.set_split_grid(true);
+                            changed |= viewport.set_pane_y_offset(top_height + DIVIDER_WIDTH);
+                            changed |= viewport.set_frame(
+                                fourth_id.clone(),
+                                viewport_sidebar,
+                                image,
+                                cursor,
+                                Vec::new(),
+                                left_width + DIVIDER_WIDTH,
+                                3,
                                 true,
                                 edge_color,
                             );
@@ -799,6 +831,75 @@ impl Anarc {
                                         ),
                                 )
                                 .child(bottom_row)
+                        } else if triple {
+                            // Three panes: a full-height left pane and a
+                            // vertically stacked pair on the right.
+                            let pane = |view: gpui_kit::AnyView, width: f32, height: f32| {
+                                div()
+                                    .w(px(width))
+                                    .h(px(height))
+                                    .child(view.cached(StyleRefinement::default().size_full()))
+                            };
+                            let right_column = div()
+                                .id("split-column-right")
+                                .w(px(right_width))
+                                .h_full()
+                                .flex()
+                                .flex_col()
+                                .child(pane(
+                                    AnyView::from(self.second_web_viewport.clone()),
+                                    right_width,
+                                    top_height,
+                                ))
+                                .child(
+                                    div()
+                                        .id("split-divider-horizontal-triple")
+                                        .h(px(DIVIDER_HIT_WIDTH))
+                                        .my(px((DIVIDER_WIDTH - DIVIDER_HIT_WIDTH) / 2.0))
+                                        .w_full()
+                                        .cursor_row_resize()
+                                        .on_mouse_down(
+                                            gpui_kit::MouseButton::Left,
+                                            cx.listener(|this, _, _window, cx| {
+                                                this.split_resizing_horizontal = true;
+                                                #[cfg(not(test))]
+                                                this.begin_browser_resize_drag(_window, true, true);
+                                                cx.notify();
+                                            }),
+                                        ),
+                                )
+                                .child(pane(
+                                    AnyView::from(self.third_web_viewport.clone()),
+                                    right_width,
+                                    bottom_height,
+                                ));
+                            div()
+                                .id("split-viewports-triple")
+                                .size_full()
+                                .flex()
+                                .child(pane(
+                                    AnyView::from(self.web_viewport.clone()),
+                                    left_width,
+                                    total_height,
+                                ))
+                                .child(
+                                    div()
+                                        .id("split-divider-triple")
+                                        .w(px(DIVIDER_HIT_WIDTH))
+                                        .mx(px((DIVIDER_WIDTH - DIVIDER_HIT_WIDTH) / 2.0))
+                                        .h_full()
+                                        .cursor_col_resize()
+                                        .on_mouse_down(
+                                            gpui_kit::MouseButton::Left,
+                                            cx.listener(|this, _, _window, cx| {
+                                                this.split_resizing = true;
+                                                #[cfg(not(test))]
+                                                this.begin_browser_resize_drag(_window, true, true);
+                                                cx.notify();
+                                            }),
+                                        ),
+                                )
+                                .child(right_column)
                         } else {
                         div()
                             .id("split-viewports")

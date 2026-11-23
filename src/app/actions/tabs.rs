@@ -1,6 +1,33 @@
 use super::super::*;
 use super::seed_pinned_destination;
 
+/// Compact a split after one of its panes closes. Returns the new split (or
+/// `None` when fewer than two panes remain), the adjusted focus index and the
+/// pane tab that should become active.
+fn split_after_close(
+    split: &Option<SplitPair>,
+    focused_pane: usize,
+    tab_id: &str,
+) -> Option<(Option<SplitPair>, usize, Option<String>)> {
+    let pair = split.as_ref()?;
+    let closed_index = pair.panes().iter().position(|id| *id == tab_id)?;
+    let remaining_ids = pair.panes_without(tab_id);
+    let last_focused = remaining_ids.len().saturating_sub(1);
+    let focused = focused_pane.min(pair.pane_count() - 1);
+    let next_focused = if focused > closed_index {
+        focused - 1
+    } else {
+        focused.min(last_focused)
+    }
+    .min(last_focused);
+    let activated = remaining_ids.get(next_focused).cloned();
+    Some((
+        SplitPair::from_panes(&remaining_ids),
+        next_focused,
+        activated,
+    ))
+}
+
 impl Anarc {
     pub(crate) fn open_tab_context_menu(
         &mut self,
@@ -348,21 +375,16 @@ impl Anarc {
         let closing_space_id = space.id.clone();
         let closing_snapshot = space.tabs[index].clone();
         let closed_tab_id = closing_snapshot.id.clone();
-        let split_other = space.split.as_ref().and_then(|pair| {
-            let panes = pair.panes();
-            if panes.iter().any(|id| *id == tab_id) {
-                panes
-                    .iter()
-                    .find(|id| **id != tab_id)
-                    .map(|id| (*id).to_owned())
-            } else {
-                None
-            }
-        });
-        if split_other.is_some() {
-            space.split = None;
-            self.focused_pane = 0;
-        }
+        let is_active_space = space.id == self.active_space;
+        let split_fallback = split_after_close(&space.split, self.focused_pane, tab_id).map(
+            |(remaining_split, next_focused, fallback)| {
+                if is_active_space {
+                    self.focused_pane = next_focused;
+                }
+                space.split = remaining_split;
+                fallback
+            },
+        );
         self.engine.close_browser(tab_id);
         let closed = space.tabs.remove(index);
         self.recently_closed_tabs.push((space.id.clone(), closed));
@@ -377,9 +399,9 @@ impl Anarc {
             space.tabs.push(Tab::new(&id, "New tab", "about:blank"));
             space.active = Some(id.clone());
             activated_new_tab = Some(id);
-        } else if let Some(other) = split_other {
-            space.active = Some(other.clone());
-            activated_new_tab = Some(other);
+        } else if let Some(act) = split_fallback.flatten() {
+            space.active = Some(act.clone());
+            activated_new_tab = Some(act);
         } else if was_active {
             // Closing a regular tab should never open a favorite or pinned page.
             // Kept tabs stay unloaded unless the user selects them, so keep a
@@ -452,21 +474,13 @@ impl Anarc {
         }
 
         let was_active = space.active.as_deref() == Some(tab_id);
-        let split_other = space.split.as_ref().and_then(|pair| {
-            let panes = pair.panes();
-            if panes.iter().any(|id| *id == tab_id) {
-                panes
-                    .iter()
-                    .find(|id| **id != tab_id)
-                    .map(|id| (*id).to_owned())
-            } else {
-                None
-            }
-        });
-        if split_other.is_some() {
-            space.split = None;
-            self.focused_pane = 0;
-        }
+        let split_fallback = split_after_close(&space.split, self.focused_pane, tab_id).map(
+            |(remaining_split, next_focused, fallback)| {
+                self.focused_pane = next_focused;
+                space.split = remaining_split;
+                fallback
+            },
+        );
         self.engine.close_browser(tab_id);
         space.tabs[index].state = TabState::Discarded;
         if space.tabs[index].is_pinned() {
@@ -496,13 +510,17 @@ impl Anarc {
         }
 
         if was_active {
-            let next_active = split_other
+            let next_active = split_fallback
+                .flatten()
                 .filter(|other| other != tab_id)
+                // A remaining pane is the natural focus target even when its
+                // tab has not been loaded yet, but never reactivate a pinned
+                // page: that would reopen it on the next render.
                 .filter(|other| {
                     space
                         .tabs
                         .iter()
-                        .any(|tab| tab.id == *other && tab.state != TabState::Discarded)
+                        .any(|tab| tab.id == *other && !tab.is_pinned())
                 })
                 // Unloading a pinned tab must never activate another pinned
                 // page: doing so reopens it on the next render and cascades
@@ -558,17 +576,23 @@ impl Anarc {
             if pair.panes().contains(&first) || pair.panes().contains(&second) {
                 return false;
             }
-            let extra = space
-                .tabs
-                .iter()
-                .map(|tab| tab.id.clone())
-                .find(|id| !pair.panes().contains(&id.as_str()) && id != second);
-            let Some(extra) = extra else {
-                return false;
-            };
-            pair.third = Some(second.to_owned());
-            pair.fourth = Some(extra);
-            space.split = Some(pair);
+            if pair.third.is_some() {
+                // Three panes already: only the free quadrant can be filled.
+                pair.fourth = Some(second.to_owned());
+                space.split = Some(pair);
+            } else {
+                let extra = space
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.id.clone())
+                    .find(|id| !pair.panes().contains(&id.as_str()) && id != second);
+                let Some(extra) = extra else {
+                    return false;
+                };
+                pair.third = Some(second.to_owned());
+                pair.fourth = Some(extra);
+                space.split = Some(pair);
+            }
         } else {
             space.split = Some(SplitPair::new(first.to_owned(), second.to_owned()));
         }
@@ -625,6 +649,14 @@ impl Anarc {
             }
             self.active_space_mut().split = Some(pair);
             self.set_focused_pane(pane_index);
+            self.save_state();
+            return;
+        }
+        if pair.third.is_some() {
+            // Three-pane layout has one free quadrant (the bottom-right pane).
+            pair.fourth = Some(tab_id.to_owned());
+            self.active_space_mut().split = Some(pair);
+            self.set_focused_pane(3);
             self.save_state();
             return;
         }

@@ -186,7 +186,7 @@ impl Render for WebViewport {
         let down_sidebar = self.sidebar_width;
         let pane_offset = self.pane_offset;
         let pane_y_offset = self.pane_y_offset;
-        let pane_index = self.pane_index;
+        let pane_index = self.focus_pane_index;
         let up_sidebar = self.sidebar_width;
         let move_sidebar = self.sidebar_width;
         let scroll_sidebar = self.sidebar_width;

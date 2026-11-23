@@ -56,6 +56,10 @@ pub struct WebViewport {
     pane_offset: f32,
     pane_y_offset: f32,
     pane_index: usize,
+    /// Logical pane index used for input routing and drop targets. Unlike
+    /// `pane_index` (which selects corner radii) this is always 0-based and
+    /// contiguous, including the right-hand panes of a three-pane split.
+    focus_pane_index: usize,
     split_layout: bool,
     /// True when panes form a 2x2 grid rather than a single split row.
     split_grid: bool,
@@ -95,6 +99,7 @@ impl WebViewport {
             pane_offset: 0.0,
             pane_y_offset: 0.0,
             pane_index: 0,
+            focus_pane_index: 0,
             split_layout: false,
             split_grid: false,
             drag_edge_color: None,
@@ -128,6 +133,10 @@ impl WebViewport {
 
     pub fn set_split_grid(&mut self, split_grid: bool) -> bool {
         std::mem::replace(&mut self.split_grid, split_grid) != split_grid
+    }
+
+    pub fn set_focus_pane_index(&mut self, focus_pane_index: usize) -> bool {
+        std::mem::replace(&mut self.focus_pane_index, focus_pane_index) != focus_pane_index
     }
 
     pub fn set_pane_y_offset(&mut self, pane_y_offset: f32) -> bool {

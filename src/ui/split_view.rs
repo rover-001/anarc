@@ -115,6 +115,19 @@ pub fn quad_pane_sizes(
     [(left, top), (right, top), (left, bottom), (right, bottom)]
 }
 
+/// Sizes for a three-pane split: full-height left pane and a stacked pair on
+/// the right, in pane order.
+pub fn triple_pane_sizes(
+    total_width: f32,
+    total_height: f32,
+    ratio_x: f32,
+    ratio_y: f32,
+) -> [(f32, f32); 3] {
+    let (left, right) = pane_widths(total_width, ratio_x);
+    let (top, bottom) = pane_heights(total_height, ratio_y);
+    [(left, total_height), (right, top), (right, bottom)]
+}
+
 pub fn pane_heights(total_height: f32, ratio: f32) -> (f32, f32) {
     let available = (total_height - DIVIDER_WIDTH).max(0.0);
     let min_ratio = if available > 0.0 {
@@ -174,6 +187,18 @@ mod tests {
         assert!((top - bottom).abs() < 0.01);
         assert!((top + bottom + DIVIDER_WIDTH - 604.0).abs() < 0.01);
         assert!((ratio_y_at_pointer(200.0, 0.0, 400.0) - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn triple_panes_fill_the_full_height_on_the_left() {
+        let sizes = triple_pane_sizes(1004.0, 604.0, 0.5, 0.5);
+        assert_eq!(sizes.len(), 3);
+        let (left, left_height) = sizes[0];
+        let (right, top) = sizes[1];
+        let (_, bottom) = sizes[2];
+        assert!((left_height - 604.0).abs() < 0.01);
+        assert!((left + right + DIVIDER_WIDTH - 1004.0).abs() < 0.01);
+        assert!((top + bottom + DIVIDER_WIDTH - 604.0).abs() < 0.01);
     }
 
     #[test]

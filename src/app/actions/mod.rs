@@ -465,6 +465,14 @@ impl Anarc {
                 self.split_ratio_y,
             );
             quad.to_vec()
+        } else if pair.third.is_some() {
+            let triple = split_view::triple_pane_sizes(
+                content_width,
+                content_height,
+                self.split_ratio,
+                self.split_ratio_y,
+            );
+            triple.to_vec()
         } else {
             let (left, right) = split_view::pane_widths(content_width, self.split_ratio);
             vec![(left, content_height), (right, content_height)]
@@ -731,7 +739,8 @@ impl Anarc {
             }
             let mut used = pair.panes().iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
             let mut extra = Vec::new();
-            while extra.len() < 2 {
+            let needed = if pair.third.is_some() { 1 } else { 2 };
+            while extra.len() < needed {
                 let next = space
                     .tabs
                     .iter()
@@ -748,8 +757,12 @@ impl Anarc {
                 used.push(id.clone());
                 extra.push(id);
             }
-            pair.third = Some(extra.remove(0));
-            pair.fourth = Some(extra.pop().unwrap());
+            if pair.third.is_some() {
+                pair.fourth = Some(extra.remove(0));
+            } else {
+                pair.third = Some(extra.remove(0));
+                pair.fourth = Some(extra.pop().unwrap());
+            }
             space.split = Some(pair);
             self.split_ratio = 0.5;
             self.split_ratio_y = 0.5;

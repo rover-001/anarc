@@ -78,6 +78,29 @@ impl SplitPair {
     pub fn pane_count(&self) -> usize {
         self.panes().len()
     }
+
+    /// Pane ids with `tab_id` removed, preserving row-major order.
+    pub fn panes_without(&self, tab_id: &str) -> Vec<String> {
+        self.panes()
+            .into_iter()
+            .filter(|id| *id != tab_id)
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Rebuilds a pair from ordered pane ids. Returns `None` when fewer than
+    /// two panes remain, i.e. the split should be exited.
+    pub fn from_panes(panes: &[String]) -> Option<Self> {
+        let mut panes = panes.iter();
+        let first = panes.next()?.clone();
+        let second = panes.next()?.clone();
+        Some(Self {
+            first,
+            second,
+            third: panes.next().cloned(),
+            fourth: panes.next().cloned(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -151,6 +174,31 @@ mod tests {
         space.split = Some(quad);
         let decoded: Space = serde_json::from_str(&serde_json::to_string(&space).unwrap()).unwrap();
         assert_eq!(decoded.split, space.split);
+    }
+
+    #[test]
+    fn closing_one_pane_compacts_the_remaining_panes() {
+        let quad = SplitPair {
+            first: "tab-1".into(),
+            second: "tab-2".into(),
+            third: Some("tab-3".into()),
+            fourth: Some("tab-4".into()),
+        };
+
+        let after_first = SplitPair::from_panes(&quad.panes_without("tab-1")).unwrap();
+        assert_eq!(after_first.panes(), ["tab-2", "tab-3", "tab-4"]);
+        assert!(!after_first.is_quad());
+        assert_eq!(after_first.third.as_deref(), Some("tab-4"));
+
+        let after_fourth = SplitPair::from_panes(&quad.panes_without("tab-4")).unwrap();
+        assert_eq!(after_fourth.panes(), ["tab-1", "tab-2", "tab-3"]);
+
+        let triple = after_fourth;
+        let after_second = SplitPair::from_panes(&triple.panes_without("tab-2")).unwrap();
+        assert_eq!(after_second.panes(), ["tab-1", "tab-3"]);
+
+        let pair = SplitPair::new("tab-1".into(), "tab-2".into());
+        assert!(SplitPair::from_panes(&pair.panes_without("tab-1")).is_none());
     }
 
     #[test]
