@@ -17,7 +17,7 @@ pub fn render(
     theme: SpaceTheme,
     downloads: Vec<DownloadRecord>,
     page_zoom: f64,
-    site_protection_enabled: bool,
+    ad_blocker_enabled: bool,
     has_web_site: bool,
     settings_section: SettingsSection,
     search_engine: SearchEngine,
@@ -37,7 +37,7 @@ pub fn render(
         AppPage::Settings => settings_content(
             theme,
             page_zoom,
-            site_protection_enabled,
+            ad_blocker_enabled,
             has_web_site,
             settings_section,
             search_engine,
@@ -128,7 +128,7 @@ pub fn render(
 fn settings_content(
     theme: SpaceTheme,
     page_zoom: f64,
-    site_protection_enabled: bool,
+    ad_blocker_enabled: bool,
     has_web_site: bool,
     selected_section: SettingsSection,
     search_engine: SearchEngine,
@@ -236,29 +236,20 @@ fn settings_content(
                         cx.notify();
                     }),
                 ));
-            let shield_control = if has_web_site {
-                crate::ui::plugin_manager::toggle_switch(
-                    "settings-site-protection".to_owned(),
-                    site_protection_enabled,
-                    theme,
-                    cx.listener(|this, _, _, cx| {
-                        this.toggle_shield_for_active_tab();
-                        cx.notify();
-                    }),
-                )
+            let shield_control = crate::ui::plugin_manager::toggle_switch(
+                "settings-ad-blocker".to_owned(),
+                ad_blocker_enabled,
+                theme,
+                cx.listener(|this, _, _, cx| {
+                    let enabled = !this.engine.ad_blocker_enabled();
+                    this.set_ad_blocker_enabled(enabled);
+                    cx.notify();
+                }),
+            );
+            let protection_text = if ad_blocker_enabled {
+                "On for every site"
             } else {
-                div()
-                    .text_sm()
-                    .text_color(rgb(theme.muted))
-                    .child("Open a site to change")
-                    .into_any_element()
-            };
-            let protection_text = if !has_web_site {
-                "Open a site to change"
-            } else if site_protection_enabled {
-                "On for this site"
-            } else {
-                "Off for this site"
+                "Off"
             };
             div()
                 .flex()
@@ -273,7 +264,7 @@ fn settings_content(
                 ))
                 .child(setting_card(
                     "Privacy",
-                    "Tracking protection",
+                    "Ad & tracker shield",
                     protection_text,
                     shield_control,
                     theme,

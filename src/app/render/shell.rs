@@ -735,14 +735,13 @@ impl Lumen {
                 .and_then(|host| self.zoom_levels.get(&host).copied())
                 .map(|level| 1.2_f64.powf(level))
                 .unwrap_or(self.preferences.default_zoom_factor);
-            let site_protection_enabled = self.engine.shield_enabled_for_url(active_url);
             let has_web_site = crate::shield::url_host(active_url).is_some();
             let content = ui::app_pages::render(
                 page,
                 theme,
                 self.engine.downloads(),
                 zoom,
-                site_protection_enabled,
+                self.engine.ad_blocker_enabled(),
                 has_web_site,
                 self.settings_section,
                 self.preferences.search_engine,
