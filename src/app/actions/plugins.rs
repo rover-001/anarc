@@ -35,6 +35,13 @@ impl Lumen {
         self.plugin_action_error = error;
     }
 
+    /// Expand or collapse the details accordion for one plugin row.
+    pub(crate) fn toggle_plugin_details(&mut self, id: String) {
+        if !self.expanded_plugins.remove(&id) {
+            self.expanded_plugins.insert(id);
+        }
+    }
+
     pub(crate) fn plugin_action_error(&self) -> Option<&str> {
         self.plugin_action_error.as_deref()
     }

@@ -203,6 +203,8 @@ pub(crate) struct Lumen {
     pub(super) panel_registry: crate::plugin::PanelRegistryHandle,
     pub(super) pending_plugin_review: Option<PendingPluginReview>,
     pub(super) plugin_action_error: Option<String>,
+    /// Plugin ids whose description/details accordion is expanded.
+    pub(crate) expanded_plugins: std::collections::HashSet<String>,
     #[cfg(not(test))]
     pub(super) cef_task_started: bool,
 }

@@ -133,12 +133,18 @@ pub(crate) fn register_panel_plugins(
                 if host.is_registered(&metadata.id) {
                     continue;
                 }
-                let enabled_by_default = metadata.id == "com.anarc.live-share"
-                    || value
+                // Live Share is opt-in: it opens a network daemon and mirrors
+                // session data, so it must never auto-enable even if an older
+                // packaged manifest still says otherwise.
+                let enabled_by_default = if metadata.id == "com.anarc.live-share" {
+                    false
+                } else {
+                    value
                         .get("plugin")
                         .and_then(|p| p.get("enabled_by_default"))
                         .and_then(toml::Value::as_bool)
-                        .unwrap_or(false);
+                        .unwrap_or(false)
+                };
                 let descriptor = PluginDescriptor {
                     id: metadata.id.clone(),
                     name: metadata.name,

@@ -368,6 +368,7 @@ impl Lumen {
             panel_registry,
             pending_plugin_review: None,
             plugin_action_error: None,
+            expanded_plugins: std::collections::HashSet::new(),
             #[cfg(not(test))]
             cef_task_started: false,
         };

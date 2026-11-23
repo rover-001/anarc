@@ -887,13 +887,16 @@ def tool_list(include_builtins: bool = True) -> Dict[str, Any]:
                         m = tomllib.loads(manifest_file.read_text(encoding="utf-8"))
                         p = m.get("plugin", {})
                         pid = p.get("id", item.name)
+                        enabled_by_default = bool(p.get("enabled_by_default", True))
+                        if pid == "com.anarc.live-share":
+                            enabled_by_default = False
                         installed.append({
                             "id": pid,
                             "name": p.get("name", item.name),
                             "version": p.get("version", "unknown"),
                             "kind": p.get("kind", "pack"),
                             "description": p.get("description", ""),
-                            "enabled": config_enabled.get(pid, True),
+                            "enabled": config_enabled.get(pid, enabled_by_default),
                             "path": str(item),
                             "is_symlink": item.is_symlink(),
                         })

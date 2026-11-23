@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use gpui_kit::{
     Context, FontWeight, StatefulInteractiveElement, assets::IconName, component::Icon,
     component::scroll::ScrollableElement, div, prelude::*, px, rgb,
@@ -24,6 +26,7 @@ pub fn render(
     plugin_rows: Vec<crate::plugin::PluginRow>,
     pending_plugin_review: Option<crate::ui::plugin_manager::PluginReview>,
     plugin_action_error: Option<String>,
+    expanded_plugins: HashSet<String>,
     cx: &mut Context<Lumen>,
 ) -> gpui_kit::AnyElement {
     let (title, icon) = match page {
@@ -43,6 +46,7 @@ pub fn render(
             plugin_rows,
             pending_plugin_review,
             plugin_action_error,
+            expanded_plugins,
             cx,
         ),
         AppPage::Downloads => downloads_content(downloads, theme),
@@ -133,6 +137,7 @@ fn settings_content(
     plugin_rows: Vec<crate::plugin::PluginRow>,
     pending_plugin_review: Option<crate::ui::plugin_manager::PluginReview>,
     plugin_action_error: Option<String>,
+    expanded_plugins: HashSet<String>,
     cx: &mut Context<Lumen>,
 ) -> gpui_kit::AnyElement {
     let tabs = div()
@@ -404,19 +409,15 @@ fn settings_content(
                 "Protection is off for this website".to_owned()
             };
             let shield_control = if has_web_site {
-                action_button(
-                    if site_protection_enabled {
-                        "Turn off"
-                    } else {
-                        "Turn on"
-                    },
+                crate::ui::plugin_manager::toggle_switch(
+                    "settings-site-protection".to_owned(),
+                    site_protection_enabled,
                     theme,
                     cx.listener(|this, _, _, cx| {
                         this.toggle_shield_for_active_tab();
                         cx.notify();
                     }),
                 )
-                .into_any_element()
             } else {
                 div()
                     .text_sm()
@@ -452,6 +453,7 @@ fn settings_content(
             plugin_rows,
             pending_plugin_review,
             plugin_action_error,
+            expanded_plugins,
             cx,
         ),
     };
@@ -480,6 +482,7 @@ fn plugin_manager_content(
     plugin_rows: Vec<crate::plugin::PluginRow>,
     pending_review: Option<crate::ui::plugin_manager::PluginReview>,
     feedback: Option<String>,
+    expanded: HashSet<String>,
     cx: &mut Context<Lumen>,
 ) -> gpui_kit::AnyElement {
     use std::rc::Rc;
@@ -598,6 +601,15 @@ fn plugin_manager_content(
             });
         });
 
+    let details_entity = entity.clone();
+    let on_toggle_details: crate::ui::plugin_manager::DetailsCallback =
+        Rc::new(move |id, _, _, app| {
+            let entity = details_entity.clone();
+            app.update_entity(&entity, move |this, cx| {
+                this.toggle_plugin_details(id);
+                cx.notify();
+            });
+        });
     crate::ui::plugin_manager::render(
         &plugin_rows,
         &[],
@@ -608,6 +620,8 @@ fn plugin_manager_content(
         on_install,
         on_open_plugin_folder,
         on_open_panel,
+        &expanded,
+        on_toggle_details,
     )
 }
 

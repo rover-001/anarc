@@ -751,6 +751,7 @@ impl Lumen {
                 self.plugin_rows(),
                 self.pending_plugin_review(),
                 self.plugin_action_error().map(str::to_owned),
+                self.expanded_plugins.clone(),
                 cx,
             );
             root = root.child(
