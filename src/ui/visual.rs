@@ -2,7 +2,6 @@
 pub const UI_SCALE: f32 = 0.85;
 
 /// Shared chrome and viewport geometry, in GPUI logical pixels.
-pub const TOPBAR_HEIGHT: f32 = 44.0 * UI_SCALE;
 pub const ADDRESS_BAR_HEIGHT: f32 = 30.0 * UI_SCALE;
 pub const NAV_BUTTON_SIZE: f32 = 28.0 * UI_SCALE;
 pub const TAB_ROW_HEIGHT: f32 = 36.0 * UI_SCALE;
@@ -321,11 +320,6 @@ mod tests {
     }
 
     #[test]
-    fn viewport_origin_matches_scaled_topbar_height() {
-        assert_eq!(TOPBAR_HEIGHT, 44.0 * UI_SCALE);
-    }
-
-    #[test]
     fn navigation_button_metrics_scale_with_ui() {
         assert_eq!(NAV_BUTTON_SIZE, 28.0 * UI_SCALE);
     }
@@ -548,15 +542,34 @@ pub fn anarc_logo() -> Option<std::sync::Arc<gpui_kit::RenderImage>> {
     .clone()
 }
 
+/// Height of the browser chrome above the content card. Sized to the sidebar's
+/// top padding plus its space-name band, so the space name, the collapsed
+/// favicon strip and the content card all begin on the same horizontal line.
 pub fn active_topbar_height() -> f32 {
     match active_layout_preset()
         .as_ref()
         .and_then(|preset| preset.topbar.as_deref())
     {
         Some("hidden") => 0.0,
-        Some("compact") => 40.0 * UI_SCALE,
-        _ => TOPBAR_HEIGHT,
+        Some("compact") => 34.0 * UI_SCALE,
+        _ => 40.0 * UI_SCALE,
     }
+}
+
+/// Sidebar's vertical top inset (`.py_3()`), shared with the header geometry.
+pub const SIDEBAR_TOP_PADDING: f32 = 12.0;
+/// Gap between the sidebar header and the first row (`.gap_2()`).
+pub const SIDEBAR_HEADER_GAP: f32 = 8.0;
+
+/// Extra top inset for sidebar rows so the first favicon/tile row lines up with
+/// the content card's top edge. The card sits below the top bar plus its own
+/// chrome inset; the sidebar's header band alone leaves the icons too high.
+pub const SIDEBAR_ROW_TOP_OFFSET: f32 = 2.0;
+
+/// Height of the space-name band (or the collapsed spacer).
+pub fn sidebar_header_height() -> f32 {
+    (active_topbar_height() - SIDEBAR_TOP_PADDING - SIDEBAR_HEADER_GAP).max(0.0)
+        + SIDEBAR_ROW_TOP_OFFSET
 }
 
 pub fn active_card_radius() -> f32 {

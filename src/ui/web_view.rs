@@ -2,8 +2,6 @@ use std::sync::Arc;
 
 use crate::app::{CONTENT_BEZEL_X, Anarc};
 #[cfg(test)]
-use crate::ui::visual::TOPBAR_HEIGHT;
-#[cfg(test)]
 use gpui_kit::px;
 
 use crate::ui::visual::{SpaceTheme, active_topbar_height, space_theme};
@@ -390,8 +388,8 @@ mod tests {
 
     #[test]
     fn viewport_mouse_origin_matches_scaled_topbar_height() {
-        let at_origin = gpui_kit::point(px(100.0), px(TOPBAR_HEIGHT));
-        let below_origin = gpui_kit::point(px(100.0), px(TOPBAR_HEIGHT + 10.0));
+        let at_origin = gpui_kit::point(px(100.0), px(active_topbar_height()));
+        let below_origin = gpui_kit::point(px(100.0), px(active_topbar_height() + 10.0));
         assert_eq!(browser_point(at_origin, 0.0).1, 0);
         assert_eq!(browser_point(below_origin, 0.0).1, 10);
     }

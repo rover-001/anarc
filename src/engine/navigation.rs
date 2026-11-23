@@ -310,6 +310,15 @@ impl Engine {
             .lock()
             .map(|state| state.focus_on_editable_field)
             .unwrap_or(false);
+        // CEF's KeyEvent has no auto-repeat flag, so passing held keydowns
+        // through makes pages read each repeat as a fresh press. Space is the
+        // common case: video sites use "hold Space" for temporary speed-up and
+        // toggle play/pause on every repeated press. Keep the first press and
+        // the key-up (which ends the temporary action), drop the repeats.
+        let held_space = event.keystroke.key == " " || event.keystroke.key.eq_ignore_ascii_case("space");
+        if event.is_held && !focus_on_editable_field && held_space {
+            return;
+        }
         let key = &event.keystroke.key;
         let is_control_or_platform =
             event.keystroke.modifiers.control || event.keystroke.modifiers.platform;

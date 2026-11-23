@@ -12,7 +12,7 @@ use crate::ui::sidebar::rows::{
     tab_context_menu_position,
 };
 use crate::ui::split_view::{self, DIVIDER_HIT_WIDTH, DIVIDER_WIDTH};
-use crate::ui::visual::{self, ADDRESS_BAR_HEIGHT, NAV_BUTTON_SIZE, TOPBAR_HEIGHT, UI_SCALE};
+use crate::ui::visual::{self, ADDRESS_BAR_HEIGHT, NAV_BUTTON_SIZE, UI_SCALE};
 use crate::ui::web_view::WebViewport;
 use crate::ui::{space_switcher, tab_list};
 use crate::{engine, history, persist, reader, ui};

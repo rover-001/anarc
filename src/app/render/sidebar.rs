@@ -56,6 +56,7 @@ impl Anarc {
             .filter(|(_, _, started, _)| started.elapsed() < ui::motion::space_switch().duration());
 
         let sidebar_width = px(sidebar_width_f32);
+        let sidebar_collapsed = self.is_sidebar_collapsed();
         let mut sidebar_content = div()
             .id("sidebar")
             .relative()
@@ -63,7 +64,8 @@ impl Anarc {
             .flex_col()
             .w(sidebar_width)
             .h_full()
-            .px_3()
+            .when(sidebar_collapsed, |el| el.px_2())
+            .when(!sidebar_collapsed, |el| el.px_3())
             .py_3()
             .gap_2()
             .bg(rgb(theme.base))
@@ -106,7 +108,7 @@ impl Anarc {
                 div()
                     .id("active-space-name")
                     .w_full()
-                    .h(px(visual::active_topbar_height() - 24.0 * UI_SCALE))
+                    .h(px(visual::sidebar_header_height()))
                     .flex()
                     .items_center()
                     .px_1()
@@ -1356,29 +1358,105 @@ impl Anarc {
         } else {
             let active_space_icon = self.active_space().icon.clone();
             if self.preferences.sidebar_mode == crate::settings::SidebarMode::Icons {
-                for (tab_id, _, favicon) in &tabs {
-                    let id = tab_id.clone();
-                    let selected = active_tab_id.as_ref() == Some(tab_id);
+                // The expanded sidebar spends this band on the space name;
+                // collapsed, the full-width top bar occupies it. Size the
+                // spacer so the first favicon row starts exactly where the
+                // content card on the right begins.
+                let header_height = visual::sidebar_header_height();
+                sidebar_content = sidebar_content.child(
+                    div().id("collapsed-topbar-spacer").w_full().h(px(header_height)),
+                );
+
+                // Favorites and pins are one kept-tab concept. Show them above
+                // a divider so the two groups read apart without per-tab
+                // badges or fills.
+                let (kept_tabs, normal_tabs): (Vec<_>, Vec<_>) =
+                    tabs.iter().cloned().partition(|(id, _, _)| {
+                        active_space
+                            .tabs
+                            .iter()
+                            .any(|tab| tab.id == *id && tab.is_pinned())
+                    });
+                let has_kept = !kept_tabs.is_empty();
+                let has_normal = !normal_tabs.is_empty();
+
+                let collapsed_tab_row = |id: String,
+                                         favicon: Option<
+                                             std::sync::Arc<gpui_kit::RenderImage>,
+                                         >,
+                                         selected: bool,
+                                         cx: &mut Context<Anarc>| {
+                    div()
+                        .id(format!("collapsed-tab-{id}"))
+                        .w_full()
+                        .h(px(visual::TAB_ROW_HEIGHT))
+                        .rounded_lg()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .active(|style| style.opacity(0.92))
+                        .when(selected, |row| {
+                            row.bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                        })
+                        .hover(|row| {
+                            row.bg(crate::ui::visual::translucent_surface(
+                                theme.surface_hover,
+                                0x40,
+                            ))
+                        })
+                        .child(tab_list::favicon(favicon))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.activate_tab_in_active_space(&id);
+                            this.focus_browser(window, cx);
+                            cx.notify();
+                        }))
+                };
+
+                for (id, _, favicon) in kept_tabs {
+                    let selected = active_tab_id.as_ref() == Some(&id);
+                    sidebar_content =
+                        sidebar_content.child(collapsed_tab_row(id, favicon, selected, cx));
+                }
+                if has_kept && has_normal {
                     sidebar_content = sidebar_content.child(
                         div()
-                            .id(format!("collapsed-tab-{tab_id}"))
+                            .id("collapsed-pins-divider")
                             .w_full()
-                            .h(px(visual::TAB_ROW_HEIGHT))
-                            .rounded_lg()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .when(selected, |row| row.bg(crate::ui::visual::translucent_surface(theme.surface, 0x30)))
-                            .hover(|row| row.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
-                            .child(tab_list::favorite_favicon(favicon.clone()))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.activate_tab_in_active_space(&id);
-                                this.focus_browser(window, cx);
-                                cx.notify();
-                            })),
+                            .h(px(1.0))
+                            .rounded_full()
+                            .bg(rgb(theme.border)),
                     );
                 }
+                for (id, _, favicon) in normal_tabs {
+                    let selected = active_tab_id.as_ref() == Some(&id);
+                    sidebar_content =
+                        sidebar_content.child(collapsed_tab_row(id, favicon, selected, cx));
+                }
+                sidebar_content = sidebar_content.child(
+                    div()
+                        .id("collapsed-new-tab-action")
+                        .w_full()
+                        .h(px(visual::TAB_ROW_HEIGHT))
+                        .rounded_lg()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .active(|style| style.opacity(0.92))
+                        .hover(|row| {
+                            row.bg(visual::translucent_surface(theme.surface_hover, 0x40))
+                        })
+                        .child(Icon::new(IconName::Plus).size(px(visual::SIDEBAR_ROW_ICON_SIZE)))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.add_tab();
+                            this.address.update(cx, |input, cx| {
+                                input.set_value("", window, cx);
+                                input.focus(window, cx);
+                            });
+                            cx.notify();
+                        })),
+                );
             }
             sidebar_content = sidebar_content.child(div().flex_1()).child(
                 div()

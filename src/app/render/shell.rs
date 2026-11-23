@@ -199,6 +199,17 @@ impl Anarc {
                 }),
             );
 
+        // When the sidebar collapses into an icon strip, its top band is empty.
+        // Let the top bar occupy it: shift it over the strip and stretch it to
+        // the full window width so the address bar gains that space back.
+        let topbar_expands = self.is_sidebar_collapsed();
+        let window_width = f32::from(window.bounds().size.width);
+        let topbar_left = if topbar_expands && !sidebar_on_right {
+            -sidebar_width_f32
+        } else {
+            0.0
+        };
+
         let main_column = div()
             .relative()
             .flex_1()
@@ -214,6 +225,9 @@ impl Anarc {
                         .items_center()
                         .gap_2()
                         .px_4()
+                        .when(topbar_expands, |bar| {
+                            bar.ml(px(topbar_left)).w(px(window_width))
+                        })
                         .child(
                             div()
                                 .id("navigation-controls")
