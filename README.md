@@ -25,7 +25,7 @@ And a local control layer that lets agents drive the real, visible browser.</p>
 <a href="https://github.com/rover-001/anarc/issues"><b>Report a bug</b></a>
 </p>
 
-<a href="https://anarc.pages.dev/#workspace"><img src="assets/anarc-screenshot.png" alt="Anarc browser demo showing the Personal space and sidebar"></a>
+<a href="https://anarc.pages.dev/#workspace"><img src="assets/anarc-demo.gif" alt="Anarc browser demo showing the Personal space and sidebar"></a>
 
 </div>
 
