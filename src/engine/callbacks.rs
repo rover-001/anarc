@@ -1640,6 +1640,9 @@ fn run_kdialog(
         }
     }
 
+    cmd.env_remove("LD_LIBRARY_PATH");
+    cmd.env_remove("WAYLAND_DISPLAY");
+    cmd.env("QT_QPA_PLATFORM", "xcb");
     cmd.output()
 }
 
@@ -1658,10 +1661,16 @@ pub(crate) fn run_file_picker(
     }
 
     let zenity_args = build_zenity_args(mode, title, default_path, filters, extensions);
-    match std::process::Command::new("zenity")
-        .args(&zenity_args)
-        .output()
-    {
+    // Anarc's launcher injects the CEF runtime into LD_LIBRARY_PATH and forces
+    // CEF onto X11 (--ozone-platform=x11). Inherit neither into zenity: the CEF
+    // libvulkan.so shadows the system one and GTK4 may otherwise pick Wayland,
+    // leaving the picker unfocused or failing to start entirely.
+    let mut zenity_cmd = std::process::Command::new("zenity");
+    zenity_cmd.args(&zenity_args);
+    zenity_cmd.env_remove("LD_LIBRARY_PATH");
+    zenity_cmd.env_remove("WAYLAND_DISPLAY");
+    zenity_cmd.env("GDK_BACKEND", "x11");
+    match zenity_cmd.output() {
         Ok(output) if output.status.success() => {
             let out = String::from_utf8_lossy(&output.stdout);
             let paths: Vec<String> = out
@@ -1674,9 +1683,23 @@ pub(crate) fn run_file_picker(
                 return Some(paths);
             }
         }
-        Ok(_) => return None,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return None,
+        Ok(output) => {
+            // zenity uses exit 1 for a normal Cancel; only retry another
+            // picker when it actually errored (stderr or an unusual status).
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.trim().is_empty() || output.status.code().unwrap_or(-1) != 1 {
+                eprintln!(
+                    "anarc: zenity file picker failed (status {:?}): {}",
+                    output.status.code(),
+                    stderr.trim()
+                );
+            } else {
+                return None;
+            }
+        }
+        Err(err) => {
+            eprintln!("anarc: could not start zenity file picker: {err}");
+        }
     }
 
     match run_kdialog(mode, title, default_path, filters, extensions) {
@@ -1692,8 +1715,19 @@ pub(crate) fn run_file_picker(
                 return Some(paths);
             }
         }
-        Ok(_) => return None,
-        Err(_) => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.trim().is_empty() || output.status.code().unwrap_or(-1) != 1 {
+                eprintln!(
+                    "anarc: kdialog file picker failed (status {:?}): {}",
+                    output.status.code(),
+                    stderr.trim()
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!("anarc: could not start kdialog file picker: {err}");
+        }
     }
 
     None

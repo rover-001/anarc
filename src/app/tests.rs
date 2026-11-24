@@ -154,6 +154,7 @@ fn test_app(window: &mut Window, cx: &mut Context<Anarc>) -> Anarc {
         fullscreen_window_was_fullscreen: None,
         app_page: None,
         plugins_menu_open: false,
+        downloads_bubble_open: false,
         dismissed_download_toast_id: None,
         settings_section: SettingsSection::default(),
         last_spaces_mtime: std::sync::atomic::AtomicU64::new(0),
@@ -901,6 +902,21 @@ fn download_toast_and_button_active_when_downloading(cx: &mut gpui::TestAppConte
             0,
             "dismissed download toast must not render"
         );
+
+        // The toolbar icon opens a compact bubble instead of the full page.
+        crate::plugins::set_downloads_enabled_for_test(true);
+        app.dismissed_download_toast_id = None;
+        app.downloads_bubble_open = true;
+        let overlays_with_bubble = app.render_context_menus(theme, &[], cx);
+        assert_eq!(
+            overlays_with_bubble.len(),
+            1,
+            "recent-download bubble must render and replace the toast"
+        );
+        app.downloads_bubble_open = false;
+        app.dismissed_download_toast_id = Some(101);
+        assert_eq!(app.render_context_menus(theme, &[], cx).len(), 0);
+        crate::plugins::set_downloads_enabled_for_test(false);
     });
 }
 

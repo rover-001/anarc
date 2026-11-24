@@ -5,6 +5,102 @@ type SidebarTab = (String, String, Option<std::sync::Arc<gpui_kit::RenderImage>>
 /// A kept tab row: an optional group label plus its member tabs.
 type KeptTabRow = (Option<String>, Vec<SidebarTab>);
 
+/// Button that switches between the expanded and icon-only sidebar.
+pub(super) fn sidebar_toggle_button(
+    id: &'static str,
+    collapsed: bool,
+    theme: visual::SpaceTheme,
+    cx: &mut Context<Anarc>,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .size(px(22.0 * UI_SCALE))
+        .rounded_md()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(rgb(theme.muted))
+        .cursor_pointer()
+        .active(|style| style.opacity(0.92))
+        .hover(move |style| {
+            style
+                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
+                .text_color(rgb(theme.text))
+        })
+        .child(
+            Icon::new(if collapsed {
+                IconName::PanelLeftOpen
+            } else {
+                IconName::PanelLeftClose
+            })
+            .size(px(16.0 * UI_SCALE)),
+        )
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.animate_sidebar_toggle(window, cx);
+            cx.notify();
+        }))
+}
+
+/// Collapsed-state control: shows the Anarc logo until hovered, then swaps to
+/// the panel-open icon that expands the sidebar.
+pub(super) fn sidebar_logo_toggle_button(
+    id: &'static str,
+    theme: visual::SpaceTheme,
+    cx: &mut Context<Anarc>,
+) -> impl IntoElement {
+    let group = format!("{id}-hover");
+    let hover_group = group.clone();
+    div()
+        .id(id)
+        .size(px(24.0 * UI_SCALE))
+        .relative()
+        .rounded_md()
+        .flex()
+        .items_center()
+        .justify_center()
+        .group(group)
+        .cursor_pointer()
+        .active(|style| style.opacity(0.92))
+        .hover(move |style| {
+            style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
+        })
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .group_hover(hover_group.clone(), |style| style.invisible())
+                .child(visual::anarc_logo().map_or_else(
+                    || Icon::new(IconName::Sparkles).into_any_element(),
+                    |logo| {
+                        div()
+                            .size(px(24.0 * UI_SCALE))
+                            .flex_shrink_0()
+                            .opacity(0.92)
+                            .child(gpui_kit::img(logo).size_full())
+                            .into_any_element()
+                    },
+                )),
+        )
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .invisible()
+                .group_hover(hover_group, |style| style.visible())
+                .child(Icon::new(IconName::PanelLeftOpen).size(px(16.0 * UI_SCALE))),
+        )
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.animate_sidebar_toggle(window, cx);
+            cx.notify();
+        }))
+}
+
 impl Anarc {
     pub(super) fn render_sidebar(
         &mut self,
@@ -105,38 +201,49 @@ impl Anarc {
                 }),
             );
         if !self.is_sidebar_collapsed() || self.sidebar_hovered {
-            sidebar_content = sidebar_content.child(
-                div()
-                    .id("active-space-name")
-                    .w_full()
-                    .h(px(visual::sidebar_header_height()))
-                    .flex()
-                    .items_center()
-                    .px_1()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(theme.text))
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(active_space.name.clone())
-                    .on_mouse_down(
-                        gpui_kit::MouseButton::Right,
-                        cx.listener(|this, event: &gpui_kit::MouseDownEvent, window, cx| {
-                            let (x, y, width, height) = tab_context_menu_position(event, window);
-                            this.sidebar_context_menu = Some(SidebarContextMenu {
-                                x,
-                                y,
-                                width,
-                                height,
-                            });
-                            this.space_context_menu = None;
-                            this.theme_editor = None;
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
-                    ),
-            );
+            let header = div()
+                .id("sidebar-header")
+                .w_full()
+                .h(px(visual::sidebar_header_height()))
+                .flex()
+                .items_center()
+                .justify_between()
+                .px_1()
+                .mb_2()
+                .on_mouse_down(
+                    gpui_kit::MouseButton::Right,
+                    cx.listener(|this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                        let (x, y, width, height) = tab_context_menu_position(event, window);
+                        this.sidebar_context_menu = Some(SidebarContextMenu {
+                            x,
+                            y,
+                            width,
+                            height,
+                        });
+                        this.space_context_menu = None;
+                        this.theme_editor = None;
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                )
+                .child(visual::anarc_logo().map_or_else(
+                    || Icon::new(IconName::Sparkles).into_any_element(),
+                    |logo| {
+                        div()
+                            .size(px(24.0 * UI_SCALE))
+                            .flex_shrink_0()
+                            .opacity(0.92)
+                            .child(gpui_kit::img(logo).size_full())
+                            .into_any_element()
+                    },
+                ))
+                .child(sidebar_toggle_button(
+                    "sidebar-header-toggle",
+                    sidebar_collapsed,
+                    theme,
+                    cx,
+                ));
+            sidebar_content = sidebar_content.child(header);
 
             let mut sidebar_row_index = 0usize;
             let mut active_row_index = None;
@@ -422,6 +529,7 @@ impl Anarc {
             let mut folders_section = div()
                 .id("folders-section")
                 .w_full()
+                .mt_2()
                 .flex()
                 .flex_col()
                 .gap_1();
@@ -443,7 +551,7 @@ impl Anarc {
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(rgb(theme.muted))
-                            .child("Folders"),
+                            .child("Spaces"),
                     )
                     .child(
                         div()
@@ -1308,44 +1416,66 @@ impl Anarc {
             let bottom_bar = div()
                 .id("sidebar-bottom-bar")
                 .w_full()
-                .pt_2()
-                .border_t_1()
-                .border_color(rgb(theme.border))
+                .pt_1()
                 .flex()
-                .items_center()
-                .justify_between()
+                .flex_col()
+                .gap_2()
                 .child(
                     div()
-                        .id("settings-btn")
-                        .flex_shrink_0()
-                        .child(space_switcher::settings_button(theme))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.app_page = Some(AppPage::Settings);
-                            cx.notify();
-                        })),
+                        .id("sidebar-bottom-space-name")
+                        .w_full()
+                        .flex()
+                        .justify_center()
+                        .px_1()
+                        .text_xs()
+                        .text_center()
+                        .text_color(rgb(theme.muted))
+                        .opacity(0.75)
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(active_space.name.clone()),
                 )
                 .child(
                     div()
-                        .id("spaces-dock-container")
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
+                        .id("sidebar-bottom-actions")
+                        .w_full()
                         .flex()
                         .items_center()
-                        .justify_center()
-                        .child(spaces_dock),
-                )
-                .child(
-                    div()
-                        .id("add-space-btn")
-                        .flex_shrink_0()
-                        .cursor_pointer()
-                        .active(|style| style.opacity(0.92))
-                        .child(space_switcher::add_space_button(theme))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_create_space_modal(window, cx);
-                            cx.notify();
-                        })),
+                        .justify_between()
+                        .child(
+                            div()
+                                .id("settings-btn")
+                                .flex_shrink_0()
+                                .child(space_switcher::settings_button(theme))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.app_page = Some(AppPage::Settings);
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("spaces-dock-container")
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(spaces_dock),
+                        )
+                        .child(
+                            div()
+                                .id("add-space-btn")
+                                .flex_shrink_0()
+                                .cursor_pointer()
+                                .active(|style| style.opacity(0.92))
+                                .child(space_switcher::add_space_button(theme))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_create_space_modal(window, cx);
+                                    cx.notify();
+                                })),
+                        ),
                 );
 
             sidebar_content = sidebar_content.child(bottom_bar);
@@ -1452,18 +1582,20 @@ impl Anarc {
                         })),
                 );
             }
-            sidebar_content = sidebar_content.child(div().flex_1()).child(
-                div()
-                    .id("collapsed-space-icon")
-                    .flex()
-                    .justify_center()
-                    .w_full()
-                    .child(space_switcher::space_icon_button(
-                        &active_space_icon,
-                        true,
-                        theme,
-                    )),
-            );
+            sidebar_content = sidebar_content
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .id("collapsed-space-icon")
+                        .flex()
+                        .justify_center()
+                        .w_full()
+                        .child(space_switcher::space_icon_button(
+                            &active_space_icon,
+                            true,
+                            theme,
+                        )),
+                );
         }
 
         let fully_hidden = self.is_sidebar_collapsed()

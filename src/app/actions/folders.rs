@@ -118,7 +118,7 @@ impl Anarc {
         self.space_modal = None;
         self.tab_context_menu = None;
         self.folder_context_menu = None;
-        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("New folder"));
+        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("New space"));
         name_input.update(cx, |input, cx| {
             input.focus(window, cx);
         });
@@ -155,7 +155,7 @@ impl Anarc {
         self.space_modal = None;
         self.tab_context_menu = None;
         self.folder_context_menu = None;
-        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Folder name"));
+        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Space name"));
         name_input.update(cx, |input, cx| {
             input.set_value(&name, window, cx);
             input.focus(window, cx);
@@ -183,8 +183,8 @@ impl Anarc {
         let input_val = modal.name_input.read(cx).value().to_string();
         let name = if input_val.trim().is_empty() {
             match &modal.mode {
-                FolderModalMode::Create { .. } => "New folder".to_string(),
-                FolderModalMode::Rename { .. } => "Untitled folder".to_string(),
+                FolderModalMode::Create { .. } => "New space".to_string(),
+                FolderModalMode::Rename { .. } => "Untitled space".to_string(),
             }
         } else {
             input_val.trim().to_string()

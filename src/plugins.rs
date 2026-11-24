@@ -232,6 +232,11 @@ pub(crate) fn downloads_enabled() -> bool {
 }
 
 #[cfg(test)]
+pub(crate) fn set_downloads_enabled_for_test(enabled: bool) {
+    DOWNLOADS_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::plugin::Kernel;

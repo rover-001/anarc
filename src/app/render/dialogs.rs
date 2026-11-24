@@ -25,7 +25,11 @@ impl Anarc {
                     .into_any_element(),
             );
             let is_edit = matches!(modal.mode, SpaceModalMode::Edit { .. });
-            let title = if is_edit { "Edit Space" } else { "New Space" };
+            let title = if is_edit {
+                "Edit Workspace"
+            } else {
+                "New Workspace"
+            };
             let action_label = if is_edit { "Save" } else { "Create" };
             let current_selected_icon = modal.selected_icon.clone();
             let modal_theme = visual::theme_for_space(&modal.theme_draft);
@@ -289,9 +293,9 @@ impl Anarc {
             );
             let is_rename = matches!(modal.mode, FolderModalMode::Rename { .. });
             let title = if is_rename {
-                "Rename Folder"
+                "Rename Space"
             } else {
-                "New Folder"
+                "New Space"
             };
             let action_label = if is_rename { "Save" } else { "Create" };
             let popover = div()

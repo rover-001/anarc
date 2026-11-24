@@ -58,6 +58,7 @@ fn print_usage() {
            tab <action> [target]        Tab control: pin/unpin (fav/unfav aliases), close, new, select\n\
            doctor                       Diagnose agent control failures\n\
            version                      Show build version/time and source drift warning\n\
+           update [check|force|--json]  Check/install signed Anarc releases (no re-clone)\n\
            start                        Launch Anarc detached and wait for its socket\n\
            do <ops>                     Execute action DSL (click, type, key, wait)\n\
            eval <script>                Execute JavaScript in page context\n\
@@ -393,7 +394,7 @@ fn get_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "tabs",
-            "description": format!("List tabs and spaces, showing active, pinned, URLs, titles. {RECOVERY}"),
+            "description": format!("List tabs and workspaces, showing active, pinned, URLs, titles. {RECOVERY}"),
             "inputSchema": { "type": "object" }
         },
         {
@@ -445,6 +446,17 @@ fn get_tool_definitions() -> serde_json::Value {
             "name": "doctor",
             "description": "Diagnose agent control failures. Run first on any error.",
             "inputSchema": { "type": "object" }
+        },
+        {
+            "name": "update",
+            "description": "Check/install signed Anarc releases; check=true only checks.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "check": { "type": "boolean" },
+                    "force": { "type": "boolean" }
+                }
+            }
         },
         {
             "name": "shot",
@@ -613,6 +625,41 @@ fn handle_mcp_request(
                 .or_else(|| arguments.get("tab"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+
+            // Update is local (like version/install): no browser socket needed.
+            if tool_name == "update" {
+                let check = arguments
+                    .get("check")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let mut updater_args: Vec<&str> = Vec::new();
+                if check {
+                    updater_args.push("--check");
+                }
+                if arguments
+                    .get("force")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
+                    updater_args.push("--force");
+                }
+                let (text, code) = run_update(&updater_args);
+                let end = text.floor_char_boundary(16000);
+                let text = if text.len() > end {
+                    format!("{}... [truncated]", &text[..end])
+                } else {
+                    text
+                };
+                let is_error = code != 0 && !(check && code == 10);
+                return Some(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "content": [{ "type": "text", "text": text }],
+                        "isError": is_error
+                    }
+                }));
+            }
 
             let socket_req = match tool_name {
                 "tabs" | "doctor" => serde_json::json!({"cmd": tool_name}),
@@ -1056,6 +1103,67 @@ fn source_files(root: &std::path::Path) -> Vec<PathBuf> {
     files
 }
 
+/// Locate the self-updater installed by install.sh, falling back to a checkout.
+fn updater_script() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local/share"));
+    let bin_home = std::env::var_os("XDG_BIN_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local/bin"));
+    let candidates = [
+        data_home.join("anarc/bin/anarc-update"),
+        bin_home.join("anarc-update"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tools/anarc-update.sh"),
+    ];
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+/// Run the updater and return (combined output, exit code). Exit 10 means an
+/// update was found in --check mode and is not an error.
+fn run_update(args: &[&str]) -> (String, i32) {
+    let Some(script) = updater_script() else {
+        return (
+            "anarc: updater not found. Install it with ./install.sh once, then use 'anarc update'."
+                .into(),
+            1,
+        );
+    };
+    match std::process::Command::new("sh")
+        .arg(&script)
+        .args(args)
+        .output()
+    {
+        Ok(output) => {
+            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.trim().is_empty() {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(&stderr);
+            }
+            (
+                text.trim_end().to_string(),
+                output.status.code().unwrap_or(1),
+            )
+        }
+        Err(error) => (format!("anarc: failed to run updater: {error}"), 1),
+    }
+}
+
+fn handle_update(args: &[String]) {
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (text, code) = run_update(&args);
+    println!("{text}");
+    if code != 0 {
+        std::process::exit(code);
+    }
+}
+
 /// Compact build identity plus a warning when tracked sources postdate the binary.
 fn handle_version() {
     let exe = std::env::current_exe().ok();
@@ -1215,6 +1323,11 @@ fn main() {
 
     if cmd == "version" {
         handle_version();
+        return;
+    }
+
+    if cmd == "update" {
+        handle_update(&filtered_args[1..]);
         return;
     }
 
@@ -1644,8 +1757,8 @@ mod tests {
         let tool_array = tools.as_array().unwrap();
         assert_eq!(
             tool_array.len(),
-            12,
-            "Expected core tools, tabs, tab, doctor, upload, eval, set_value, and wait_for"
+            13,
+            "Expected core tools, tabs, tab, doctor, update, upload, eval, set_value, and wait_for"
         );
         for tool in tool_array {
             let desc = tool.get("description").and_then(|d| d.as_str()).unwrap();
@@ -1658,6 +1771,22 @@ mod tests {
                 desc
             );
         }
+    }
+
+    #[test]
+    fn update_tool_and_script_are_available() {
+        let tools = get_tool_definitions();
+        let update = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool.get("name").and_then(|n| n.as_str()) == Some("update"))
+            .expect("update tool must be exposed over MCP");
+        assert!(update["inputSchema"]["properties"]["check"].is_object());
+        assert!(
+            updater_script().is_some(),
+            "updater script must be discoverable"
+        );
     }
 
     #[test]
@@ -1744,7 +1873,7 @@ mod tests {
             .unwrap()
             .as_array()
             .unwrap();
-        assert_eq!(tools.len(), 12);
+        assert_eq!(tools.len(), 13);
 
         // 5. Tools call with Anarc offline - should return clean error message without hanging
         let call_req = serde_json::json!({

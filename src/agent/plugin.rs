@@ -357,13 +357,13 @@ pub(crate) fn handle_agent_request(
                 .unwrap_or_else(|| app.active_space().name.clone());
             let paused_str = if is_paused { " (PAUSED)" } else { "" };
             let _ = resp_tx.try_send(AgentResponse::success(format!(
-                "anarc-agent active{paused_str} · Space: {space_name}"
+                "anarc-agent active{paused_str} · Workspace: {space_name}"
             )));
         }
         AgentRequest::Tabs => {
             let mut lines = Vec::new();
             for space in app.spaces() {
-                lines.push(format!("Space: {} ({})", space.name, space.id));
+                lines.push(format!("Workspace: {} ({})", space.name, space.id));
                 for tab in &space.tabs {
                     let active_mark = if space.active.as_deref() == Some(&tab.id) {
                         "*"
@@ -720,10 +720,10 @@ pub(crate) fn handle_agent_request(
             }
             let notice = if is_personal {
                 format!(
-                    "Attached to personal space '{chosen_space}'. Confirmation required for sensitive operations."
+                    "Attached to personal workspace '{chosen_space}'. Confirmation required for sensitive operations."
                 )
             } else {
-                format!("Attached to dedicated space '{chosen_space}'.")
+                format!("Attached to dedicated workspace '{chosen_space}'.")
             };
             let _ = resp_tx.try_send(AgentResponse::success(notice));
         }

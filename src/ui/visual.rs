@@ -530,6 +530,9 @@ pub fn anarc_logo() -> Option<std::sync::Arc<gpui_kit::RenderImage>> {
     LOGO.get_or_init(|| {
         let bytes = include_bytes!("../../assets/anarc_logo.png");
         let decoded = image::load_from_memory(bytes).ok()?;
+        // The source is 900px; downscale with Lanczos3 before GPU upload so the
+        // 24px sidebar logo keeps smooth edges instead of aliasing on minification.
+        let decoded = decoded.resize_exact(96, 96, image::imageops::FilterType::Lanczos3);
         let mut rgba = decoded.to_rgba8();
         for pixel in rgba.pixels_mut() {
             pixel.0.swap(0, 2);

@@ -1,7 +1,7 @@
 ---
 type: decision
 title: "Consolidated: Cloud Sync & Tombstones"
-timestamp: 2026-11-21T02:46:41.838783209+00:00
+timestamp: 2026-11-24T11:46:44.096142788+00:00
 tags: [consolidated, "cloud-sync-&-tombstones"]
 ---
 
@@ -11,6 +11,7 @@ Consolidated architectural decisions, system invariants, and implementation patt
 
 ## Core System Decisions & Invariants
 
+- **Landing page split into private repo, hosted on same Cloudflare Pages project**: Anarc marketing site moved out of rover-001/anarc (local landing-page branch/worktree) into private repo rover-001/anarc-landing-page. Full history preserved, default branch main. Hosting unchanged: Cloudflare Pages Direct Upload project `anarc` at https://anarc.pages.dev (--branch landing-page). Wrangler CLI on this machine is authed to hire.code.me@gmail.com (account 2aa40692...) which has no access to the project account (30df15... / Sharmaparth.developer@gmail.com), so redeploying latest commits requires re-auth or API token. Build + tsc pass in new repo.
 - **Push Live Share plugin and separate Agent Control branch**: Separated working tree into two clean, self-contained branches without touching main: 1) live-share: committed and pushed Live Share plugin, live cursor broadcasting, peer cursor overlays, space sync, and DevTools cookie synchronization to origin/live-share (803e85c); 2) feat/agent-control: branched from live-share, committed and pushed full Agent Control pipeline (src/agent/, anarc-ctl CLI/MCP server, indexer.js, typed refs, act/observe, skill docs, and benchmarks) to origin/feat/agent-control (dc296c1). main remained untouched.
 - **Frame sync via external begin frame driven by GPUI vsync**: Set external_begin_frame_enabled = 1 and aligned host.send_external_begin_frame() with GPUI per-frame vsync callbacks. Eliminated timer phase drift and reduced p99 frame latency from 25.6ms to 20.9ms on heavy pages.
 - **Wayland clipboard synchronization and scroll/cursor responsiveness**: Fixed web text copying across all methods by removing unregistered script URL schemes from execute_java_script, registering DOM copy and mouseup handlers in the capturing phase on window and document, proxying navigator.clipboard.writeText directly to wl-copy, forwarding keydown events during Ctrl+C/Ctrl+X, adding get_selected_text for context-menu Copy, falling back to system clipboard in the address bar, and waking the UI loop on cursor changes with round-based scroll delta accumulation.
@@ -22,8 +23,9 @@ Consolidated architectural decisions, system invariants, and implementation patt
 
 - `indexer.js`
 
-## Consolidated Evolution History (6 items archived)
+## Consolidated Evolution History (7 items archived)
 
+- 2026-11-24 — Landing page split into private repo, hosted on same Cloudflare Pages project (`landing-page-split-into-private-repo-hosted-on-same-cloudflare-pages-project.md`)
 - 2026-11-21 — Push Live Share plugin and separate Agent Control branch (`push-live-share-plugin-and-separate-agent-control-branch.md`)
 - 2026-11-19 — Frame sync via external begin frame driven by GPUI vsync (`frame-sync-via-external-begin-frame-driven-by-gpui-vsync.md`)
 - 2026-11-12 — Wayland clipboard synchronization and scroll/cursor responsiveness (`wayland-clipboard-synchronization-and-scrollcursor-responsiveness.md`)

@@ -1174,7 +1174,7 @@ TOOLS_REGISTRY = [
     },
     {
         "name": "lumen_browser_spaces",
-        "description": "Inspect open spaces and active tabs in the Anarc browser.",
+        "description": "Inspect open workspaces and active tabs in the Anarc browser.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -1218,7 +1218,7 @@ RESOURCES_REGISTRY = [
         "uri": "lumen://browser/spaces",
         "name": "Anarc Open Spaces & Tabs",
         "mimeType": "application/json",
-        "description": "Live JSON state of all browser spaces and open tabs.",
+        "description": "Live JSON state of all browser workspaces and open tabs.",
     },
 ]
 

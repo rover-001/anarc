@@ -261,7 +261,7 @@ impl Anarc {
     ) {
         self.space_context_menu = None;
         let index = self.spaces.len();
-        let default_name = format!("Space {}", index + 1);
+        let default_name = format!("Workspace {}", index + 1);
         let default_icon = SPACE_ICONS[index % SPACE_ICONS.len()].to_string();
         let default_color = SPACE_COLORS[index % SPACE_COLORS.len()];
 
@@ -299,7 +299,7 @@ impl Anarc {
             (space.name.clone(), space.icon.clone(), space.color)
         };
 
-        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Space name"));
+        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Workspace name"));
         name_input.update(cx, |input, cx| {
             input.set_value(&current_name, window, cx);
             input.focus(window, cx);
@@ -335,8 +335,8 @@ impl Anarc {
         let input_val = modal.name_input.read(cx).value().to_string();
         let name = if input_val.trim().is_empty() {
             match &modal.mode {
-                SpaceModalMode::Create => format!("Space {}", self.spaces.len() + 1),
-                SpaceModalMode::Edit { .. } => "Untitled Space".to_string(),
+                SpaceModalMode::Create => format!("Workspace {}", self.spaces.len() + 1),
+                SpaceModalMode::Edit { .. } => "Untitled Workspace".to_string(),
             }
         } else {
             input_val.trim().to_string()

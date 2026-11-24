@@ -12,7 +12,7 @@ triggers:
 
 # Anarc Agent Control
 
-Anarc exposes five high-density, low-token tools over a local socket: `see`, `do`, `read`, `find`, and `shot`.
+Anarc exposes high-density, low-token tools over a local socket: `see`, `do`, `read`, `find`, and `shot`, plus local utilities (`tabs`, `tab`, `upload`, `doctor`, `eval`, `set_value`, `wait_for`, `update`).
 Control is available via stdio MCP (`anarc-ctl mcp`) or direct CLI (`anarc-ctl <cmd>`).
 
 Never read Anarc source. On any error run `doctor` (CLI: `anarc-ctl doctor`) first. Errors say what to do next.
@@ -106,3 +106,8 @@ Directly set text value of input, textarea, or contenteditable/rich-text element
 Event-driven condition waiting that eliminates manual polling loops and saves tokens.
 - **Args**: `condition` (`text_appears` | `text_disappears` | `selector_appears` | `selector_disappears` | `stable`), `target` (text or CSS selector), `timeout_ms` (optional, default: 30000, up to 300000), `tab_id` (optional).
 - **Use when**: Waiting for AI generation to finish (e.g. `condition="text_disappears", target="Stop"`), waiting for form submission results, or waiting for modals to appear/disappear.
+
+### 10. `update`
+Self-update Anarc from the latest signed GitHub release without cloning or re-running `install.sh`.
+- **Args**: `check` (boolean, report only; status `update-available` is not an error), `force` (boolean, replace a dev build or update while the browser is running).
+- **Behavior**: Verifies the release SHA-256, installs only when Anarc is closed, and falls back to `anarc-update --rollback` if needed. Works with the browser offline (returns an error status).

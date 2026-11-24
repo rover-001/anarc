@@ -43,7 +43,7 @@ pub(crate) const PALETTE_COMMANDS: &[PaletteCommand] = &[
     },
     PaletteCommand {
         id: "new-space",
-        title: "New space",
+        title: "New workspace",
         detail: "Action",
     },
     PaletteCommand {

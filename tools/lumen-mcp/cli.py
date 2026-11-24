@@ -79,7 +79,7 @@ def main():
     pkg_parser.add_argument("-o", "--output", help="Output archive path")
 
     # spaces
-    spaces_parser = subparsers.add_parser("spaces", help="List active spaces and tabs")
+    spaces_parser = subparsers.add_parser("spaces", help="List active workspaces and tabs")
     spaces_parser.add_argument("--space-id", help="Filter by space ID")
 
     # history

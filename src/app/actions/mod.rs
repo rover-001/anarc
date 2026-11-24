@@ -358,6 +358,7 @@ impl Anarc {
             fullscreen_window_was_fullscreen: None,
             app_page: None,
             plugins_menu_open: false,
+            downloads_bubble_open: false,
             dismissed_download_toast_id: None,
             settings_section: SettingsSection::default(),
             last_spaces_mtime: std::sync::atomic::AtomicU64::new(

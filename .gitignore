@@ -40,3 +40,4 @@ scroll.log
 .wrangler/
 tools/sync-windows.sh
 .heald
+dist

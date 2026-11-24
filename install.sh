@@ -6,7 +6,7 @@
 #   2. Run next to a release bundle (lumen binary + cef runtime dir + logo):
 #      installs directly, no Rust toolchain needed.
 #
-# Usage: ./install.sh [--prefix DIR] [--skip-build] [--no-desktop-entry] [--no-codecs]
+# Usage: ./install.sh [--prefix DIR] [--skip-build] [--no-desktop-entry] [--no-codecs] [--no-auto-update]
 
 set -eu
 
@@ -18,6 +18,7 @@ PIXMAPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/pixmaps"
 SKIP_BUILD=0
 NO_DESKTOP=0
 NO_CODECS=0
+NO_AUTO_UPDATE=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -26,6 +27,7 @@ while [ $# -gt 0 ]; do
         --skip-build) SKIP_BUILD=1; shift ;;
         --no-desktop-entry) NO_DESKTOP=1; shift ;;
         --no-codecs) NO_CODECS=1; shift ;;
+        --no-auto-update) NO_AUTO_UPDATE=1; shift ;;
         -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 1 ;;
     esac
@@ -107,6 +109,21 @@ if [ -z "$BUNDLE_CEF" ]; then
 fi
 [ -f "$BUNDLE_CEF/libcef.so" ] || { echo "error: no libcef.so in $BUNDLE_CEF" >&2; exit 1; }
 
+# Version stamp consumed by tools/anarc-update.sh. Release bundles carry a
+# VERSION file; a git checkout at an exact tag uses that tag; any other source
+# build is marked dev-* so the updater never silently replaces a dev binary.
+if [ -f "$SCRIPT_DIR/VERSION" ]; then
+    VERSION_STAMP="$(sed -n '1p' "$SCRIPT_DIR/VERSION" | tr -d '[:space:]')"
+elif command -v git >/dev/null 2>&1 && git -C "$SCRIPT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    VERSION_STAMP="$(git -C "$SCRIPT_DIR" describe --tags --exact-match HEAD 2>/dev/null || true)"
+    if [ -z "$VERSION_STAMP" ]; then
+        VERSION_STAMP="dev-$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    fi
+else
+    VERSION_STAMP="v$(sed -n 's/^version = "\([^"]*\)".*/\1/p' "$SCRIPT_DIR/Cargo.toml" 2>/dev/null | head -1)"
+fi
+[ -n "$VERSION_STAMP" ] || VERSION_STAMP=unknown
+
 # --- Install ---------------------------------------------------------------
 APP_DIR="$PREFIX/anarc"
 CEF_DIR="$PREFIX/anarc-cef"
@@ -132,6 +149,21 @@ if [ -n "$ANARC_CTL_BIN" ]; then
     ln -sf "$APP_DIR/bin/anarc-ctl" "$BIN_DIR/anarc-ctl"
 else
     echo "warning: anarc-ctl binary not found; harness MCP configs need it on PATH" >&2
+fi
+
+# Self-updater: once installed, future releases are applied by `anarc update`
+# or by the optional daily timer below — no re-clone or manual install needed.
+UPDATER_SRC=""
+for candidate in "$SCRIPT_DIR/tools/anarc-update.sh" "$SCRIPT_DIR/anarc-update.sh"; do
+    if [ -f "$candidate" ]; then UPDATER_SRC="$candidate"; break; fi
+done
+if [ -n "$UPDATER_SRC" ]; then
+    echo "==> Installing anarc-update to $APP_DIR/bin and $BIN_DIR"
+    rm -f "$APP_DIR/bin/anarc-update.tmp" 2>/dev/null || true
+    cp -f "$UPDATER_SRC" "$APP_DIR/bin/anarc-update.tmp"
+    chmod 755 "$APP_DIR/bin/anarc-update.tmp"
+    mv -f "$APP_DIR/bin/anarc-update.tmp" "$APP_DIR/bin/anarc-update"
+    ln -sf "$APP_DIR/bin/anarc-update" "$BIN_DIR/anarc-update"
 fi
 
 # CEF runtime: copy only runtime files (skip cmake/, include/, CMakeLists, etc.)
@@ -250,5 +282,45 @@ EOF
         gtk-update-icon-cache -f "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" 2>/dev/null || true
 fi
 
+# Record what was installed so the updater can compare release tags. BUILD_TIME
+# lets source/dev installs accept releases published after this build.
+printf '%s\n' "$VERSION_STAMP" > "$APP_DIR/VERSION"
+date -u +%s > "$APP_DIR/BUILD_TIME" 2>/dev/null || true
+
+# Optional daily auto-update. Unit files are always written (harmless without
+# systemd); enabling is best-effort so installs never fail on a user bus error.
+if [ "$NO_AUTO_UPDATE" -eq 0 ] && [ -f "$APP_DIR/bin/anarc-update" ] && command -v systemctl >/dev/null 2>&1; then
+    UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    mkdir -p "$UNIT_DIR"
+    cat > "$UNIT_DIR/anarc-update.service" <<EOF
+[Unit]
+Description=Check for and install Anarc updates
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart="$APP_DIR/bin/anarc-update" --auto
+EOF
+    cat > "$UNIT_DIR/anarc-update.timer" <<EOF
+[Unit]
+Description=Daily Anarc update check
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    if systemctl --user daemon-reload >/dev/null 2>&1 && \
+       systemctl --user enable --now anarc-update.timer >/dev/null 2>&1; then
+        echo "==> Enabled daily automatic updates (systemctl --user status anarc-update.timer)"
+    else
+        echo "warning: could not enable the update timer; run 'anarc update' manually" >&2
+    fi
+fi
+
 echo "==> Done. Run 'anarc' to start, or find it in your app launcher."
-echo "    If the icon is missing, restart your shell/panel or re-login."
+echo "    Update anytime with 'anarc-ctl update' (auto updates run daily when systemd is available)."

@@ -323,8 +323,8 @@ fn settings_content(
             );
             let theme_card = setting_card(
                 "Theme",
-                "Space accent",
-                "Accent color for this space.",
+                "Workspace accent",
+                "Accent color for this workspace.",
                 color_controls,
                 theme,
             );
@@ -401,7 +401,7 @@ fn settings_content(
             .gap_4()
             .child(
                 section(
-                    "Tabs & spaces",
+                    "Tabs & workspaces",
                     vec![
                         ("Ctrl + T", "New tab"),
                         ("Ctrl + W", "Close tab or this panel"),

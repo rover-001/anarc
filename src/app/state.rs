@@ -190,6 +190,7 @@ pub(crate) struct Anarc {
     pub(super) fullscreen_window_was_fullscreen: Option<bool>,
     pub(super) app_page: Option<AppPage>,
     pub(super) plugins_menu_open: bool,
+    pub(super) downloads_bubble_open: bool,
     pub(super) dismissed_download_toast_id: Option<u32>,
     pub(crate) settings_section: SettingsSection,
     #[allow(dead_code)]

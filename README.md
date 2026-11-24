@@ -52,7 +52,7 @@ Most Linux browsers give you tabs and a toolbar. Anarc gives you a **workspace**
 | 🛡️ **Shield** | Blocks ads and trackers with uBlock Origin–compatible filter lists and cosmetic element hiding, strips YouTube ad overlays, and upgrades eligible HTTP URLs to HTTPS. Toggle globally or per tab with `Ctrl+Shift+B`. |
 | 📖 **Reader mode** | Clean, distraction-free reading with `Ctrl+Alt+R`. |
 | 🔖 **Bookmark import** | Bring your bookmarks from Chrome, Chromium, Brave, and Edge. |
-| ⬇️ **Downloads** | A downloads page, an active-download badge, and progress toasts. |
+| ⬇️ **Downloads** | A Chromium-style recent-download bubble from the toolbar icon (rows can be dragged onto a page to upload them), a full downloads page, an active-download badge, and progress toasts. |
 | ⚙️ **Settings** | General, Appearance, Shortcuts (with a full in-app reference), and Plugins. |
 | 🧩 **Plugin packs** | Themes, site styles, search engines, and extensions. Sandboxed WebAssembly plugins with the optional `wasm-plugins` build feature, and Ed25519-signed, verifiable packages. |
 
@@ -77,7 +77,7 @@ anarc-ctl read page text
 
 | Capability | What it gives you |
 | --- | --- |
-| **Local MCP server** | `anarc-ctl mcp` exposes `see`, `do`, `read`, `find`, `shot`, `tabs`, `tab`, `upload`, `doctor`, `status`, `pause`, `resume`. |
+| **Local MCP server** | `anarc-ctl mcp` exposes `see`, `do`, `read`, `find`, `shot`, `tabs`, `tab`, `upload`, `doctor`, `status`, `pause`, `resume`, `update`. |
 | **Live CDP bridge** | Typed element refs, coordinate clicks, DOM and file-input actions, diff-only action output, and semantic ref recovery when the page changes. |
 | **Action DSL** | Key chords and modifiers, `@file:` text injection, multi-file and glob uploads, drag-and-drop ingestion, and tab actions (`pin`, `fav`, `close`, `new`, `select`). |
 | **Policy gate** | Asks for confirmation on sensitive intents such as sending a message, plus navigation restrictions. |
@@ -154,6 +154,28 @@ tools/install-cef-codecs.sh
 
 Restart Anarc afterwards. The script backs up the original runtime to `~/.local/share/anarc-cef-minimal-backup`. If you build CEF yourself, any compatible build with `proprietary_codecs=true ffmpeg_branding=Chrome` works through `CEF_PATH`. Review the patent-licensing obligations for H.264/AAC before redistributing a codec-enabled build.
 
+#### Updates (Linux)
+
+After the first install you never need to clone the repo or run `./install.sh` again. `install.sh` installs `anarc-update` and, when systemd is available, a daily timer that downloads the newest GitHub release, verifies its published SHA-256 digest, and installs it. Updates are applied only while Anarc is closed (swapping the in-use CEF runtime would be unsafe); dev/source builds are left alone unless you force an update.
+
+```sh
+anarc-ctl update --check       # report only; exit 10 means a newer release exists
+anarc-ctl update               # install the latest signed release
+anarc-ctl update --force       # replace even a dev build / update while running
+anarc-update --rollback        # restore binaries from before the last update
+anarc-update --disable-auto    # stop scheduled updates
+anarc-update --enable-auto     # resume them
+```
+
+On installations made before the updater existed, bootstrap it once without cloning:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/rover-001/anarc/main/tools/anarc-update.sh -o /tmp/anarc-update.sh
+sh /tmp/anarc-update.sh
+```
+
+Pass `ANARC_UPDATE_API` to check a mirrored release endpoint. Pass `--no-auto-update` to `./install.sh` to skip the systemd timer (you can still run `anarc-ctl update` manually).
+
 ### Windows
 
 There is no Windows installer yet. Build from source with the MSVC toolchain.
@@ -221,9 +243,10 @@ On Linux the installer puts `anarc-ctl` on your `PATH`. On Windows keep `anarc.e
 ```sh
 anarc-ctl version
 anarc-ctl doctor
+anarc-ctl update --check
 ```
 
-`doctor` reports the control endpoint, server version, CEF state, and open tabs. It is the first command to run when a call fails.
+`doctor` reports the control endpoint, server version, CEF state, and open tabs. It is the first command to run when a call fails. `update` checks/installs signed releases without a source checkout; see [Updates](#updates-linux).
 
 ### 2. Control the browser
 
@@ -236,6 +259,7 @@ anarc-ctl do 'click @b3; key Enter'     # run the action DSL
 anarc-ctl shot                          # save a screenshot
 anarc-ctl status | pause | resume
 anarc-ctl start                         # launch Anarc and wait for the endpoint
+anarc-ctl update                        # self-update from GitHub releases
 ```
 
 Target a tab or instance and shape the output with `--tab <id>`, `--instance <1-9>`, `--socket <path>` (the endpoint file on Windows), `--mode`, `--max`, and `--shot-as path`. Run `anarc-ctl --help` for the full command list.
@@ -248,7 +272,7 @@ Target a tab or instance and shape the output with `--tab <id>`, `--instance <1-
 anarc-ctl install --harness claude     # also: codex | antigravity | print
 ```
 
-This prints the config snippet with `ANARC_CTL_SOCKET` pointed at the active endpoint. The `systemd` harness target is Linux-only; on Windows, start Anarc at logon with Task Scheduler.
+This prints the config snippet with `ANARC_CTL_SOCKET` pointed at the active endpoint. The `systemd` harness target is Linux-only; on Windows, start Anarc at logon with Task Scheduler. The `update` tool (`{ "check": true }` to check only, `{ "force": true }` to replace a dev build) mirrors `anarc-ctl update` and works without a running browser.
 
 **Plugin authoring** lives in [`tools/anarc-mcp`](tools/anarc-mcp) (the legacy [`tools/lumen-mcp`](tools/lumen-mcp) is still available). It provides `anarc_plugin_*` tools, with `lumen_*` aliases, for scaffolding, validating, building, installing, toggling, and packaging plugins, plus querying spaces and history. Setup details are in [`tools/anarc-mcp/README.md`](tools/anarc-mcp/README.md).
 

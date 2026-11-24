@@ -25,7 +25,7 @@ It implements the [Model Context Protocol (MCP)](https://modelcontextprotocol.io
 | `lumen_plugin_list` | Lists all installed third-party and built-in plugins with active status. |
 | `lumen_plugin_toggle` | Enables or disables an installed plugin in `plugins.toml`. |
 | `lumen_plugin_package` | Packages a plugin into a standard `.lumenplugin` zip bundle. |
-| `lumen_browser_spaces` | Inspects currently open spaces and tabs in Anarc (`spaces.json`). |
+| `lumen_browser_spaces` | Inspects currently open workspaces and tabs in Anarc (`spaces.json`). |
 | `lumen_browser_history` | Searches local SQLite browsing history (`history.sqlite`). |
 
 ---
@@ -36,7 +36,7 @@ The server exposes read-only MCP resources:
 - `lumen://spec/manifest` — Manifest configuration reference (`lumen-plugin.toml`).
 - `lumen://spec/wit` — Full WebAssembly component model interface (`wit/lumen.wit`).
 - `lumen://plugins/installed` — Live JSON list of all installed plugins.
-- `lumen://browser/spaces` — Live JSON view of open spaces and tabs.
+- `lumen://browser/spaces` — Live JSON view of open workspaces and tabs.
 
 ---
 
@@ -121,7 +121,7 @@ lumen-mcp toggle com.example.yt-dark --enable
 # Package into .lumenplugin archive
 lumen-mcp package ./my-youtube-theme -o yt-dark.lumenplugin
 
-# Inspect open tabs and spaces
+# Inspect open tabs and workspaces
 lumen-mcp spaces
 
 # Search browsing history

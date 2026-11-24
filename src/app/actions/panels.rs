@@ -64,10 +64,10 @@ impl Anarc {
                         })
                 }));
             dialog
-                .title("Choose a space to share")
+                .title("Choose a workspace to share")
                 .child(
                     div().flex().flex_col().gap_3().child(
-                        "Live Share will share the current web tab titles and URLs from the space you choose.",
+                        "Live Share will share the current web tab titles and URLs from the workspace you choose.",
                     ).child(spaces),
                 )
                 .footer(Button::new("cancel-live-share-space").label("Cancel").on_click(
