@@ -400,6 +400,7 @@ impl Render for Anarc {
                             this.save_state();
                             cx.notify();
                         }
+                        this.update_discord_presence();
                         let has_peer_cursors = !crate::app::live_cursor::get_active_peer_cursors().is_empty();
                         if !was_initialized {
                             cx.notify();

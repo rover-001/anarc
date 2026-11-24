@@ -191,6 +191,14 @@ pub(crate) fn register(host: &mut PluginHost) {
     ] {
         BuiltinPlugin::set_enabled(feature, !safe_mode && enabled_in_config(config, id));
     }
+    host.register(
+        descriptor(
+            "anarc.discord-presence",
+            "Discord presence",
+            "Show the focused tab in Discord Rich Presence",
+        ),
+        || Box::new(crate::presence::PresencePlugin::new()),
+    );
     crate::agent::plugin::register(host);
 }
 

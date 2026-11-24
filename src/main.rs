@@ -14,6 +14,7 @@ mod navigation;
 mod paths;
 mod persist;
 mod plugin;
+mod presence;
 mod plugins;
 mod reader;
 mod settings;

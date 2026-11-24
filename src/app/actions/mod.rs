@@ -4,6 +4,7 @@ mod palette;
 mod panels;
 pub(super) mod peek;
 mod plugins;
+mod presence;
 mod resize;
 mod shortcuts;
 mod spaces;
