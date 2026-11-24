@@ -528,14 +528,29 @@ v.currentTime=v.duration;
 const btns=document.querySelectorAll('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button, .ytp-ad-skip-button-container button');
 btns.forEach(b=>b&&b.click());
 }
-const dialogs=document.querySelectorAll('tp-yt-paper-dialog, ytd-enforcement-message-view-model');
-dialogs.forEach(d=>{
-const b=d.querySelector('yt-button-shape button, #dismiss-button');
-if(b)b.click();
+// Only dismiss known ad/enforcement dialogs. A generic click on every
+// tp-yt-paper-dialog button also hits user flows such as "Create a channel";
+// clicking mutates the dialog, MutationObserver calls skipAds again, and the
+// two form a self-sustaining busy loop that pins the renderer at 100% CPU.
+const adDialogs=document.querySelectorAll('ytd-enforcement-message-view-model, tp-yt-paper-dialog:has(ytd-enforcement-message-view-model), tp-yt-paper-dialog:has(#dismiss-button)');
+if(!window.__anarc_ytDismissed)window.__anarc_ytDismissed=new WeakSet();
+adDialogs.forEach(d=>{
+if(window.__anarc_ytDismissed.has(d))return;
+const b=d.querySelector('#dismiss-button, yt-button-shape button');
+if(!b)return;
+window.__anarc_ytDismissed.add(d);
+b.click();
 });
 }
 setInterval(skipAds,200);
-const ob=new MutationObserver(skipAds);
+// Coalesce mutation bursts: a dialog re-render must not re-enter skipAds for
+// every childList change (the polling interval already covers slow cases).
+let pendingSkip=false;
+const ob=new MutationObserver(()=>{
+if(pendingSkip)return;
+pendingSkip=true;
+setTimeout(()=>{pendingSkip=false;skipAds();},200);
+});
 ob.observe(document.body||document.documentElement,{childList:true,subtree:true});
 }catch(e){}
 })();"#
@@ -786,6 +801,16 @@ mod tests {
         assert!(script.contains(".ytp-ad-module"));
         assert!(script.contains("skipAds"));
         assert!(script.contains("playbackRate=16.0"));
+    }
+
+    #[test]
+    fn youtube_ad_shield_does_not_click_generic_dialog_buttons() {
+        let script = youtube_ad_shield_script();
+        // Generic dialog auto-clicking loops with MutationObserver and hangs
+        // user flows such as YouTube's "Create a channel" modal.
+        assert!(!script.contains("document.querySelectorAll('tp-yt-paper-dialog,"));
+        assert!(script.contains("__anarc_ytDismissed"));
+        assert!(script.contains("pendingSkip"));
     }
 
     #[test]
