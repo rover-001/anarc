@@ -1,7 +1,7 @@
 ---
 type: decision
 title: "Consolidated: UI System & Theme"
-timestamp: 2026-11-23T07:48:52.499207753+00:00
+timestamp: 2026-11-24T04:37:10.695123176+00:00
 tags: [consolidated, "ui-system-&-theme"]
 ---
 
@@ -11,6 +11,7 @@ Consolidated architectural decisions, system invariants, and implementation patt
 
 ## Core System Decisions & Invariants
 
+- **Default CEF runtime uses proprietary-codec build for H.264 playback**: Anarc on Linux now installs a checksum-pinned CEF 156.0.26 build with proprietary_codecs=true (H.264/AAC) via tools/install-cef-codecs.sh, called by install.sh by default (--no-codecs opts out). Stock cef-dll-sys uses the Spotify minimal build where canPlayType(avc1) is empty, breaking MP4 previews in web apps. Original runtime is backed up to ~/.local/share/anarc-cef-minimal-backup. Verified canPlayType(avc1.640028)=probably and VideoDecoder avc1.640028 supported=true, plus real MP4 playback at 1920x1080.
 - **Four-pane split grid and drag-to-pane split UX**: Space.split remains Option<SplitPair> for save compatibility; SplitPair gained optional third/fourth tab ids (serde default) forming a 2x2 grid. Lumen gained third/fourth WebViewports, split_ratio_y and split_resizing_horizontal. Ctrl+Shift+S grows 2 panes to 4; Ctrl+Alt+arrows cycles panes 0..3. Dropping a sidebar TabDrag on a browser pane splits/extends/replaces that pane. Kept-tile drag preview opens the after-slot by default so the hovered tile slides left; the bottom dashed row is transparent until hovered. User-visible Lumen strings and the Rust type were renamed to Anarc; plugin ids/config keys/MCP tool names kept for compatibility.
 - **Anarc MCP visual browser control & tab lifecycle**: Replaced headless Python SQLite mock MCP wrapper with anarc-ctl mcp, automatically focusing and launching GUI window via omarchy-launch-or-focus. Added tab management DSL and CLI controls for pin, unpin, fav, unfav, close, new, select, and updated MCP schemas.
 - **Anarc Agent Control subagent telemetry, policy confirm gate on Send, and CEF lazy tab handling**: Audited subagent browser automation in Anarc. Discovered: 1) Tabs created in Anarc are initialized lazily by CEF only when activated/rendered in GPUI, causing 'tab not found' if queried before UI render. 2) PolicyConfig hardcodes 'send' in confirm_intents, triggering 'needs_confirm' on chat apps with a 'Send' button. 3) LLM subagent crashed on step 145 when calling read_file on binary PNG screenshot causing API code 400. 4) Successfully captured full execution telemetry (63 tool calls, 2,463,527 total tokens, 252s elapsed time).
@@ -37,9 +38,11 @@ Consolidated architectural decisions, system invariants, and implementation patt
 - `main.rs`
 - `src/main.rs`
 - `src/ui/motion.rs`
+- `tools/install-cef-codecs.sh`
 
-## Consolidated Evolution History (19 items archived)
+## Consolidated Evolution History (20 items archived)
 
+- 2026-11-24 — Default CEF runtime uses proprietary-codec build for H.264 playback (`default-cef-runtime-uses-proprietary-codec-build-for-h264-playback.md`)
 - 2026-11-23 — Four-pane split grid and drag-to-pane split UX (`four-pane-split-grid-and-drag-to-pane-split-ux.md`)
 - 2026-11-21 — Anarc MCP visual browser control & tab lifecycle (`anarc-mcp-visual-browser-control--tab-lifecycle.md`)
 - 2026-11-21 — Anarc Agent Control subagent telemetry, policy confirm gate on Send, and CEF lazy tab handling (`anarc-agent-control-subagent-telemetry-policy-confirm-gate-on-send-and-cef-lazy-tab-handling.md`)

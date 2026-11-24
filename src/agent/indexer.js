@@ -341,6 +341,56 @@
     }
   };
 
+  window.__anarc_wait_for = async function(condition, target, timeoutMs) {
+    timeoutMs = timeoutMs || 30000;
+    const start = performance.now();
+    condition = (condition || '').toLowerCase().trim();
+    target = target || '';
+
+    function checkCondition() {
+      const bodyText = (document.querySelector('main,[role=main]') || document.body)?.innerText || '';
+      switch (condition) {
+        case 'text_appears':
+          return target ? bodyText.includes(target) : true;
+        case 'text_disappears':
+          return target ? !bodyText.includes(target) : true;
+        case 'selector_appears':
+          if (!target) return false;
+          try {
+            const el = document.querySelector(target);
+            return Boolean(el && isVisible(el));
+          } catch (_) { return false; }
+        case 'selector_disappears':
+          if (!target) return true;
+          try {
+            const el = document.querySelector(target);
+            return !el || !isVisible(el);
+          } catch (_) { return true; }
+        default:
+          return target ? bodyText.includes(target) : true;
+      }
+    }
+
+    if (condition === 'stable') {
+      return window.__anarc_wait_stable(Math.min(timeoutMs, 2000));
+    }
+
+    while (true) {
+      if (checkCondition()) {
+        const elapsed = Math.round(performance.now() - start);
+        return JSON.stringify({ ok: true, condition: condition, elapsed_ms: elapsed });
+      }
+      const now = performance.now();
+      if (now - start >= timeoutMs) {
+        return JSON.stringify({
+          ok: false,
+          error: 'wait_for timed out after ' + Math.round(timeoutMs) + 'ms waiting for ' + condition + (target ? ' ("' + target + '")' : '')
+        });
+      }
+      await new Promise(resolve => setTimeout(resolve, Math.min(200, timeoutMs - (now - start))));
+    }
+  };
+
   // Read a single indexed element (by its DOM path) including descendants.
   // `x`/`y` are the ref's recorded center, used to disambiguate identical paths.
   window.__anarc_read_ref = function(path, maxChars, x, y) {

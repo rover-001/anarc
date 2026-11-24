@@ -6,7 +6,7 @@
 #   2. Run next to a release bundle (lumen binary + cef runtime dir + logo):
 #      installs directly, no Rust toolchain needed.
 #
-# Usage: ./install.sh [--prefix DIR] [--skip-build] [--no-desktop-entry]
+# Usage: ./install.sh [--prefix DIR] [--skip-build] [--no-desktop-entry] [--no-codecs]
 
 set -eu
 
@@ -17,6 +17,7 @@ ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
 PIXMAPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/pixmaps"
 SKIP_BUILD=0
 NO_DESKTOP=0
+NO_CODECS=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -24,6 +25,7 @@ while [ $# -gt 0 ]; do
         --bindir) BIN_DIR="$2"; shift 2 ;;
         --skip-build) SKIP_BUILD=1; shift ;;
         --no-desktop-entry) NO_DESKTOP=1; shift ;;
+        --no-codecs) NO_CODECS=1; shift ;;
         -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 1 ;;
     esac
@@ -146,6 +148,16 @@ for item in libcef.so libcef_dll chrome-sandbox chrome_100_percent.pak \
         fi
     fi
 done
+
+# By default, swap in a codec-enabled CEF runtime: the stock cef-dll-sys
+# download is a minimal build without H.264/AAC, so video previews fail in
+# web apps. Keep installs working offline by treating download failures as
+# warnings; pass --no-codecs to skip this step entirely.
+if [ "$NO_CODECS" -eq 0 ] && [ -f "$SCRIPT_DIR/tools/install-cef-codecs.sh" ]; then
+    if ! CEF_INSTALL_DIR="$CEF_DIR" sh "$SCRIPT_DIR/tools/install-cef-codecs.sh"; then
+        echo "warning: codec-enabled CEF install failed; MP4/H.264 previews may not work" >&2
+    fi
+fi
 
 # Symlink anarc into CEF runtime directory as anarc, chrome, and chromium so CEF child processes
 # (renderer, gpu, utility) never search system PATH or trigger external /usr/bin/chromium.

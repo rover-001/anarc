@@ -144,6 +144,16 @@ cargo run --locked --release
 cargo run --locked --release --features wasm-plugins
 ```
 
+#### H.264 / AAC video playback (Linux)
+
+The CEF download used by `cef-dll-sys` is the Spotify CDN *minimal* build, which has proprietary codecs compiled out. Video editors and other web apps then fail to preview ordinary H.264 MP4 screen recordings (`canPlayType('video/mp4; codecs="avc1…"')` is empty). `install.sh` therefore installs a checksum-pinned CEF build with H.264/AAC enabled by default; pass `--no-codecs` to keep the stock minimal runtime. For an existing installation, run the swap directly:
+
+```sh
+tools/install-cef-codecs.sh
+```
+
+Restart Anarc afterwards. The script backs up the original runtime to `~/.local/share/anarc-cef-minimal-backup`. If you build CEF yourself, any compatible build with `proprietary_codecs=true ffmpeg_branding=Chrome` works through `CEF_PATH`. Review the patent-licensing obligations for H.264/AAC before redistributing a codec-enabled build.
+
 ### Windows
 
 There is no Windows installer yet. Build from source with the MSVC toolchain.

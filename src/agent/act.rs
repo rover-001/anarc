@@ -177,34 +177,59 @@ fn split_statements(input: &str) -> Vec<String> {
     let mut current = String::new();
     let mut in_single = false;
     let mut in_double = false;
+    let mut in_backtick = false;
+    let mut in_triple = false;
     let mut escaped = false;
 
-    for ch in input.chars() {
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
         if ch == '\r' {
+            i += 1;
             continue;
         }
         if escaped {
             current.push(ch);
             escaped = false;
+            i += 1;
             continue;
         }
         if ch == '\\' {
             escaped = true;
             current.push(ch);
-            continue;
-        }
-        if ch == '"' && !in_single {
-            in_double = !in_double;
-            current.push(ch);
-            continue;
-        }
-        if ch == '\'' && !in_double {
-            in_single = !in_single;
-            current.push(ch);
+            i += 1;
             continue;
         }
 
-        if (ch == ';' || ch == '\n') && !in_single && !in_double {
+        // Check triple quotes
+        if ch == '"' && i + 2 < chars.len() && chars[i + 1] == '"' && chars[i + 2] == '"' && !in_single && !in_backtick {
+            in_triple = !in_triple;
+            current.push_str("\"\"\"");
+            i += 3;
+            continue;
+        }
+
+        if ch == '"' && !in_single && !in_backtick && !in_triple {
+            in_double = !in_double;
+            current.push(ch);
+            i += 1;
+            continue;
+        }
+        if ch == '\'' && !in_double && !in_backtick && !in_triple {
+            in_single = !in_single;
+            current.push(ch);
+            i += 1;
+            continue;
+        }
+        if ch == '`' && !in_single && !in_double && !in_triple {
+            in_backtick = !in_backtick;
+            current.push(ch);
+            i += 1;
+            continue;
+        }
+
+        if (ch == ';' || ch == '\n') && !in_single && !in_double && !in_backtick && !in_triple {
             let trimmed = current.trim();
             if !trimmed.is_empty() {
                 statements.push(trimmed.to_string());
@@ -213,6 +238,7 @@ fn split_statements(input: &str) -> Vec<String> {
         } else {
             current.push(ch);
         }
+        i += 1;
     }
     let trimmed = current.trim();
     if !trimmed.is_empty() {
@@ -822,7 +848,13 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
 
 fn unquote(s: &str) -> String {
     let t = s.trim();
-    if (t.starts_with('"') && t.ends_with('"')) || (t.starts_with('\'') && t.ends_with('\'')) {
+    if t.starts_with("\"\"\"") && t.ends_with("\"\"\"") && t.len() >= 6 {
+        return t[3..t.len() - 3].to_string();
+    }
+    if (t.starts_with('"') && t.ends_with('"'))
+        || (t.starts_with('\'') && t.ends_with('\''))
+        || (t.starts_with('`') && t.ends_with('`'))
+    {
         if t.len() >= 2 {
             t.get(1..t.len().saturating_sub(1))
                 .unwrap_or("")
@@ -1298,9 +1330,13 @@ fn execute_single_op(
                     .canonicalize()
                     .map_err(|_| "file path unavailable. use: see")?;
                 let path_str = canonical.to_string_lossy().to_string();
-                if path_str.contains("/.ssh")
-                    || path_str.contains("/.gnupg")
-                    || path_str.starts_with("/etc")
+                let path_lower = path_str.to_lowercase();
+                if path_lower.contains("/.ssh")
+                    || path_lower.contains("\\.ssh")
+                    || path_lower.contains("/.gnupg")
+                    || path_lower.contains("\\.gnupg")
+                    || path_lower.starts_with("/etc")
+                    || path_lower.starts_with("c:\\windows\\system32")
                 {
                     return Err("upload blocked. use: see".into());
                 }
@@ -1382,7 +1418,20 @@ fn execute_single_op(
                 let _ = click_at(app, tab_id, cx, cy, policy_config);
             }
 
-            let change_script = "(function() { var el = document.activeElement; if (el && el.type === 'file') { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } })()";
+            let change_script = r#"(() => {
+                const active = document.activeElement;
+                if (active && active.type === 'file') {
+                    active.dispatchEvent(new Event('input', { bubbles: true }));
+                    active.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                const inputs = Array.from(document.querySelectorAll('input[type=file]'));
+                for (const inp of inputs) {
+                    if (inp.files && inp.files.length > 0) {
+                        inp.dispatchEvent(new Event('input', { bubbles: true }));
+                        inp.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }
+            })()"#;
             app.engine.execute_script(tab_id, change_script);
 
             std::thread::sleep(std::time::Duration::from_millis(150));
@@ -1713,6 +1762,151 @@ fn type_at(
         .and_then(Result::ok)
         .ok_or("typing failed. use: see")?;
     Ok(())
+}
+
+pub fn set_element_value(
+    app: &crate::app::Anarc,
+    tab_id: &str,
+    target: Option<&str>,
+    value: &str,
+    mode: Option<&str>,
+) -> Result<String, String> {
+    app.engine.set_focus(tab_id, true);
+    let mode_str = mode.unwrap_or("set");
+    let target_str = target.unwrap_or("").trim();
+
+    let mut ref_coords = None;
+    if !target_str.is_empty() {
+        let state = app.engine.agent_state();
+        ref_coords = resolve_target_coords(app, target_str, tab_id, &state).ok();
+    }
+
+    let script = format!(
+        r#"(() => {{
+            const val = {val_json};
+            const mode = {mode_json};
+            const targetRef = {target_json};
+            let el = null;
+
+            if (targetRef) {{
+                try {{
+                    el = document.querySelector(targetRef);
+                }} catch (_) {{}}
+                if (!el && {has_coords}) {{
+                    el = document.elementFromPoint({cx}, {cy});
+                }}
+                if (!el) {{
+                    el = Array.from(document.querySelectorAll('input, textarea, [contenteditable]:not([contenteditable=false]), [role=textbox]'))
+                        .find(n => (n.getAttribute('aria-label') === targetRef || n.placeholder === targetRef || n.id === targetRef || n.name === targetRef));
+                }}
+            }}
+
+            if (!el) {{
+                el = document.activeElement;
+            }}
+
+            if (!el || el === document.body || el === document.documentElement) {{
+                el = document.querySelector('textarea, [contenteditable]:not([contenteditable=false]), [role=textbox], input:not([type=hidden]):not([type=checkbox]):not([type=radio])');
+            }}
+
+            if (!el) return JSON.stringify({{ ok: false, error: 'no editable element found' }});
+
+            const targetEditable = el.closest('input, textarea, select, [contenteditable]:not([contenteditable=false]), [role=textbox]') || el;
+            targetEditable.focus();
+
+            const isSelect = targetEditable instanceof HTMLSelectElement;
+            const isStandardInput = targetEditable.tagName === 'INPUT' || targetEditable.tagName === 'TEXTAREA';
+            const isContentEditable = targetEditable.isContentEditable || targetEditable.getAttribute('contenteditable') === 'true' || targetEditable.getAttribute('role') === 'textbox';
+
+            if (isSelect) {{
+                targetEditable.value = val;
+                targetEditable.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                targetEditable.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                return JSON.stringify({{ ok: true, tag: targetEditable.tagName, chars: val.length }});
+            }}
+
+            if (isStandardInput) {{
+                if (mode === 'append') {{
+                    const start = targetEditable.value.length;
+                    targetEditable.setRangeText(val, start, start, 'end');
+                }} else {{
+                    const proto = targetEditable.tagName === 'INPUT' ? window.HTMLInputElement.prototype : window.HTMLTextAreaElement.prototype;
+                    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+                    if (descriptor && descriptor.set) {{
+                        descriptor.set.call(targetEditable, val);
+                    }} else {{
+                        targetEditable.value = val;
+                    }}
+                }}
+                targetEditable.dispatchEvent(new Event('beforeinput', {{ bubbles: true, inputType: mode === 'append' ? 'insertText' : 'insertFromPaste' }}));
+                targetEditable.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                targetEditable.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                return JSON.stringify({{ ok: true, tag: targetEditable.tagName, chars: val.length }});
+            }}
+
+            if (isContentEditable) {{
+                const range = document.createRange();
+                range.selectNodeContents(targetEditable);
+                if (mode === 'append') {{
+                    range.collapse(false);
+                }}
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+
+                let inserted = false;
+                try {{
+                    const evt = new ClipboardEvent('paste', {{
+                        clipboardData: new DataTransfer(),
+                        bubbles: true,
+                        cancelable: true
+                    }});
+                    evt.clipboardData.setData('text/plain', val);
+                    inserted = !targetEditable.dispatchEvent(evt);
+                }} catch (_) {{}}
+
+                if (!inserted) {{
+                    try {{
+                        inserted = document.execCommand('insertText', false, val);
+                    }} catch (_) {{}}
+                }}
+
+                if (!inserted) {{
+                    if (mode === 'append') {{
+                        targetEditable.innerText += val;
+                    }} else {{
+                        targetEditable.innerText = val;
+                    }}
+                }}
+
+                targetEditable.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                targetEditable.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                return JSON.stringify({{ ok: true, tag: 'contenteditable', chars: val.length }});
+            }}
+
+            return JSON.stringify({{ ok: false, error: 'target is not editable' }});
+        }})()"#,
+        val_json = serde_json::json!(value),
+        mode_json = serde_json::json!(mode_str),
+        target_json = serde_json::json!(target_str),
+        has_coords = ref_coords.is_some(),
+        cx = ref_coords.map(|(x, _)| x).unwrap_or(0),
+        cy = ref_coords.map(|(_, y)| y).unwrap_or(0),
+    );
+
+    let res_str = evaluate_action(app, tab_id, &script)?;
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&res_str) {
+        if parsed.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+            let chars = parsed.get("chars").and_then(|v| v.as_u64()).unwrap_or(value.len() as u64);
+            let tag = parsed.get("tag").and_then(|v| v.as_str()).unwrap_or("element");
+            super::playbook::record_action(&format!("set_value {target_str}"));
+            return Ok(format!("set {tag} value ({chars} chars)"));
+        } else if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+            return Err(format!("set_value failed: {err}"));
+        }
+    }
+    super::playbook::record_action(&format!("set_value {target_str}"));
+    Ok(format!("set value ({} chars)", value.len()))
 }
 
 fn evaluate_action(app: &crate::app::Anarc, tab: &str, script: &str) -> Result<String, String> {
@@ -2327,6 +2521,37 @@ mod tests {
             ops.get(1),
             Some(&ActionOp::Click {
                 ref_id: "b1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn test_triple_quotes_and_backticks_preserve_semicolons() {
+        let script = "i1=\"\"\"line 1; line 2; semicolon here;\"\"\"; b1";
+        let ops = parse_dsl(script).unwrap_or_default();
+        assert_eq!(ops.len(), 2);
+        assert_eq!(
+            ops.first(),
+            Some(&ActionOp::ClearAndType {
+                ref_id: "i1".into(),
+                text: "line 1; line 2; semicolon here;".into()
+            })
+        );
+        assert_eq!(
+            ops.get(1),
+            Some(&ActionOp::Click {
+                ref_id: "b1".into()
+            })
+        );
+
+        let script2 = "i2=`SELECT * FROM users; WHERE id = 1;`; b2";
+        let ops2 = parse_dsl(script2).unwrap_or_default();
+        assert_eq!(ops2.len(), 2);
+        assert_eq!(
+            ops2.first(),
+            Some(&ActionOp::ClearAndType {
+                ref_id: "i2".into(),
+                text: "SELECT * FROM users; WHERE id = 1;".into()
             })
         );
     }

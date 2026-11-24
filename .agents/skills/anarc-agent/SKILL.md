@@ -90,4 +90,19 @@ Capture a viewport screenshot. CLI prints a PNG path. MCP returns an image, with
 
 ### 6. `upload`
 Upload local files to target element or page file input without native OS dialog friction.
-- **Args**: `files` (array of file paths), `target` (optional ref e.g. `i1` or CSS selector e.g. `css=input[type=file]`), `tab_id` (optional)
+- **Args**: `files` (array of file paths), `target` (optional ref e.g. `i1` or CSS selector e.g. `css=input[type=file]`), `tab_id` (optional). Parameter aliases `ref` and `tab` are accepted. Supports multi-file batches and Windows path formatting.
+
+### 7. `eval`
+Execute arbitrary JavaScript in the active or target tab context and return the result.
+- **Args**: `script` (JavaScript code string), `tab_id` (optional).
+- **Capabilities**: Full access to the page context, `localStorage`, `sessionStorage`, cookies, Web APIs, DOM properties, and active web app clients (e.g., extracting Supabase JWT tokens, updating records via client SDKs, querying canvas/computed styles). Supports `async`/`await` promises and returns JSON/primitive values.
+
+### 8. `set_value`
+Directly set text value of input, textarea, or contenteditable/rich-text element without keystroke simulation or delimiter clashing.
+- **Args**: `value` (raw text content, up to 100KB+), `target` (optional ref e.g. `i1` or CSS selector), `mode` (`set` | `append` | `paste`), `tab_id` (optional).
+- **Use when**: Injecting large prompts, dossiers, markdown audits, or text containing quotes and semicolons. Bypasses DSL syntax parsing and eliminates focus-loss / typing latency.
+
+### 9. `wait_for`
+Event-driven condition waiting that eliminates manual polling loops and saves tokens.
+- **Args**: `condition` (`text_appears` | `text_disappears` | `selector_appears` | `selector_disappears` | `stable`), `target` (text or CSS selector), `timeout_ms` (optional, default: 30000, up to 300000), `tab_id` (optional).
+- **Use when**: Waiting for AI generation to finish (e.g. `condition="text_disappears", target="Stop"`), waiting for form submission results, or waiting for modals to appear/disappear.

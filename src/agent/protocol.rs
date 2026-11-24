@@ -28,6 +28,22 @@ pub enum AgentRequest {
         target: Option<String>,
         scale: Option<f32>,
     },
+    Eval {
+        tab_id: Option<String>,
+        script: String,
+    },
+    SetValue {
+        tab_id: Option<String>,
+        target: Option<String>,
+        value: String,
+        mode: Option<String>,
+    },
+    WaitFor {
+        tab_id: Option<String>,
+        condition: String,
+        target: Option<String>,
+        timeout_ms: Option<u64>,
+    },
     Attach {
         space_id: Option<String>,
     },
@@ -44,6 +60,9 @@ impl AgentRequest {
             Self::Find { .. } => "find",
             Self::Do { .. } => "do",
             Self::Shot { .. } => "shot",
+            Self::Eval { .. } => "eval",
+            Self::SetValue { .. } => "set_value",
+            Self::WaitFor { .. } => "wait_for",
             Self::Tabs => "tabs",
             Self::Doctor => "doctor",
             Self::Pause => "pause",
@@ -59,7 +78,10 @@ impl AgentRequest {
             | Self::Read { tab_id, .. }
             | Self::Find { tab_id, .. }
             | Self::Do { tab_id, .. }
-            | Self::Shot { tab_id, .. } => tab_id.as_deref(),
+            | Self::Shot { tab_id, .. }
+            | Self::Eval { tab_id, .. }
+            | Self::SetValue { tab_id, .. }
+            | Self::WaitFor { tab_id, .. } => tab_id.as_deref(),
             _ => None,
         }
     }
@@ -70,7 +92,10 @@ impl AgentRequest {
             | Self::Read { tab_id, .. }
             | Self::Find { tab_id, .. }
             | Self::Do { tab_id, .. }
-            | Self::Shot { tab_id, .. } => Some(tab_id),
+            | Self::Shot { tab_id, .. }
+            | Self::Eval { tab_id, .. }
+            | Self::SetValue { tab_id, .. }
+            | Self::WaitFor { tab_id, .. } => Some(tab_id),
             _ => None,
         }
     }

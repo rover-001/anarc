@@ -81,6 +81,9 @@ pub(crate) fn forward_request_to_engine(
             | AgentRequest::Read { .. }
             | AgentRequest::Find { .. }
             | AgentRequest::Shot { .. }
+            | AgentRequest::Eval { .. }
+            | AgentRequest::SetValue { .. }
+            | AgentRequest::WaitFor { .. }
     );
 
     if requires_paint && !WINDOW_PAINTED.load(Ordering::Acquire) {
@@ -293,7 +296,12 @@ pub(crate) fn handle_agent_request(
     if let Some(target) = req.target_tab()
         && matches!(
             req,
-            AgentRequest::Read { .. } | AgentRequest::See { .. } | AgentRequest::Find { .. }
+            AgentRequest::Read { .. }
+                | AgentRequest::See { .. }
+                | AgentRequest::Find { .. }
+                | AgentRequest::Eval { .. }
+                | AgentRequest::SetValue { .. }
+                | AgentRequest::WaitFor { .. }
         ) {
             let ready_check = "(() => document.readyState)()";
             if let Ok(Ok(state_str)) = app.engine.evaluate(target, ready_check).recv_blocking()
@@ -597,6 +605,104 @@ pub(crate) fn handle_agent_request(
                         Ok(Err(_)) => {
                             let _ =
                                 resp_tx.try_send(AgentResponse::err("screenshot failed. use: see"));
+                        }
+                        Err(_) => {
+                            let _ = resp_tx
+                                .try_send(AgentResponse::err("page disconnected. use: tabs"));
+                        }
+                    }
+                })
+                .ok();
+        }
+        AgentRequest::Eval { tab_id, script } => {
+            let target_tab = tab_id.unwrap_or_else(|| app.active_tab_id().to_string());
+            let eval_rx = app.engine.evaluate(&target_tab, &script);
+            std::thread::Builder::new()
+                .name("anarc-eval-worker".into())
+                .spawn(move || {
+                    let raw_res = futures_lite::future::block_on(async { eval_rx.recv().await });
+                    match raw_res {
+                        Ok(Ok(s)) => {
+                            let _ = resp_tx.try_send(AgentResponse::success(s));
+                        }
+                        Ok(Err(e)) => {
+                            let _ = resp_tx.try_send(AgentResponse::err(format!("eval failed: {e}")));
+                        }
+                        Err(_) => {
+                            let _ = resp_tx
+                                .try_send(AgentResponse::err("page disconnected. use: tabs"));
+                        }
+                    }
+                })
+                .ok();
+        }
+        AgentRequest::SetValue {
+            tab_id,
+            target,
+            value,
+            mode,
+        } => {
+            let target_tab = tab_id.unwrap_or_else(|| app.active_tab_id().to_string());
+            match super::act::set_element_value(
+                app,
+                &target_tab,
+                target.as_deref(),
+                &value,
+                mode.as_deref(),
+            ) {
+                Ok(msg) => {
+                    let _ = resp_tx.try_send(AgentResponse::success(msg));
+                }
+                Err(err) => {
+                    let _ = resp_tx.try_send(AgentResponse::err(err));
+                }
+            }
+        }
+        AgentRequest::WaitFor {
+            tab_id,
+            condition,
+            target,
+            timeout_ms,
+        } => {
+            let target_tab = tab_id.unwrap_or_else(|| app.active_tab_id().to_string());
+            let ms = timeout_ms.unwrap_or(30000);
+            let target_str = target.unwrap_or_default();
+            let script = format!(
+                "{} window.__anarc_wait_for({}, {}, {});",
+                super::observe::build_indexer_injection_script(),
+                serde_json::json!(condition),
+                serde_json::json!(target_str),
+                ms
+            );
+            let eval_rx = app.engine.evaluate(&target_tab, &script);
+            std::thread::Builder::new()
+                .name("anarc-wait-worker".into())
+                .spawn(move || {
+                    let raw_res = futures_lite::future::block_on(async { eval_rx.recv().await });
+                    match raw_res {
+                        Ok(Ok(s)) => {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&s) {
+                                if val.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+                                    let elapsed = val
+                                        .get("elapsed_ms")
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0);
+                                    let _ = resp_tx.try_send(AgentResponse::success(format!(
+                                        "ok wait_for {condition} ({elapsed}ms)"
+                                    )));
+                                    return;
+                                } else if let Some(err) =
+                                    val.get("error").and_then(|v| v.as_str())
+                                {
+                                    let _ = resp_tx.try_send(AgentResponse::err(err.to_string()));
+                                    return;
+                                }
+                            }
+                            let _ = resp_tx.try_send(AgentResponse::success(s));
+                        }
+                        Ok(Err(e)) => {
+                            let _ =
+                                resp_tx.try_send(AgentResponse::err(format!("wait_for failed: {e}")));
                         }
                         Err(_) => {
                             let _ = resp_tx

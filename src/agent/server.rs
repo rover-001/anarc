@@ -435,6 +435,34 @@ pub fn parse_client_command(input: &str) -> Result<AgentRequest, &'static str> {
             tab_id: None,
             ops: input.to_string(),
         },
+        "eval" | "evaluate" => {
+            let script = input.strip_prefix(cmd).unwrap_or("").trim().to_string();
+            AgentRequest::Eval {
+                tab_id: None,
+                script,
+            }
+        }
+        "set-value" | "set_value" => {
+            let target = parts.get(1).map(|s| s.to_string());
+            let val = parts.get(2..).map(|s| s.join(" ")).unwrap_or_default();
+            AgentRequest::SetValue {
+                tab_id: None,
+                target,
+                value: val,
+                mode: None,
+            }
+        }
+        "wait-for" | "wait_for" => {
+            let condition = parts.get(1).map(|s| s.to_string()).unwrap_or_else(|| "stable".into());
+            let target = parts.get(2).map(|s| s.to_string());
+            let timeout_ms = parts.get(3).and_then(|s| s.parse::<u64>().ok());
+            AgentRequest::WaitFor {
+                tab_id: None,
+                condition,
+                target,
+                timeout_ms,
+            }
+        }
         "tabs" => AgentRequest::Tabs,
         "doctor" => AgentRequest::Doctor,
         "pause" => AgentRequest::Pause,

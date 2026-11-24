@@ -60,6 +60,9 @@ fn print_usage() {
            version                      Show build version/time and source drift warning\n\
            start                        Launch Anarc detached and wait for its socket\n\
            do <ops>                     Execute action DSL (click, type, key, wait)\n\
+           eval <script>                Execute JavaScript in page context\n\
+           set-value <ref> <value>      Directly set value without typing or delimiter clashing\n\
+           wait-for <cond> [target]     Event-driven wait (text/selector appears/disappears, stable)\n\
            shot [ref|view]              Save a PNG and print its path\n\
            wait stable [ms]             Wait for the latest text to stop growing\n\
            stats                        Show agent call and token statistics\n\
@@ -244,7 +247,13 @@ fn send_socket_request(
 
     let doctor = request_val.get("cmd").and_then(|cmd| cmd.as_str()) == Some("doctor");
     let (mut stream, socket_path, token) = connect_socket(target, mcp, doctor)?;
-    let timeout = Some(Duration::from_secs(28));
+    let timeout = if let Some(ms) = request_val.get("timeout_ms").and_then(|v| v.as_u64()) {
+        Some(Duration::from_millis(ms.saturating_add(15_000)))
+    } else if mcp {
+        Some(Duration::from_secs(180))
+    } else {
+        Some(Duration::from_secs(28))
+    };
     stream
         .set_read_timeout(timeout)
         .and_then(|()| stream.set_write_timeout(timeout))
@@ -454,6 +463,71 @@ fn get_tool_definitions() -> serde_json::Value {
                     }
                 }
             }
+        },
+        {
+            "name": "eval",
+            "description": format!("Execute JavaScript in page context and return result. {RECOVERY}"),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "script": {
+                        "type": "string",
+                        "description": "JavaScript code to execute in page"
+                    },
+                    "tab_id": {
+                        "type": "string"
+                    }
+                },
+                "required": ["script"]
+            }
+        },
+        {
+            "name": "set_value",
+            "description": format!("Directly set text value on input, textarea, or contenteditable. {RECOVERY}"),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "type": "string",
+                        "description": "Raw text to set"
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Ref (e.g. 'i1') or CSS selector. Omit for active."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["set", "append", "paste"]
+                    },
+                    "tab_id": {
+                        "type": "string"
+                    }
+                },
+                "required": ["value"]
+            }
+        },
+        {
+            "name": "wait_for",
+            "description": format!("Event-driven wait until DOM or text condition is met. {RECOVERY}"),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "condition": {
+                        "type": "string",
+                        "enum": ["text_appears", "text_disappears", "selector_appears", "selector_disappears", "stable"]
+                    },
+                    "target": {
+                        "type": "string"
+                    },
+                    "timeout_ms": {
+                        "type": "integer"
+                    },
+                    "tab_id": {
+                        "type": "string"
+                    }
+                },
+                "required": ["condition"]
+            }
         }
     ])
 }
@@ -536,6 +610,7 @@ fn handle_mcp_request(
 
             let tab_id = arguments
                 .get("tab_id")
+                .or_else(|| arguments.get("tab"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
@@ -554,10 +629,75 @@ fn handle_mcp_request(
                         "ops": ops
                     })
                 }
+                "eval" | "evaluate" | "evaluate_script" => {
+                    let script = arguments
+                        .get("script")
+                        .or_else(|| arguments.get("expression"))
+                        .or_else(|| arguments.get("code"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if script.trim().is_empty() {
+                        return Some(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "error": { "code": -32602, "message": "missing script. use: eval with script string" }
+                        }));
+                    }
+                    serde_json::json!({
+                        "cmd": "eval",
+                        "tab_id": tab_id,
+                        "script": script
+                    })
+                }
+                "set_value" | "paste" | "fill_value" => {
+                    let value = arguments
+                        .get("value")
+                        .or_else(|| arguments.get("text"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let target = arguments
+                        .get("target")
+                        .or_else(|| arguments.get("ref"))
+                        .or_else(|| arguments.get("element"))
+                        .and_then(|v| v.as_str());
+                    let mode = arguments
+                        .get("mode")
+                        .and_then(|v| v.as_str());
+                    serde_json::json!({
+                        "cmd": "set_value",
+                        "tab_id": tab_id,
+                        "target": target,
+                        "value": value,
+                        "mode": mode
+                    })
+                }
+                "wait_for" => {
+                    let condition = arguments
+                        .get("condition")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("stable");
+                    let target = arguments
+                        .get("target")
+                        .or_else(|| arguments.get("text"))
+                        .or_else(|| arguments.get("selector"))
+                        .and_then(|v| v.as_str());
+                    let timeout_ms = arguments
+                        .get("timeout_ms")
+                        .or_else(|| arguments.get("timeoutMs"))
+                        .or_else(|| arguments.get("timeout"))
+                        .and_then(|v| v.as_u64());
+                    serde_json::json!({
+                        "cmd": "wait_for",
+                        "tab_id": tab_id,
+                        "condition": condition,
+                        "target": target,
+                        "timeout_ms": timeout_ms
+                    })
+                }
                 "read" => serde_json::json!({
                     "cmd": "read",
                     "tab_id": tab_id,
-                    "target": arguments.get("target").and_then(|v| v.as_str()),
+                    "target": arguments.get("target").or_else(|| arguments.get("ref")).and_then(|v| v.as_str()),
                     "mode": arguments.get("mode").and_then(|v| v.as_str()),
                     "max": arguments.get("max").and_then(|v| v.as_u64()).map(|u| u as usize)
                 }),
@@ -572,19 +712,25 @@ fn handle_mcp_request(
                 "shot" => serde_json::json!({
                     "cmd": "shot",
                     "tab_id": tab_id,
-                    "target": arguments.get("target").and_then(|v| v.as_str()),
+                    "target": arguments.get("target").or_else(|| arguments.get("ref")).and_then(|v| v.as_str()),
                     "scale": arguments.get("scale").and_then(|v| v.as_f64()).map(|f| f as f32)
                 }),
-                "upload" => {
+                "upload" | "upload_files" => {
                     let target = arguments
                         .get("target")
+                        .or_else(|| arguments.get("ref"))
+                        .or_else(|| arguments.get("element"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    let files = arguments
-                        .get("files")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
-                        .unwrap_or_default();
+                    let files: Vec<&str> = if let Some(arr) = arguments.get("files").and_then(|v| v.as_array()) {
+                        arr.iter().filter_map(|v| v.as_str()).collect()
+                    } else if let Some(single) = arguments.get("files").and_then(|v| v.as_str()) {
+                        vec![single]
+                    } else if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
+                        vec![path]
+                    } else {
+                        Vec::new()
+                    };
                     if files.is_empty() {
                         return Some(serde_json::json!({
                             "jsonrpc": "2.0",
@@ -615,6 +761,8 @@ fn handle_mcp_request(
                         .unwrap_or("list");
                     let target = arguments
                         .get("target")
+                        .or_else(|| arguments.get("ref"))
+                        .or_else(|| arguments.get("tab"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     let url = arguments.get("url").and_then(|v| v.as_str()).unwrap_or("");
@@ -1240,6 +1388,45 @@ fn main() {
             "tab_id": explicit_tab,
             "ops": filtered_args.join(" "),
         }),
+        "eval" | "evaluate" => {
+            let script = if filtered_args.len() > 1 {
+                filtered_args[1..].join(" ")
+            } else {
+                eprintln!("missing script. use: anarc-ctl eval <script>");
+                std::process::exit(1);
+            };
+            serde_json::json!({
+                "cmd": "eval",
+                "tab_id": explicit_tab,
+                "script": script
+            })
+        }
+        "set-value" | "set_value" => {
+            let target = filtered_args.get(1).cloned();
+            let val = if filtered_args.len() > 2 {
+                filtered_args[2..].join(" ")
+            } else {
+                String::new()
+            };
+            serde_json::json!({
+                "cmd": "set_value",
+                "tab_id": explicit_tab,
+                "target": target,
+                "value": val
+            })
+        }
+        "wait-for" | "wait_for" => {
+            let condition = filtered_args.get(1).cloned().unwrap_or_else(|| "stable".into());
+            let target = filtered_args.get(2).cloned();
+            let timeout_ms = filtered_args.get(3).and_then(|s| s.parse::<u64>().ok());
+            serde_json::json!({
+                "cmd": "wait_for",
+                "tab_id": explicit_tab,
+                "condition": condition,
+                "target": target,
+                "timeout_ms": timeout_ms
+            })
+        }
         "shot" => {
             let target = filtered_args.get(1).cloned();
             serde_json::json!({
@@ -1447,18 +1634,18 @@ mod tests {
             "Total tool schema JSON length: {char_len} chars, estimated tokens: {max_estimate} (char-based: {token_estimate_by_char}, word-based: {token_estimate_by_words})"
         );
 
-        // Target: Total tool-schema cost across all 5 tools <= 700 tokens
+        // Target: Total tool-schema cost across all tools <= 1100 tokens
         assert!(
-            max_estimate <= 700,
-            "Total tool schema token estimate ({max_estimate}) exceeded target limit of 700 tokens!"
+            max_estimate <= 1100,
+            "Total tool schema token estimate ({max_estimate}) exceeded target limit of 1100 tokens!"
         );
 
         // Also assert each individual tool description is <= 60 tokens (~240 chars)
         let tool_array = tools.as_array().unwrap();
         assert_eq!(
             tool_array.len(),
-            9,
-            "Expected five core tools, tabs, tab, doctor, and upload"
+            12,
+            "Expected core tools, tabs, tab, doctor, upload, eval, set_value, and wait_for"
         );
         for tool in tool_array {
             let desc = tool.get("description").and_then(|d| d.as_str()).unwrap();
@@ -1557,7 +1744,7 @@ mod tests {
             .unwrap()
             .as_array()
             .unwrap();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 12);
 
         // 5. Tools call with Anarc offline - should return clean error message without hanging
         let call_req = serde_json::json!({
@@ -1575,5 +1762,79 @@ mod tests {
         let content = call_res.get("content").unwrap().as_array().unwrap();
         let text = content[0].get("text").unwrap().as_str().unwrap();
         assert!(text.contains("anarc not running"));
+    }
+
+    #[test]
+    fn test_mcp_eval_set_value_and_wait_for_request_dispatch() {
+        let socket_path = SocketTarget {
+            explicit: Some("/tmp/nonexistent-anarc-test.sock".into()),
+            instance: None,
+        };
+
+        // Eval dispatch with code alias and tab alias
+        let eval_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {
+                "name": "eval",
+                "arguments": {
+                    "code": "localStorage.getItem('token')",
+                    "tab": "tab-1"
+                }
+            }
+        });
+        let eval_resp = handle_mcp_request(&eval_req, &socket_path, false).unwrap();
+        assert_eq!(eval_resp.get("id").unwrap().as_i64(), Some(10));
+        assert!(eval_resp.pointer("/result/isError").unwrap().as_bool().unwrap());
+
+        // Set value dispatch with ref and text aliases
+        let set_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {
+                "name": "set_value",
+                "arguments": {
+                    "ref": "i1",
+                    "text": "audit markdown content with ; semicolons"
+                }
+            }
+        });
+        let set_resp = handle_mcp_request(&set_req, &socket_path, false).unwrap();
+        assert_eq!(set_resp.get("id").unwrap().as_i64(), Some(11));
+
+        // Wait for dispatch with timeoutMs alias
+        let wait_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": {
+                "name": "wait_for",
+                "arguments": {
+                    "condition": "text_disappears",
+                    "target": "Stop",
+                    "timeoutMs": 180000
+                }
+            }
+        });
+        let wait_resp = handle_mcp_request(&wait_req, &socket_path, false).unwrap();
+        assert_eq!(wait_resp.get("id").unwrap().as_i64(), Some(12));
+
+        // Upload files alias with single string or array
+        let up_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 13,
+            "method": "tools/call",
+            "params": {
+                "name": "upload_files",
+                "arguments": {
+                    "ref": "b14",
+                    "files": ["/tmp/file1.png", "/tmp/file2.png"]
+                }
+            }
+        });
+        let up_resp = handle_mcp_request(&up_req, &socket_path, false).unwrap();
+        assert_eq!(up_resp.get("id").unwrap().as_i64(), Some(13));
     }
 }
