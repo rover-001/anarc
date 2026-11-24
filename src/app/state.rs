@@ -74,6 +74,8 @@ pub(super) struct WebContextMenu {
     pub(super) tab_id: String,
     pub(super) x: f32,
     pub(super) y: f32,
+    /// Link or image URL under the pointer, used for "Save link as...".
+    pub(super) download_url: Option<String>,
 }
 
 /// Arc-style peek: a link that would open a new tab is previewed in a floating

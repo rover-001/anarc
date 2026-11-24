@@ -19,7 +19,7 @@ use gpui_kit::{KeyDownEvent, KeyUpEvent, RenderImage};
 use crate::lifecycle::TabLifecycle;
 use crate::model::TabState;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DownloadRecord {
     pub id: u32,
     pub url: String,
@@ -49,6 +49,9 @@ struct EngineEvents {
     pending_popup_states: Vec<(String, Arc<Mutex<BrowserSharedState>>)>,
     fullscreen: Vec<(String, bool)>,
     downloads: Vec<DownloadRecord>,
+    /// Set whenever a download starts or changes so the render loop repaints
+    /// the progress toast and the Downloads page even when no plugin event fires.
+    downloads_dirty: bool,
     created: Vec<(String, Browser)>,
     plugin_events: Vec<(String, String)>,
     close_requests: Vec<String>,
@@ -654,6 +657,9 @@ pub struct BrowserSharedState {
     pub focus_on_editable_field: bool,
     /// Last text selection captured by the context menu handler or copy script.
     pub last_selected_text: Option<String>,
+    /// Link/image URL under the pointer at the last right-click, used by the
+    /// app's web context menu to offer "Save link as...".
+    pub last_context_download_url: Option<String>,
 }
 
 /// Fresh shared state for a browser CEF is about to create. Tabs pass their
@@ -698,6 +704,7 @@ pub(super) fn new_shared_state(
         target_zoom_level: Some(zoom_level),
         focus_on_editable_field: false,
         last_selected_text: None,
+        last_context_download_url: None,
     }
 }
 

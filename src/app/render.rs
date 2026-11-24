@@ -215,6 +215,9 @@ impl Render for Anarc {
                                 }
                                 cx.notify();
                             }
+                            if this.engine.take_downloads_dirty() {
+                                cx.notify();
+                            }
                             let popups = this.engine.take_popups();
                             let has_popups = !popups.is_empty();
                             for popup in popups {

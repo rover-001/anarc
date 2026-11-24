@@ -2,7 +2,7 @@ use super::*;
 
 impl Engine {
     /// Returns true if any CEF-generated events are pending (plugin events,
-    /// popups, close requests, fullscreen changes, or created browsers).
+    /// popups, close requests, fullscreen changes, downloads, or created browsers).
     /// Used by the render loop to skip heavy event processing when idle.
     pub fn has_pending_events(&self) -> bool {
         !self.agent_receiver.is_empty()
@@ -14,7 +14,36 @@ impl Engine {
                     || events.live_share_switch_space.is_some()
                     || !events.fullscreen.is_empty()
                     || !events.created.is_empty()
+                    || events.downloads_dirty
             })
+    }
+
+    pub(crate) fn take_downloads_dirty(&self) -> bool {
+        self.events
+            .lock()
+            .map(|mut events| std::mem::take(&mut events.downloads_dirty))
+            .unwrap_or(false)
+    }
+
+    /// Start a download from a user action (e.g. "Save link as..." in the web
+    /// context menu). CEF routes the request through `DownloadHandler`, which
+    /// records it for the Downloads page and progress toast.
+    pub fn start_download(&self, tab_id: &str, url: &str) -> bool {
+        let Some(browser) = self.browsers.get(tab_id).map(|entry| entry.browser.clone()) else {
+            return false;
+        };
+        let Some(host) = browser.host() else {
+            return false;
+        };
+        host.start_download(Some(&CefString::from(url)));
+        true
+    }
+
+    /// Link/image URL captured by CEF's context menu handler for this tab.
+    pub(crate) fn context_menu_download_url(&self, tab_id: &str) -> Option<String> {
+        let shared = self.browsers.get(tab_id).map(|entry| entry.state.clone())?;
+        let mut shared = shared.lock().ok()?;
+        shared.last_context_download_url.take()
     }
 
     pub fn take_plugin_events(&self) -> Vec<(String, String)> {
@@ -70,11 +99,11 @@ impl Engine {
     #[cfg(test)]
     pub(crate) fn push_download_test(&self, record: DownloadRecord) {
         if let Ok(mut events) = self.events.lock() {
-            const MAX_DOWNLOAD_RECORDS: usize = 128;
-            if events.downloads.len() >= MAX_DOWNLOAD_RECORDS {
+            if events.downloads.len() >= crate::persist::MAX_DOWNLOAD_RECORDS {
                 events.downloads.remove(0);
             }
             events.downloads.push(record);
+            events.downloads_dirty = true;
         }
     }
     pub fn go_back(&self, tab_id: &str) {

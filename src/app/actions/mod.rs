@@ -382,6 +382,8 @@ impl Anarc {
             #[cfg(not(test))]
             cef_task_started: false,
         };
+        // Records restored from disk are history, not a fresh completion.
+        app.dismissed_download_toast_id = app.engine.downloads().last().map(|record| record.id);
         app.plugins.emit(
             "app.ready",
             crate::plugin::EventMode::Parallel,
@@ -396,11 +398,22 @@ impl Anarc {
     pub(crate) fn close_app_page(&mut self) {
         self.app_page = None;
     }
-    pub(crate) fn open_web_context_menu(&mut self, tab_id: String, x: f32, y: f32) {
+    pub(crate) fn open_web_context_menu(
+        &mut self,
+        tab_id: String,
+        x: f32,
+        y: f32,
+        download_url: Option<String>,
+    ) {
         self.tab_context_menu = None;
         self.folder_context_menu = None;
         self.space_context_menu = None;
-        self.web_context_menu = Some(super::state::WebContextMenu { tab_id, x, y });
+        self.web_context_menu = Some(super::state::WebContextMenu {
+            tab_id,
+            x,
+            y,
+            download_url,
+        });
     }
     pub(crate) fn set_settings_section(&mut self, section: SettingsSection) {
         self.settings_section = section;

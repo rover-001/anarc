@@ -9,6 +9,10 @@ impl Engine {
         let (ui_update_wake, ui_update_receiver) = async_channel::bounded(1);
         let (agent_tx, agent_receiver) = async_channel::bounded(32);
         crate::agent::plugin::register_engine_agent_channel(agent_tx, ui_update_wake.clone());
+        let events = Arc::new(Mutex::new(super::EngineEvents {
+            downloads: crate::persist::load_downloads(),
+            ..Default::default()
+        }));
         Self {
             browsers: HashMap::new(),
             resize_state: HashMap::new(),
@@ -21,7 +25,7 @@ impl Engine {
             app: None,
             visible: Vec::new(),
             lifecycle: TabLifecycle::default(),
-            events: Arc::new(Mutex::new(EngineEvents::default())),
+            events,
             retired_images: Vec::new(),
             ui_update_wake,
             ui_update_receiver,

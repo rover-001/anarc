@@ -1239,6 +1239,31 @@ impl Anarc {
                     })),
             );
 
+            if let Some(url) = menu.download_url.clone() {
+                let save_id = menu_tab_id.clone();
+                panel = panel.child(
+                    div()
+                        .id("ctx-web-save-link")
+                        .px_2()
+                        .py_1p5()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(theme.text))
+                        .hover(move |style| style.bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40)))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new(IconName::Download))
+                        .child("Save link as...")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.engine.start_download(&save_id, &url);
+                            this.web_context_menu = None;
+                            cx.notify();
+                        })),
+                );
+            }
+
             let paste_id = menu_tab_id.clone();
             panel = panel.child(
                 div()

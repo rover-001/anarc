@@ -594,7 +594,14 @@ impl Render for WebViewport {
                                 event.click_count as i32,
                                 &event.modifiers,
                             );
-                            this.open_web_context_menu(menu_tab_id, screen_x, screen_y);
+                            let download_url =
+                                this.engine.context_menu_download_url(&tab_id_right_down);
+                            this.open_web_context_menu(
+                                menu_tab_id,
+                                screen_x,
+                                screen_y,
+                                download_url,
+                            );
                             cx.notify();
                         })
                         .ok();

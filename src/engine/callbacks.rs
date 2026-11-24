@@ -452,12 +452,26 @@ cef::wrap_context_menu_handler! {
         ) {
             if let Some(params) = params {
                 let selection = CefStringUtf16::from(&params.selection_text()).to_string();
+                let link_url = CefStringUtf16::from(&params.link_url()).to_string();
+                let image_url = if params.has_image_contents() != 0 {
+                    CefStringUtf16::from(&params.source_url()).to_string()
+                } else {
+                    String::new()
+                };
+                let download_url = if !link_url.is_empty() {
+                    Some(link_url)
+                } else if !image_url.is_empty() {
+                    Some(image_url)
+                } else {
+                    None
+                };
                 if let Ok(mut state) = self.shared.lock() {
                     state.last_selected_text = if selection.is_empty() {
                         None
                     } else {
                         Some(selection.clone())
                     };
+                    state.last_context_download_url = download_url;
                 }
                 if !selection.is_empty() {
                     crate::engine::clipboard::write_system_clipboard(&selection);
@@ -1348,12 +1362,14 @@ cef::wrap_download_handler! {
             let name = suggested_name
                 .map(ToString::to_string)
                 .unwrap_or_else(|| CefStringUtf16::from(&suggested_file_name).to_string());
-            let mut events = self.events.lock().ok();
-            let reserved = events
-                .as_ref()
-                .map(|events| events.downloads.as_slice())
-                .unwrap_or_default();
-            let path = unique_download_path(&name, reserved);
+            // A poisoned lock must not let a file land on disk with no record:
+            // the Downloads page would never learn about it.
+            let Ok(mut events) = self.events.lock() else {
+                // Returning false cancels the download; never let a file land
+                // on disk without a corresponding Downloads-page record.
+                return 0;
+            };
+            let path = unique_download_path(&name, &events.downloads);
             let cef_path = CefString::from(path.to_string_lossy().as_ref());
             let record = DownloadRecord {
                 id: item.id(),
@@ -1364,13 +1380,16 @@ cef::wrap_download_handler! {
                 complete: false,
                 canceled: false,
             };
-            if let Some(events) = events.as_mut() {
-                events.plugin_events.push((
-                    "download.before".to_string(),
-                    format!("{}\n{}", record.path.display(), record.url),
-                ));
-                events.downloads.push(record.clone());
+            events.plugin_events.push((
+                "download.before".to_string(),
+                format!("{}\n{}", record.path.display(), record.url),
+            ));
+            if events.downloads.len() >= crate::persist::MAX_DOWNLOAD_RECORDS {
+                events.downloads.remove(0);
             }
+            events.downloads.push(record.clone());
+            events.downloads_dirty = true;
+            crate::persist::save_downloads(&events.downloads);
             drop(events);
             callback.cont(Some(&cef_path), 0);
             let _ = self.ui_update_wake.try_send(());
@@ -1400,6 +1419,10 @@ cef::wrap_download_handler! {
                         eprintln!("Anarc download {}: {} ({}/{})", if complete { "complete" } else { "failed" }, record.path.display(), received, total);
                     } else {
                         eprintln!("Anarc download progress: {} ({}/{})", record.path.display(), received, total);
+                    }
+                    events.downloads_dirty = true;
+                    if complete || canceled {
+                        crate::persist::save_downloads(&events.downloads);
                     }
                 }
         }

@@ -184,7 +184,9 @@ fn split_statements(input: &str) -> Vec<String> {
     let chars: Vec<char> = input.chars().collect();
     let mut i = 0;
     while i < chars.len() {
-        let ch = chars[i];
+        let Some(ch) = chars.get(i).copied() else {
+            break;
+        };
         if ch == '\r' {
             i += 1;
             continue;
@@ -203,7 +205,8 @@ fn split_statements(input: &str) -> Vec<String> {
         }
 
         // Check triple quotes
-        if ch == '"' && i + 2 < chars.len() && chars[i + 1] == '"' && chars[i + 2] == '"' && !in_single && !in_backtick {
+        let has_triple_quote = chars.get(i + 1) == Some(&'"') && chars.get(i + 2) == Some(&'"');
+        if ch == '"' && has_triple_quote && !in_single && !in_backtick {
             in_triple = !in_triple;
             current.push_str("\"\"\"");
             i += 3;
@@ -266,21 +269,22 @@ fn parse_dsl_at_depth(input: &str, depth: usize) -> Result<Vec<ActionOp>, String
 
         // Check for playbook macro expansion (@macro_name arg1 arg2...)
         if let Some(stripped) = trimmed.strip_prefix('@')
-            && !stripped.starts_with("secret:") {
-                let parts: Vec<&str> = stripped.split_whitespace().collect();
-                let macro_name = parts.first().copied().unwrap_or("");
-                let raw_args: Vec<String> = parts
-                    .get(1..)
-                    .unwrap_or(&[])
-                    .iter()
-                    .map(|a| unquote(a))
-                    .collect();
-                let playbook = super::playbook::get_or_init_registry();
-                let expanded = playbook.expand_macro(macro_name, &raw_args)?;
-                let expanded_ops = parse_dsl_at_depth(&expanded, depth + 1)?;
-                ops.extend(expanded_ops);
-                continue;
-            }
+            && !stripped.starts_with("secret:")
+        {
+            let parts: Vec<&str> = stripped.split_whitespace().collect();
+            let macro_name = parts.first().copied().unwrap_or("");
+            let raw_args: Vec<String> = parts
+                .get(1..)
+                .unwrap_or(&[])
+                .iter()
+                .map(|a| unquote(a))
+                .collect();
+            let playbook = super::playbook::get_or_init_registry();
+            let expanded = playbook.expand_macro(macro_name, &raw_args)?;
+            let expanded_ops = parse_dsl_at_depth(&expanded, depth + 1)?;
+            ops.extend(expanded_ops);
+            continue;
+        }
 
         let op = parse_single_op(trimmed)?;
         ops.push(op);
@@ -455,7 +459,9 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         let parts: Vec<&str> = stripped.split_whitespace().collect();
         let first = match parts.first() {
             Some(first) => *first,
-            None => return Err("missing upload ref and path. use: do \"upload i1 /path/file\"".into()),
+            None => {
+                return Err("missing upload ref and path. use: do \"upload i1 /path/file\"".into());
+            }
         };
         let (r, raw_paths) = if first.starts_with('/')
             || first.starts_with("./")
@@ -665,7 +671,8 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
             }
         } else if let Some(quiescent) = w.strip_prefix("text-quiescent ") {
             let parts: Vec<&str> = quiescent.split_whitespace().collect();
-            let q_ms = parts.first()
+            let q_ms = parts
+                .first()
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(1000);
             let t_ms = parts
@@ -1395,22 +1402,22 @@ fn execute_single_op(
                     .devtools(tab_id, "Runtime.evaluate", Some(&eval_params.to_string()))
                     .recv_blocking()
                     && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&obj_res)
-                        && let Some(object_id) =
-                            parsed.pointer("/result/objectId").and_then(|v| v.as_str())
-                        {
-                            let set_files_params = serde_json::json!({
-                                "files": valid_paths,
-                                "objectId": object_id
-                            });
-                            let _ = app
-                                .engine
-                                .devtools(
-                                    tab_id,
-                                    "DOM.setFileInputFiles",
-                                    Some(&set_files_params.to_string()),
-                                )
-                                .recv_blocking();
-                        }
+                    && let Some(object_id) =
+                        parsed.pointer("/result/objectId").and_then(|v| v.as_str())
+                {
+                    let set_files_params = serde_json::json!({
+                        "files": valid_paths,
+                        "objectId": object_id
+                    });
+                    let _ = app
+                        .engine
+                        .devtools(
+                            tab_id,
+                            "DOM.setFileInputFiles",
+                            Some(&set_files_params.to_string()),
+                        )
+                        .recv_blocking();
+                }
             }
 
             // Click to trigger native file chooser if necessary (which LumenDialogHandler intercepts)
@@ -1518,10 +1525,10 @@ fn execute_single_op(
                                 .engine
                                 .evaluate(&id, "document.readyState")
                                 .recv_blocking()
-                                && state.trim_matches('"') != "loading"
-                            {
-                                break;
-                            }
+                            && state.trim_matches('"') != "loading"
+                        {
+                            break;
+                        }
                         std::thread::sleep(std::time::Duration::from_millis(50));
                     }
                 }
@@ -1750,9 +1757,10 @@ fn type_at(
             replace = replace
         );
         if let Ok(res) = evaluate_action(app, tab, &fast_paste_script)
-            && res == "ok" {
-                return Ok(());
-            }
+            && res == "ok"
+        {
+            return Ok(());
+        }
     }
 
     app.engine
@@ -1897,8 +1905,14 @@ pub fn set_element_value(
     let res_str = evaluate_action(app, tab_id, &script)?;
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&res_str) {
         if parsed.get("ok").and_then(|v| v.as_bool()) == Some(true) {
-            let chars = parsed.get("chars").and_then(|v| v.as_u64()).unwrap_or(value.len() as u64);
-            let tag = parsed.get("tag").and_then(|v| v.as_str()).unwrap_or("element");
+            let chars = parsed
+                .get("chars")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(value.len() as u64);
+            let tag = parsed
+                .get("tag")
+                .and_then(|v| v.as_str())
+                .unwrap_or("element");
             super::playbook::record_action(&format!("set_value {target_str}"));
             return Ok(format!("set {tag} value ({chars} chars)"));
         } else if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
@@ -2147,10 +2161,12 @@ fn resolve_semantic_coords(
         }
     }
     for el in registry.previous_elements.values() {
-        if el.kind == kind && el.name.to_lowercase().contains(&label_lower)
-            && let Some(cur) = registry.resolve_ref_with_fallback(&el.id) {
-                return Ok((cur.center.0, cur.center.1, cur.id.clone()));
-            }
+        if el.kind == kind
+            && el.name.to_lowercase().contains(&label_lower)
+            && let Some(cur) = registry.resolve_ref_with_fallback(&el.id)
+        {
+            return Ok((cur.center.0, cur.center.1, cur.id.clone()));
+        }
     }
     Err("ref missing. use: see".into())
 }
