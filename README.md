@@ -2,6 +2,8 @@
 
 <img src="assets/anarc_logo.png" alt="Anarc logo" width="128">
 
+<a href="https://anarc.pages.dev/#workspace"><img src="assets/anarc-demo.gif" alt="Anarc browser demo showing the Personal space and sidebar"></a>
+
 <h1>Anarc</h1>
 
 <h3>The keyboard-first browser for Linux and Windows, built for you and your AI agents.</h3>
@@ -24,8 +26,6 @@ And a local control layer that lets agents drive the real, visible browser.</p>
 <a href="#keyboard-shortcuts"><b>Shortcuts</b></a> ·
 <a href="https://github.com/rover-001/anarc/issues"><b>Report a bug</b></a>
 </p>
-
-<a href="https://anarc.pages.dev/#workspace"><img src="assets/anarc-demo.gif" alt="Anarc browser demo showing the Personal space and sidebar"></a>
 
 </div>
 
