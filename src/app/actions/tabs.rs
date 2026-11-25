@@ -67,7 +67,8 @@ impl Anarc {
             let was_already_active = space.active.as_deref() == Some(tab_id);
             if let Some(tab) = space.tabs.iter_mut().find(|tab| tab.id == tab_id) {
                 seed_pinned_destination(tab);
-                if tab.is_pinned()
+                if was_already_active
+                    && tab.is_pinned()
                     && let Some(pinned_url) = tab.pinned_url.clone()
                     && tab.url != pinned_url
                 {

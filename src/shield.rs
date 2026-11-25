@@ -278,9 +278,7 @@ impl ShieldState {
         if let Ok(cache) = self.cache.lock()
             && let Some(&blocked) = cache.get(&hash)
         {
-            if blocked
-                && let Ok(mut counts) = self.blocked_by_tab.lock()
-            {
+            if blocked && let Ok(mut counts) = self.blocked_by_tab.lock() {
                 if counts.len() >= 4096 {
                     counts.clear();
                 }
@@ -304,9 +302,7 @@ impl ShieldState {
             }
             cache.insert(hash, blocked);
         }
-        if blocked
-            && let Ok(mut counts) = self.blocked_by_tab.lock()
-        {
+        if blocked && let Ok(mut counts) = self.blocked_by_tab.lock() {
             if counts.len() >= 4096 {
                 counts.clear();
             }
@@ -502,7 +498,8 @@ ytd-in-feed-ad-layout-renderer, ytd-promoted-video-renderer,
 ytd-display-ad-renderer, #player-ads, ytd-statement-banner-renderer,
 ytd-popup-container:has(ytd-enforcement-message-view-model),
 tp-yt-paper-dialog:has(#feedback), .ytd-merch-shelf-renderer,
-#companion, .ad-showing{display:none!important}
+#companion{display:none!important}
+.ad-showing video{opacity:0!important}
 `;
 (document.head||document.documentElement).appendChild(s);
 
@@ -513,13 +510,63 @@ delete obj.playerAds;
 delete obj.adSlots;
 if(obj.playbackTracking)delete obj.playbackTracking.adPlacements;
 }
-if(window.ytInitialPlayerResponse)scrub(window.ytInitialPlayerResponse);
+let _ytpr=window.ytInitialPlayerResponse;
+if(_ytpr)scrub(_ytpr);
+try{
+Object.defineProperty(window,'ytInitialPlayerResponse',{
+configurable:true,
+get(){return _ytpr;},
+set(v){scrub(v);_ytpr=v;}
+});
+}catch(_){}
+if(!window.__anarc_ytFetchHooked){
+window.__anarc_ytFetchHooked=true;
+const origFetch=window.fetch;
+if(typeof origFetch==='function'){
+window.fetch=function(...args){
+const p=origFetch.apply(this,args);
+const url=typeof args[0]==='string'?args[0]:(args[0]&&args[0].url)||'';
+if(url.includes('/youtubei/v1/player')){
+return p.then(res=>{
+try{
+const clone=res.clone();
+res.json=()=>clone.json().then(data=>{scrub(data);return data;});
+}catch(_){}
+return res;
+});
+}
+return p;
+};
+}
+const origOpen=XMLHttpRequest.prototype.open;
+XMLHttpRequest.prototype.open=function(method,url,...rest){
+this.__anarc_ytUrl=typeof url==='string'?url:'';
+return origOpen.apply(this,[method,url,...rest]);
+};
+const origDesc=Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype,'responseText');
+if(origDesc&&origDesc.get){
+Object.defineProperty(XMLHttpRequest.prototype,'responseText',{
+configurable:true,
+get(){
+const txt=origDesc.get.call(this);
+if(this.__anarc_ytUrl&&this.__anarc_ytUrl.includes('/youtubei/v1/player')&&typeof txt==='string'&&txt.length>0){
+try{
+const d=JSON.parse(txt);
+scrub(d);
+return JSON.stringify(d);
+}catch(_){}
+}
+return txt;
+}
+});
+}
+}
 
 function skipAds(){
 const mp=document.getElementById('movie_player')||document.querySelector('.html5-video-player');
 const isAd=mp&&(mp.classList.contains('ad-showing')||mp.classList.contains('ad-interrupting'));
 const v=document.querySelector('video.html5-main-video')||document.querySelector('video');
-if(isAd||document.querySelector('.ytp-ad-module:not(:empty)')){
+if(isAd){
 if(v&&!isNaN(v.duration)&&isFinite(v.duration)&&v.duration>0){
 v.muted=true;
 v.playbackRate=16.0;

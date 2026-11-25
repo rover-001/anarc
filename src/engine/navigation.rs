@@ -1,5 +1,9 @@
 use super::*;
 
+fn is_space_key(key: &str) -> bool {
+    key == " " || key.eq_ignore_ascii_case("space")
+}
+
 impl Engine {
     /// Returns true if any CEF-generated events are pending (plugin events,
     /// popups, close requests, fullscreen changes, downloads, or created browsers).
@@ -283,8 +287,15 @@ impl Engine {
         }
     }
     pub fn set_focus(&self, id: &str, focused: bool) {
-        if let Some(host) = self.browsers.get(id).and_then(|entry| entry.browser.host()) {
-            host.set_focus(focused as i32);
+        if let Some(entry) = self.browsers.get(id) {
+            if !focused
+                && let Ok(mut state) = entry.state.lock()
+            {
+                state.space_held = false;
+            }
+            if let Some(host) = entry.browser.host() {
+                host.set_focus(focused as i32);
+            }
         }
     }
     pub fn copy(&self, id: &str) {
@@ -334,20 +345,24 @@ impl Engine {
         let Some(host) = entry.browser.host() else {
             return;
         };
-        let focus_on_editable_field = entry
-            .state
-            .lock()
-            .map(|state| state.focus_on_editable_field)
-            .unwrap_or(false);
-        // CEF's KeyEvent has no auto-repeat flag, so passing held keydowns
-        // through makes pages read each repeat as a fresh press. Space is the
-        // common case: video sites use "hold Space" for temporary speed-up and
-        // toggle play/pause on every repeated press. Keep the first press and
-        // the key-up (which ends the temporary action), drop the repeats.
-        let held_space = event.keystroke.key == " " || event.keystroke.key.eq_ignore_ascii_case("space");
-        if event.is_held && !focus_on_editable_field && held_space {
-            return;
-        }
+        let is_space = is_space_key(&event.keystroke.key);
+        let focus_on_editable_field = match entry.state.lock() {
+            Ok(mut state) => {
+                // Passing held Space keydowns through makes video sites toggle
+                // play/pause instead of staying in hold-for-2x mode. Drop both
+                // OS-flagged repeats (`event.is_held`) and any duplicate
+                // keydowns while Space is already held (e.g. X11 where
+                // `is_held` is always false).
+                if is_space && !state.focus_on_editable_field {
+                    if event.is_held || state.space_held {
+                        return;
+                    }
+                    state.space_held = true;
+                }
+                state.focus_on_editable_field
+            }
+            Err(_) => false,
+        };
         let key = &event.keystroke.key;
         let is_control_or_platform =
             event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
@@ -374,6 +389,7 @@ impl Engine {
             KeyEventType::RAWKEYDOWN,
             character,
             focus_on_editable_field,
+            event.is_held,
         );
         host.send_key_event(Some(&base));
         if character != 0 && !is_control_or_platform {
@@ -383,6 +399,7 @@ impl Engine {
                 KeyEventType::CHAR,
                 character,
                 focus_on_editable_field,
+                event.is_held,
             );
             host.send_key_event(Some(&text));
         }
@@ -394,11 +411,16 @@ impl Engine {
         let Some(host) = entry.browser.host() else {
             return;
         };
-        let focus_on_editable_field = entry
-            .state
-            .lock()
-            .map(|state| state.focus_on_editable_field)
-            .unwrap_or(false);
+        let is_space = is_space_key(&event.keystroke.key);
+        let focus_on_editable_field = match entry.state.lock() {
+            Ok(mut state) => {
+                if is_space {
+                    state.space_held = false;
+                }
+                state.focus_on_editable_field
+            }
+            Err(_) => false,
+        };
         let key = &event.keystroke.key;
         let key_event = cef_key_event(
             key,
@@ -406,6 +428,7 @@ impl Engine {
             KeyEventType::KEYUP,
             0,
             focus_on_editable_field,
+            false,
         );
         host.send_key_event(Some(&key_event));
     }
@@ -517,6 +540,7 @@ impl Engine {
                     KeyEventType::RAWKEYDOWN,
                     char_val,
                     focus_on_editable_field,
+                    false,
                 );
                 host.send_key_event(Some(&down_ev));
                 // A CHAR event for Enter inserts a newline in contenteditable
@@ -533,6 +557,7 @@ impl Engine {
                         KeyEventType::CHAR,
                         char_val,
                         focus_on_editable_field,
+                        false,
                     );
                     host.send_key_event(Some(&char_ev));
                 }
@@ -543,6 +568,7 @@ impl Engine {
                     KeyEventType::KEYUP,
                     0,
                     focus_on_editable_field,
+                    false,
                 );
                 host.send_key_event(Some(&up_ev));
             }

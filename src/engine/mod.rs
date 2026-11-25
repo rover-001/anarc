@@ -602,7 +602,7 @@ cef::wrap_app! {
                 let subprocess_path = CefString::from(current_exe.to_string_lossy().as_ref());
                 command_line.append_switch_with_value(Some(&subprocess_switch), Some(&subprocess_path));
                 let name = CefString::from("autoplay-policy");
-                let value = CefString::from("user-gesture-required");
+                let value = CefString::from("document-user-activation-required");
                 command_line.append_switch_with_value(Some(&name), Some(&value));
                 let enable_features = if has_gpu {
                     "OverlayScrollbar,OverlayScrollbars,CanvasOopRasterization,VaapiIgnoreDriverChecks"
@@ -664,6 +664,10 @@ pub struct BrowserSharedState {
     /// Whether the page currently has focus in an editable control. CEF uses
     /// this to decide if standard key events (such as Space) are intercepted.
     pub focus_on_editable_field: bool,
+    /// Whether Space is currently held down on a non-editable element in this
+    /// browser, used to suppress OS/X11 repeat keydowns even when `is_held`
+    /// is false.
+    pub space_held: bool,
     /// Last text selection captured by the context menu handler or copy script.
     pub last_selected_text: Option<String>,
     /// Link/image URL under the pointer at the last right-click, used by the
@@ -712,6 +716,7 @@ pub(super) fn new_shared_state(
         cursor: 0,
         target_zoom_level: Some(zoom_level),
         focus_on_editable_field: false,
+        space_held: false,
         last_selected_text: None,
         last_context_download_url: None,
     }
@@ -941,6 +946,7 @@ fn cef_key_event(
     event_type: KeyEventType,
     character: u16,
     focus_on_editable_field: bool,
+    is_repeat: bool,
 ) -> KeyEvent {
     let mut flags = 0;
     if modifiers.shift {
@@ -954,6 +960,9 @@ fn cef_key_event(
     }
     if modifiers.platform {
         flags |= 1 << 7;
+    }
+    if is_repeat {
+        flags |= cef::sys::cef_event_flags_t::EVENTFLAG_IS_REPEAT.0;
     }
     let code = if event_type == KeyEventType::CHAR && character != 0 {
         character as i32
@@ -1352,22 +1361,59 @@ mod tests {
         for (key, code) in cases {
             assert_eq!(windows_key_code_for_key(key), code, "key {key}");
         }
-        assert_ne!(windows_key_code_for_key("#"), windows_key_code_for_key("end"));
+        assert_ne!(
+            windows_key_code_for_key("#"),
+            windows_key_code_for_key("end")
+        );
     }
 
     #[test]
     fn cef_key_event_preserves_char_case_for_char_events() {
         let modifiers = gpui_kit::Modifiers::default();
-        let raw = cef_key_event("a", &modifiers, KeyEventType::RAWKEYDOWN, 'a' as u16, true);
+        let raw = cef_key_event(
+            "a",
+            &modifiers,
+            KeyEventType::RAWKEYDOWN,
+            'a' as u16,
+            true,
+            false,
+        );
         assert_eq!(raw.windows_key_code, 0x41);
 
-        let char_event = cef_key_event("a", &modifiers, KeyEventType::CHAR, 'a' as u16, true);
+        let char_event =
+            cef_key_event("a", &modifiers, KeyEventType::CHAR, 'a' as u16, true, false);
         assert_eq!(char_event.windows_key_code, 'a' as i32);
         assert_eq!(char_event.character, 'a' as u16);
 
-        let char_event_upper = cef_key_event("a", &modifiers, KeyEventType::CHAR, 'A' as u16, true);
+        let char_event_upper =
+            cef_key_event("a", &modifiers, KeyEventType::CHAR, 'A' as u16, true, false);
         assert_eq!(char_event_upper.windows_key_code, 'A' as i32);
         assert_eq!(char_event_upper.character, 'A' as u16);
+    }
+
+    #[test]
+    fn cef_key_event_sets_repeat_flag_when_held() {
+        let modifiers = gpui_kit::Modifiers::default();
+        let repeat_flag = cef::sys::cef_event_flags_t::EVENTFLAG_IS_REPEAT.0;
+        let fresh = cef_key_event(
+            "space",
+            &modifiers,
+            KeyEventType::RAWKEYDOWN,
+            ' ' as u16,
+            false,
+            false,
+        );
+        assert_eq!(fresh.modifiers & repeat_flag, 0);
+
+        let repeated = cef_key_event(
+            "space",
+            &modifiers,
+            KeyEventType::RAWKEYDOWN,
+            ' ' as u16,
+            false,
+            true,
+        );
+        assert_ne!(repeated.modifiers & repeat_flag, 0);
     }
 
     #[test]

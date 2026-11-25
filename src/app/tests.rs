@@ -880,6 +880,43 @@ fn activating_already_active_pinned_tab_resets_to_pinned_destination(
 }
 
 #[gpui::test]
+fn switching_back_to_pinned_tab_preserves_current_url(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.active_space_mut().tabs[0].url = "https://youtube.com".into();
+        app.active_space_mut().tabs[0].title = "YouTube".into();
+        app.pin_tab("tab-1", true);
+        app.active_space_mut().tabs[0].url = "https://youtube.com/watch?v=123".into();
+        app.active_space_mut().tabs[0].title = "Playing Video".into();
+        app.add_tab();
+        let second_tab_id = app.active_space().active.clone().unwrap();
+        assert_ne!(second_tab_id, "tab-1");
+        // Switching back to the pinned tab from another tab must preserve its current URL.
+        app.activate_tab_in_active_space("tab-1");
+    });
+    view.read_with(cx, |app, _| {
+        assert_eq!(app.active_space().active.as_deref(), Some("tab-1"));
+        let tab = app
+            .active_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "tab-1")
+            .unwrap();
+        assert_eq!(tab.url, "https://youtube.com/watch?v=123");
+        assert_eq!(tab.title, "Playing Video");
+    });
+}
+
+#[gpui::test]
 fn closing_an_empty_tab_does_not_trigger_closing_ghost_animation(cx: &mut gpui::TestAppContext) {
     let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
         .lock()

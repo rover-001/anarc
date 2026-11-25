@@ -1,114 +1,12 @@
-use anarc_telemetry::counters::harness_from_name;
-use anarc_telemetry::schema::{ActionKind, ErrorCode};
+use anarc_telemetry::schema::ErrorCode;
 
-use super::observe::{
+use crate::agent::observe::{
     build_read_call_script, build_read_ref_call_script, build_see_call_script, execute_find,
     format_see_output, format_see_output_paged,
 };
-use super::protocol::{AgentRequest, AgentResponse};
-use super::refs::{RawIndex, RefRegistry};
-use super::server::{start_server, stop_server};
-use crate::plugin::{
-    Manifest, Plugin, PluginCtx, PluginDescriptor, PluginError, PluginHost, PluginKind,
-};
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-pub static AGENT_PLUGIN_ID: &str = "anarc.agent";
-
-// Telemetry is strictly best-effort: these helpers cannot fail and never
-// influence a request's result. Only enums, lengths, counts and durations
-// reach the counters.
-fn note_call(kind: ActionKind) {
-    super::telemetry::telemetry().counters.note_call(kind);
-}
-
-fn note_error(code: ErrorCode) {
-    super::telemetry::telemetry().counters.note_error(code);
-}
-
-/// Classify one DSL operation as an action kind. Only the returned enum is
-/// recorded; op arguments (refs, text, URLs) are never inspected here.
-fn action_kind_for_op(op: &super::act::ActionOp) -> ActionKind {
-    match op {
-        super::act::ActionOp::Click { .. }
-        | super::act::ActionOp::ForceClick { .. }
-        | super::act::ActionOp::DomClick { .. }
-        | super::act::ActionOp::DblClick { .. }
-        | super::act::ActionOp::SemanticClick { .. }
-        | super::act::ActionOp::Hover { .. }
-        | super::act::ActionOp::Focus { .. }
-        | super::act::ActionOp::Drag { .. }
-        | super::act::ActionOp::XY { .. } => ActionKind::Click,
-        super::act::ActionOp::ClearAndType { .. }
-        | super::act::ActionOp::AppendText { .. }
-        | super::act::ActionOp::TypeActive { .. }
-        | super::act::ActionOp::TypeSecret { .. }
-        | super::act::ActionOp::SemanticType { .. }
-        | super::act::ActionOp::SetValue { .. }
-        | super::act::ActionOp::Paste { .. }
-        | super::act::ActionOp::Key { .. }
-        | super::act::ActionOp::KeyDown { .. }
-        | super::act::ActionOp::KeyUp { .. }
-        | super::act::ActionOp::Submit => ActionKind::Type,
-        super::act::ActionOp::Go { .. }
-        | super::act::ActionOp::Back
-        | super::act::ActionOp::Fwd
-        | super::act::ActionOp::Reload
-        | super::act::ActionOp::Tab { .. }
-        | super::act::ActionOp::Space { .. }
-        | super::act::ActionOp::Split { .. } => ActionKind::Navigate,
-        super::act::ActionOp::Scroll { .. }
-        | super::act::ActionOp::Upload { .. }
-        | super::act::ActionOp::Dialog { .. }
-        | super::act::ActionOp::Wait { .. } => ActionKind::Other,
-    }
-}
-
-fn note_dsl_call(op: &super::act::ActionOp) {
-    note_call(action_kind_for_op(op));
-}
-
-/// Detect the driving harness from explicit env signals. Names are consumed
-/// by `harness_from_name`; no string is stored or sent.
-fn note_harness_best_effort() {
-    let name = std::env::var("ANARC_HARNESS")
-        .ok()
-        .or_else(|| std::env::var("CLAUDECODE").ok().map(|_| "claude".to_owned()))
-        .or_else(|| {
-            std::env::var("CODEX_SANDBOX")
-                .ok()
-                .map(|_| "codex".to_owned())
-        })
-        .or_else(|| {
-            std::env::var("ANTIGRAVITY")
-                .ok()
-                .map(|_| "antigravity".to_owned())
-        });
-    if let Some(name) = name {
-        let harness = harness_from_name(&name);
-        super::telemetry::telemetry().counters.note_harness(harness);
-    }
-}
-
-/// Count configured plugins from the persisted config; only the count is kept.
-fn note_plugins_installed() {
-    let count = crate::plugin::PluginConfig::load()
-        .map(|config| config.plugins.len() as u64)
-        .unwrap_or(0);
-    super::telemetry::telemetry()
-        .counters
-        .set_plugins_installed(count);
-}
-
-const WINDOW_NOT_READY: &str =
-    "anarc window not ready (no frame painted). use: focus the Anarc window, then retry";
-static WINDOW_PAINTED: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn note_window_painted() {
-    WINDOW_PAINTED.store(true, Ordering::Release);
-}
+use crate::agent::protocol::{AgentRequest, AgentResponse};
+use crate::agent::refs::RawIndex;
+use super::telemetry::{note_dsl_call, note_error};
 
 fn doctor_header(painted: bool, initialized: bool, browsers: usize) -> String {
     let yes_no = |value| if value { "yes" } else { "no" };
@@ -121,170 +19,6 @@ fn doctor_header(painted: bool, initialized: bool, browsers: usize) -> String {
     )
 }
 
-type EngineAgentChannel = (
-    async_channel::Sender<(AgentRequest, async_channel::Sender<AgentResponse>)>,
-    async_channel::Sender<()>,
-);
-
-static ENGINE_REQUEST_CHANNEL: Mutex<Option<EngineAgentChannel>> = Mutex::new(None);
-
-pub(crate) fn register_engine_agent_channel(
-    req_tx: async_channel::Sender<(AgentRequest, async_channel::Sender<AgentResponse>)>,
-    wake_tx: async_channel::Sender<()>,
-) {
-    WINDOW_PAINTED.store(false, Ordering::Release);
-    if let Ok(mut guard) = ENGINE_REQUEST_CHANNEL.lock() {
-        *guard = Some((req_tx, wake_tx));
-    }
-}
-
-/// Wait briefly for the GUI to register its request channel.
-///
-/// The agent socket starts during plugin mount, before `Engine::new()` runs. A
-/// request arriving in that window would otherwise be rejected as "engine
-/// unavailable", which forces callers into a `status`/`doctor` handshake.
-fn wait_for_engine_channel(timeout: std::time::Duration) -> Option<EngineAgentChannel> {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        if let Ok(guard) = ENGINE_REQUEST_CHANNEL.lock()
-            && let Some(channel) = guard.as_ref()
-        {
-            return Some(channel.clone());
-        }
-        if std::time::Instant::now() >= deadline {
-            return None;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-}
-
-pub(crate) fn forward_request_to_engine(
-    req: AgentRequest,
-    resp_tx: async_channel::Sender<AgentResponse>,
-) {
-    let requires_paint = matches!(
-        req,
-        AgentRequest::See { .. }
-            | AgentRequest::Do { .. }
-            | AgentRequest::Read { .. }
-            | AgentRequest::Find { .. }
-            | AgentRequest::Shot { .. }
-            | AgentRequest::Eval { .. }
-            | AgentRequest::SetValue { .. }
-            | AgentRequest::WaitFor { .. }
-    );
-
-    if requires_paint && !WINDOW_PAINTED.load(Ordering::Acquire) {
-        if let Ok(guard) = ENGINE_REQUEST_CHANNEL.lock()
-            && let Some((_, ref w_tx)) = *guard {
-                let _ = w_tx.try_send(());
-            }
-        for _ in 0..60 {
-            if WINDOW_PAINTED.load(Ordering::Acquire) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        if !WINDOW_PAINTED.load(Ordering::Acquire) {
-            note_error(ErrorCode::Timeout);
-            let _ = resp_tx.try_send(AgentResponse::err(WINDOW_NOT_READY));
-            return;
-        }
-    }
-
-    let Some((req_tx, wake_tx)) = wait_for_engine_channel(std::time::Duration::from_secs(2)) else {
-        note_error(ErrorCode::Other);
-        let _ = resp_tx.try_send(AgentResponse::err("engine unavailable. use: status"));
-        return;
-    };
-    if let Err(error) = req_tx.try_send((req, resp_tx)) {
-        note_error(ErrorCode::Other);
-        let (_, reply) = error.into_inner();
-        let _ = reply.try_send(AgentResponse::err("agent busy. use: status"));
-    } else {
-        let _ = wake_tx.try_send(());
-    }
-}
-
-#[derive(Default)]
-pub struct AgentState {
-    pub registries: HashMap<String, RefRegistry>,
-    pub attached_space: Option<String>,
-    pub is_paused: bool,
-    pub confirmations: super::policy::Confirmations,
-}
-
-pub struct AgentPlugin {
-    manifest: Manifest,
-}
-
-impl Default for AgentPlugin {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AgentPlugin {
-    pub fn new() -> Self {
-        Self {
-            manifest: Manifest {
-                id: AGENT_PLUGIN_ID.to_string(),
-                required: Vec::new(),
-                optional: Vec::new(),
-                provides: vec!["agent".to_string()],
-            },
-        }
-    }
-}
-
-impl Plugin for AgentPlugin {
-    fn manifest(&self) -> &Manifest {
-        &self.manifest
-    }
-
-    fn apply(&mut self, ctx: &mut PluginCtx<'_>) -> Result<(), PluginError> {
-        let (req_tx, req_rx) =
-            async_channel::bounded::<(AgentRequest, async_channel::Sender<AgentResponse>)>(32);
-
-        let socket_res = start_server(req_tx);
-        let _socket_path = match socket_res {
-            Ok(p) => p,
-            Err(e) => return Err(PluginError(e)),
-        };
-
-        let dispose_rx = req_rx.clone();
-        let forwarder = std::thread::Builder::new()
-            .name("anarc-agent-forwarder".into())
-            .spawn(move || {
-                while let Ok((request, resp_tx)) =
-                    futures_lite::future::block_on(async { req_rx.recv().await })
-                {
-                    forward_request_to_engine(request, resp_tx);
-                }
-            });
-        if forwarder.is_err() {
-            dispose_rx.close();
-            stop_server();
-            return Err(PluginError(
-                "Agent forwarder unavailable; use: status".into(),
-            ));
-        }
-        note_harness_best_effort();
-        note_plugins_installed();
-        // Best-effort daily rollup. Consent is unset by default, so this is a
-        // no-op until the user opts in; it runs off the plugin thread.
-        std::thread::Builder::new()
-            .name("anarc-telemetry-flush".into())
-            .spawn(|| super::telemetry::flush_daily(env!("CARGO_PKG_VERSION")))
-            .ok();
-        ctx.effect(move || {
-            dispose_rx.close();
-            stop_server();
-        });
-
-        Ok(())
-    }
-}
 
 pub(crate) fn handle_agent_request(
     app: &mut crate::app::Anarc,
@@ -305,7 +39,7 @@ pub(crate) fn handle_agent_request(
     }
 
     let parsed_ops = if let AgentRequest::Do { ops, .. } = &req {
-        match super::act::parse_dsl(ops) {
+        match super::super::act::parse_dsl(ops) {
             Ok(ops) => ops,
             Err(e) => {
                 note_error(ErrorCode::Other);
@@ -323,9 +57,9 @@ pub(crate) fn handle_agent_request(
         && parsed_ops.iter().all(|op| {
             matches!(
                 op,
-                super::act::ActionOp::Tab { .. }
-                    | super::act::ActionOp::Space { .. }
-                    | super::act::ActionOp::Split { .. }
+                super::super::act::ActionOp::Tab { .. }
+                    | super::super::act::ActionOp::Space { .. }
+                    | super::super::act::ActionOp::Split { .. }
             )
         });
     if !tab_only && let Some(tab_id) = req.target_tab_mut() {
@@ -530,7 +264,7 @@ pub(crate) fn handle_agent_request(
         } => {
             let target_tab = tab_id.unwrap_or_default();
 
-            let script = super::observe::build_see_call_script_with_len(
+            let script = super::super::observe::build_see_call_script_with_len(
                 scope.as_deref().unwrap_or("view"),
                 max_name_len,
             );
@@ -598,7 +332,7 @@ pub(crate) fn handle_agent_request(
                         format_see_output(&header, &elements, Some(&tabs))
                     };
 
-                    if let Some(reason) = super::policy::check_human_handoff(
+                    if let Some(reason) = super::super::policy::check_human_handoff(
                         &header.title,
                         &header.display_url,
                         &formatted,
@@ -608,7 +342,7 @@ pub(crate) fn handle_agent_request(
                     // Only lengths, an elapsed duration and a count cross into
                     // telemetry; neither the ref snapshot nor the DOM text is
                     // inspected or copied there.
-                    super::telemetry::telemetry().counters.note_snapshot(
+                    super::super::telemetry::telemetry().counters.note_snapshot(
                         formatted.len() as u64,
                         raw_json.len() as u64,
                         started.elapsed().as_millis() as u64,
@@ -733,7 +467,7 @@ pub(crate) fn handle_agent_request(
             ..
         } => {
             let target_tab = tab_id.unwrap_or_else(|| app.active_tab_id().to_string());
-            super::act::execute_dsl(app, &target_tab, &parsed_ops, delay_ms, resp_tx);
+            super::super::act::execute_dsl(app, &target_tab, &parsed_ops, delay_ms, resp_tx);
         }
         AgentRequest::Shot {
             tab_id,
@@ -748,14 +482,18 @@ pub(crate) fn handle_agent_request(
                     .evaluate(&target_tab, "[window.innerWidth, window.innerHeight]")
                     .recv_blocking()
                 && let Ok([w, h]) = serde_json::from_str::<[f64; 2]>(&dim_json)
+                && let Some(obj) = params.as_object_mut()
             {
-                params["clip"] = serde_json::json!({
-                    "x": 0,
-                    "y": 0,
-                    "width": w.max(1.0),
-                    "height": h.max(1.0),
-                    "scale": s
-                });
+                obj.insert(
+                    "clip".to_owned(),
+                    serde_json::json!({
+                        "x": 0,
+                        "y": 0,
+                        "width": w.max(1.0),
+                        "height": h.max(1.0),
+                        "scale": s
+                    }),
+                );
             }
 
             let devtools_rx = app.engine.devtools(
@@ -826,7 +564,7 @@ pub(crate) fn handle_agent_request(
             wait_ms,
         } => {
             let target_tab = tab_id.unwrap_or_else(|| app.active_tab_id().to_string());
-            match super::act::set_element_value(
+            match super::super::act::set_element_value(
                 app,
                 &target_tab,
                 target.as_deref(),
@@ -855,7 +593,7 @@ pub(crate) fn handle_agent_request(
             let target_str = target.unwrap_or_default();
             let script = format!(
                 "{} window.__anarc_wait_for({}, {}, {});",
-                super::observe::build_indexer_injection_script(),
+                super::super::observe::build_indexer_injection_script(),
                 serde_json::json!(condition),
                 serde_json::json!(target_str),
                 ms
@@ -976,64 +714,3 @@ pub(crate) fn compact_tabs(app: &crate::app::Anarc) -> String {
         .join(", ")
 }
 
-pub(crate) fn descriptor() -> PluginDescriptor {
-    PluginDescriptor {
-        id: AGENT_PLUGIN_ID.to_string(),
-        name: "Agent Control".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        kind: PluginKind::Builtin,
-        description:
-            "Agent control server exposing see, do, read, find, shot tools over local socket"
-                .to_string(),
-        permissions: Vec::new(),
-        enabled_by_default: true,
-        can_toggle: true,
-    }
-}
-
-pub(crate) fn register(host: &mut PluginHost) {
-    host.register(descriptor(), || Box::new(AgentPlugin::new()));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ActionKind;
-
-    #[test]
-    fn dsl_ops_map_to_action_kinds_without_a_browser() {
-        use super::super::act::{ActionOp, WaitCondition};
-        assert_eq!(
-            super::action_kind_for_op(&ActionOp::Click {
-                ref_id: "b1".into()
-            }),
-            ActionKind::Click
-        );
-        assert_eq!(
-            super::action_kind_for_op(&ActionOp::ClearAndType {
-                ref_id: "i1".into(),
-                text: String::new(),
-            }),
-            ActionKind::Type
-        );
-        assert_eq!(
-            super::action_kind_for_op(&ActionOp::Go {
-                url: "https://example.com".into()
-            }),
-            ActionKind::Navigate
-        );
-        assert_eq!(
-            super::action_kind_for_op(&ActionOp::Wait {
-                condition: WaitCondition::Idle
-            }),
-            ActionKind::Other
-        );
-    }
-
-    #[test]
-    fn missing_tab_includes_selection_hint() {
-        assert_eq!(
-            super::no_such_tab("1* chatgpt.com, 2 about:blank"),
-            "no such tab. tabs: 1* chatgpt.com, 2 about:blank. use: do \"tab 1\""
-        );
-    }
-}

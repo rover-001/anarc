@@ -4,9 +4,11 @@ use gpui_kit::{Context, Modifiers, Window};
 
 use super::WebViewport;
 
-const INPUT_GAP: Duration = Duration::from_millis(24);
-const MAX_FLING_STEP: Duration = Duration::from_millis(32);
-const DECAY_SECONDS: f32 = 0.24;
+const MIN_INPUT_GAP_SECS: f32 = 0.010;
+const MAX_INPUT_GAP_SECS: f32 = 0.022;
+const DEFAULT_INPUT_INTERVAL_SECS: f32 = 0.012;
+const MAX_FLING_STEP: Duration = Duration::from_millis(24);
+const DECAY_SECONDS: f32 = 0.28;
 const MIN_FLING_PIXELS_PER_FRAME: f32 = 0.5;
 
 #[derive(Default)]
@@ -14,6 +16,7 @@ pub(super) struct ScrollMotion {
     accum_x: f32,
     accum_y: f32,
     velocity: (f32, f32),
+    input_interval_secs: f32,
     last_event: Option<Instant>,
     last_frame: Option<Instant>,
     last_position: (i32, i32),
@@ -50,11 +53,19 @@ impl ScrollMotion {
     ) -> (i32, i32) {
         let now = Instant::now();
         let interval = self.last_event.map(|previous| now.duration_since(previous));
-        let seconds = interval
-            .unwrap_or(Duration::from_millis(16))
-            .as_secs_f32()
-            .clamp(0.004, 0.05);
-        let fresh = !self.running || interval.is_none_or(|gap| gap > INPUT_GAP);
+        let raw_seconds = interval
+            .unwrap_or(Duration::from_secs_f32(DEFAULT_INPUT_INTERVAL_SECS))
+            .as_secs_f32();
+        let current_gap = self.input_gap();
+        let fresh = !self.running || interval.is_none_or(|gap| gap > current_gap);
+        if fresh {
+            self.input_interval_secs = DEFAULT_INPUT_INTERVAL_SECS;
+        } else {
+            let clamped_interval = raw_seconds.clamp(0.004, 0.030);
+            self.input_interval_secs =
+                self.input_interval_secs + (clamped_interval - self.input_interval_secs) * 0.35;
+        }
+        let seconds = raw_seconds.clamp(0.006, 0.05);
         self.velocity.0 = input_velocity(self.velocity.0, delta.0, seconds, fresh);
         self.velocity.1 = input_velocity(self.velocity.1, delta.1, seconds, fresh);
         self.last_event = Some(now);
@@ -71,6 +82,15 @@ impl ScrollMotion {
             });
         }
         self.accumulate(delta)
+    }
+
+    fn input_gap(&self) -> Duration {
+        let base = if self.input_interval_secs > 0.0 {
+            self.input_interval_secs
+        } else {
+            DEFAULT_INPUT_INTERVAL_SECS
+        };
+        Duration::from_secs_f32((base * 1.5).clamp(MIN_INPUT_GAP_SECS, MAX_INPUT_GAP_SECS))
     }
 
     pub(super) fn interrupt(&mut self) {
@@ -102,12 +122,13 @@ impl WebViewport {
         let now = Instant::now();
         let previous_frame = motion.last_frame.replace(now).unwrap_or(now);
         let last_event = motion.last_event.unwrap_or(now);
+        let input_gap = motion.input_gap();
         let mut delta = (0.0, 0.0);
         // Integrate only the portion of this frame after direct input ceased.
         // Bound recovery after a delayed frame so inertia continues smoothly
         // without either a large catch-up jump or abruptly killing the fling.
-        if now.duration_since(last_event) > INPUT_GAP {
-            let start = previous_frame.max(last_event + INPUT_GAP);
+        if now.duration_since(last_event) > input_gap {
+            let start = previous_frame.max(last_event + input_gap);
             let elapsed = now
                 .saturating_duration_since(start)
                 .min(MAX_FLING_STEP);
@@ -126,7 +147,7 @@ impl WebViewport {
             .refresh_interval(cx)
             .unwrap_or(Duration::from_millis(16));
         let stop_speed = (MIN_FLING_PIXELS_PER_FRAME / display_interval.as_secs_f32()).max(2.0);
-        let keep_running = now.duration_since(last_event) <= INPUT_GAP
+        let keep_running = now.duration_since(last_event) <= input_gap
             || motion.velocity.0.abs().max(motion.velocity.1.abs()) >= stop_speed;
         motion.running = keep_running;
 
@@ -189,5 +210,16 @@ mod tests {
     fn reversing_input_replaces_previous_direction_immediately() {
         assert!(input_velocity(800.0, -2.0, 0.016, false) < 0.0);
         assert!(input_velocity(-800.0, 2.0, 0.016, false) > 0.0);
+    }
+
+    #[test]
+    fn adaptive_input_gap_tracks_input_cadence() {
+        let mut motion = ScrollMotion {
+            input_interval_secs: 0.007,
+            ..ScrollMotion::default()
+        };
+        assert!(motion.input_gap() <= Duration::from_millis(12));
+        motion.input_interval_secs = 0.016;
+        assert_eq!(motion.input_gap(), Duration::from_secs_f32(0.022));
     }
 }

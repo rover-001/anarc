@@ -170,7 +170,8 @@ impl RefRegistry {
                 let idx = self.next_index_by_kind.entry(kind_char).or_insert(1);
                 let id = format!("{kind_char}{idx}");
                 *idx = idx.saturating_add(1);
-                self.ref_by_fingerprint.insert(fingerprint.clone(), id.clone());
+                self.ref_by_fingerprint
+                    .insert(fingerprint.clone(), id.clone());
                 if kind_char == 'i' && !raw_el.path.is_empty() {
                     self.ref_by_path.insert(path_key, id.clone());
                 }
@@ -260,10 +261,11 @@ impl RefRegistry {
         if let Some(prev) = self.previous_elements.get(ref_id) {
             // 2a. Match by persistent fingerprint
             if let Some(new_id) = self.ref_by_fingerprint.get(&prev.fingerprint)
-                && let Some(cur) = self.current_elements.get(new_id) {
-                    note_resolve(true);
-                    return Some(cur);
-                }
+                && let Some(cur) = self.current_elements.get(new_id)
+            {
+                note_resolve(true);
+                return Some(cur);
+            }
             // 2b. Match by kind and identical name
             let prev_name_lower = prev.name.to_lowercase();
             for cur in self.current_elements.values() {
@@ -274,8 +276,12 @@ impl RefRegistry {
             }
             // 2c. Substring match if name is distinctive
             if prev.name.len() >= 3 {
-                let candidates: Vec<&ElementRef> = self.current_elements.values()
-                    .filter(|cur| cur.kind == prev.kind && cur.name.to_lowercase().contains(&prev_name_lower))
+                let candidates: Vec<&ElementRef> = self
+                    .current_elements
+                    .values()
+                    .filter(|cur| {
+                        cur.kind == prev.kind && cur.name.to_lowercase().contains(&prev_name_lower)
+                    })
                     .collect();
                 if candidates.len() == 1 {
                     note_resolve(true);
@@ -470,8 +476,20 @@ mod tests {
             ],
         });
         assert_eq!(diff.added.len(), 2);
-        assert!(diff.added[0].contains("Add a new color"), "{:?}", diff.added);
-        assert!(diff.added[1].contains("Background"), "{:?}", diff.added);
+        assert!(
+            diff.added
+                .first()
+                .is_some_and(|item| item.contains("Add a new color")),
+            "{:?}",
+            diff.added
+        );
+        assert!(
+            diff.added
+                .get(1)
+                .is_some_and(|item| item.contains("Background")),
+            "{:?}",
+            diff.added
+        );
     }
 
     #[test]
@@ -509,6 +527,6 @@ mod tests {
                 is_dialog: false,
             }],
         });
-        assert_eq!(els2[0].id, "i1");
+        assert_eq!(els2.first().map(|el| el.id.as_str()), Some("i1"));
     }
 }

@@ -59,6 +59,7 @@ impl Engine {
                 shared.clone(),
                 self.https_state.clone(),
                 self.events.clone(),
+                self.shield.clone(),
                 id.to_owned(),
             );
             let context_menu_handler =

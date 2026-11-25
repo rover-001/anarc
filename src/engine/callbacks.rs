@@ -50,6 +50,7 @@ cef::wrap_load_handler! {
         shared: Arc<Mutex<BrowserSharedState>>,
         https_state: Arc<Mutex<HttpsFirstState>>,
         events: Arc<Mutex<EngineEvents>>,
+        shield: Arc<crate::shield::ShieldState>,
         tab_id: String,
     }
 
@@ -77,6 +78,16 @@ cef::wrap_load_handler! {
         ) {
             let Some(frame) = frame else { return; };
             inject_clipboard_script(frame);
+            if frame.is_main() != 0 && self.shield.enabled() {
+                let url = CefStringUtf16::from(&frame.url()).to_string();
+                if crate::shield::is_youtube_url(&url) {
+                    frame.execute_java_script(
+                        Some(&CefString::from(crate::shield::youtube_ad_shield_script())),
+                        None,
+                        1,
+                    );
+                }
+            }
         }
 
         fn on_load_end(
@@ -1213,6 +1224,7 @@ fn start_popup_browser(
         shared.clone(),
         handler.https_state.clone(),
         handler.events.clone(),
+        handler.shield.clone(),
         tab_id.clone(),
     );
     let context_menu_handler = LumenContextMenuHandler::new(shared.clone(), handler.events.clone());
