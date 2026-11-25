@@ -984,15 +984,145 @@ impl Render for Anarc {
                         .into_any_element()
                 });
 
-        self.render_shell(
+        let shell = self.render_shell(
             _window,
             cx,
             theme,
             target_theme,
             sidebar_content,
             outgoing_space_overlay,
-        )
+        );
+        #[cfg(not(test))]
+        if crate::settings::telemetry_consent() == anarc_telemetry::config::ConsentState::Unset {
+            return div()
+                .relative()
+                .size_full()
+                .child(shell)
+                .child(first_run_consent(theme, cx))
+                .into_any_element();
+        }
+        shell
     }
+}
+
+/// Single first-run screen. Both choices use the same button treatment; Deny
+/// is as prominent as Allow, and neither is applied until the user clicks.
+#[cfg(not(test))]
+fn first_run_consent(theme: visual::SpaceTheme, cx: &mut Context<Anarc>) -> gpui_kit::AnyElement {
+    use anarc_telemetry::config::ConsentState;
+
+    div()
+        .id("telemetry-consent-dismiss-layer")
+        .occlude()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .id("telemetry-consent-card")
+                .occlude()
+                .w(px(460.0 * UI_SCALE))
+                .p_5()
+                .rounded_xl()
+                .bg(rgb(visual::panel_surface(theme.surface)))
+                .border_1()
+                .border_color(rgb(theme.border))
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .on_mouse_down(
+                    gpui_kit::MouseButton::Left,
+                    cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(theme.text))
+                        .child("Help improve Anarc"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(visual::panel_muted(theme)))
+                        .child("Anarc can send small, anonymous counts of how its agent-control tools are used — which commands ran, whether they succeeded, and how long they took."),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(visual::panel_muted(theme)))
+                        .child("It never sends what you browse, page contents, URLs, screenshots, or keystrokes. Nothing is sent unless you choose Allow. You can change this later in Settings > Privacy."),
+                )
+                .when(
+                    crate::settings::telemetry_notice().is_some(),
+                    |card| {
+                        card.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(visual::panel_muted(theme)))
+                                .child(crate::settings::telemetry_notice().unwrap_or_default()),
+                        )
+                    },
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .pt_2()
+                        .child(consent_button(
+                            "telemetry-consent-allow",
+                            "Allow",
+                            theme,
+                            cx.listener(|this, _, _, cx| {
+                                this.decide_telemetry_consent(ConsentState::Granted);
+                                cx.notify();
+                            }),
+                        ))
+                        .child(consent_button(
+                            "telemetry-consent-deny",
+                            "Deny",
+                            theme,
+                            cx.listener(|this, _, _, cx| {
+                                this.decide_telemetry_consent(ConsentState::Denied);
+                                cx.notify();
+                            }),
+                        )),
+                ),
+        )
+        .into_any_element()
+}
+
+#[cfg(not(test))]
+fn consent_button(
+    id: &'static str,
+    label: &'static str,
+    theme: visual::SpaceTheme,
+    on_click: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .px_4()
+        .py_2()
+        .rounded_md()
+        .bg(crate::ui::visual::translucent_surface(
+            theme.surface_hover,
+            0x40,
+        ))
+        .border_1()
+        .border_color(rgb(theme.border))
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(theme.text))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(theme.border_hover)))
+        .active(|style| style.opacity(0.88))
+        .child(label)
+        .on_click(on_click)
 }
 
 #[cfg(not(test))]

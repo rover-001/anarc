@@ -259,6 +259,8 @@ fn core_palette_and_shortcut_registrations_match_the_baseline_snapshot() {
             "disable-plugin",
             "reload-plugins",
             "open-plugin-folder",
+            "telemetry-preview",
+            "telemetry-reset-install-id",
         ]
     );
 

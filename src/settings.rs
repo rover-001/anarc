@@ -7,6 +7,87 @@ use std::{
     sync::{OnceLock, RwLock},
 };
 
+/// Transient UI state for Settings > Privacy. Consent and the install ID are
+/// persisted only in the telemetry config; nothing here is sent anywhere. The
+/// cached values keep per-frame UI renders off the filesystem.
+#[derive(Clone, Debug, Default)]
+struct TelemetryUiState {
+    preview_visible: bool,
+    preview_json: Option<String>,
+    notice: Option<String>,
+    consent: Option<anarc_telemetry::config::ConsentState>,
+}
+
+static TELEMETRY_UI: OnceLock<RwLock<TelemetryUiState>> = OnceLock::new();
+
+fn telemetry_ui() -> &'static RwLock<TelemetryUiState> {
+    TELEMETRY_UI.get_or_init(|| RwLock::new(TelemetryUiState::default()))
+}
+
+/// Consent is read once, then cached for the lifetime of the process. All
+/// writes go through `decide_telemetry_consent`, which updates the cache.
+pub(crate) fn telemetry_consent() -> anarc_telemetry::config::ConsentState {
+    if let Ok(state) = telemetry_ui().read()
+        && let Some(consent) = state.consent
+    {
+        return consent;
+    }
+    let consent = crate::agent::telemetry::consent_state();
+    if let Ok(mut state) = telemetry_ui().write() {
+        state.consent = Some(consent);
+    }
+    consent
+}
+
+pub(crate) fn set_cached_telemetry_consent(consent: anarc_telemetry::config::ConsentState) {
+    if let Ok(mut state) = telemetry_ui().write() {
+        state.consent = Some(consent);
+    }
+}
+
+pub(crate) fn telemetry_preview_json() -> Option<String> {
+    telemetry_ui()
+        .read()
+        .ok()
+        .and_then(|state| state.preview_json.clone())
+}
+
+/// Captures the helper's exact JSON at the moment the user asks to see it, so
+/// renders only display a cached string.
+pub(crate) fn refresh_telemetry_preview() {
+    let json = crate::agent::telemetry::preview_json();
+    if let Ok(mut state) = telemetry_ui().write() {
+        state.preview_json = Some(json);
+        state.preview_visible = true;
+    }
+}
+
+pub(crate) fn telemetry_preview_visible() -> bool {
+    telemetry_ui()
+        .read()
+        .map(|state| state.preview_visible)
+        .unwrap_or_default()
+}
+
+pub(crate) fn set_telemetry_preview_visible(visible: bool) {
+    if let Ok(mut state) = telemetry_ui().write() {
+        state.preview_visible = visible;
+    }
+}
+
+pub(crate) fn telemetry_notice() -> Option<String> {
+    telemetry_ui()
+        .read()
+        .ok()
+        .and_then(|state| state.notice.clone())
+}
+
+pub(crate) fn set_telemetry_notice(notice: Option<String>) {
+    if let Ok(mut state) = telemetry_ui().write() {
+        state.notice = notice;
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SearchEngine {
@@ -306,6 +387,20 @@ pub(crate) fn url_host(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn telemetry_ui_preview_and_notice_are_transient_and_independent() {
+        assert!(!telemetry_preview_visible());
+        assert!(telemetry_notice().is_none());
+        set_telemetry_preview_visible(true);
+        set_telemetry_notice(Some("Install ID reset".into()));
+        assert!(telemetry_preview_visible());
+        assert_eq!(telemetry_notice().as_deref(), Some("Install ID reset"));
+        set_telemetry_notice(None);
+        set_telemetry_preview_visible(false);
+        assert!(!telemetry_preview_visible());
+        assert!(telemetry_notice().is_none());
+    }
 
     #[test]
     fn zoom_is_keyed_by_site_host() {

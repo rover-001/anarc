@@ -13,6 +13,7 @@ pub(crate) enum SettingsSection {
     Appearance,
     Shortcuts,
     Plugins,
+    Privacy,
 }
 
 pub(super) struct PendingPluginReview {
@@ -212,6 +213,29 @@ pub(crate) struct Anarc {
     pub(crate) expanded_plugins: std::collections::HashSet<String>,
     #[cfg(not(test))]
     pub(super) cef_task_started: bool,
+}
+
+impl Anarc {
+    /// Settings > Privacy and the first-run screen both route through the
+    /// telemetry bridge; no UI code reads or writes the config file directly.
+    pub(crate) fn decide_telemetry_consent(&self, consent: anarc_telemetry::config::ConsentState) {
+        let notice = match crate::agent::telemetry::set_consent(consent) {
+            Ok(()) => {
+                crate::settings::set_cached_telemetry_consent(consent);
+                None
+            }
+            Err(error) => Some(format!("Could not save privacy setting: {error}")),
+        };
+        crate::settings::set_telemetry_notice(notice);
+    }
+
+    pub(crate) fn reset_telemetry_install_id(&self) {
+        let notice = match crate::agent::telemetry::reset_install_id() {
+            Ok(()) => "Install ID reset.".to_owned(),
+            Err(error) => format!("Could not reset install ID: {error}"),
+        };
+        crate::settings::set_telemetry_notice(Some(notice));
+    }
 }
 
 impl Drop for Anarc {

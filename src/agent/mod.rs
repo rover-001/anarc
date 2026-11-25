@@ -13,6 +13,7 @@ pub mod policy;
 pub mod protocol;
 pub mod refs;
 pub mod server;
+pub mod telemetry;
 #[allow(dead_code)] // parts are used only by the anarc-ctl binary
 pub mod transport;
 

@@ -580,6 +580,106 @@ fn closing_a_pinned_tab_request_keeps_it_pinned_and_unloads_it(cx: &mut gpui::Te
 }
 
 #[gpui::test]
+fn closing_a_folder_tab_keeps_it_in_its_folder(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        let folder_id = app.create_folder("a", Some("tab-2")).unwrap();
+        app.active_space_mut()
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.id == "tab-2")
+            .unwrap()
+            .url = "https://example.com/folder".into();
+        app.active_space_mut().active = Some("tab-2".into());
+
+        app.close_active_tab();
+
+        let space = app.active_space();
+        let tab = space
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "tab-2")
+            .expect("closing a folder tab must keep its sidebar entry");
+        assert_eq!(tab.folder.as_deref(), Some(folder_id.as_str()));
+        assert_eq!(tab.state, TabState::Discarded);
+        assert!(space.folders[0].expanded);
+        assert_ne!(space.active.as_deref(), Some("tab-2"));
+    });
+}
+
+#[gpui::test]
+fn closing_a_folder_tab_by_id_keeps_it_in_its_folder(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        let folder_id = app.create_folder("a", Some("tab-2")).unwrap();
+        app.active_space_mut().active = Some("tab-1".into());
+
+        assert!(app.close_tab_by_id("tab-2"));
+
+        let space = app.active_space();
+        let tab = space
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "tab-2")
+            .expect("targeted close must not remove a folder tab");
+        assert_eq!(tab.folder.as_deref(), Some(folder_id.as_str()));
+        assert_eq!(tab.state, TabState::Discarded);
+        assert_eq!(space.active.as_deref(), Some("tab-1"));
+    });
+}
+
+#[gpui::test]
+fn closing_a_folder_tab_from_the_sidebar_keeps_it_in_its_folder(cx: &mut gpui::TestAppContext) {
+    let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (_, view) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| test_app(window, cx))
+        })
+        .expect("open test window")
+    });
+    view.update(cx, |app, _| {
+        app.add_tab();
+        let folder_id = app.create_folder("a", Some("tab-2")).unwrap();
+        app.active_space_mut().active = Some("tab-1".into());
+
+        app.close_section_tab("tab-2");
+
+        let space = app.active_space();
+        let tab = space
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "tab-2")
+            .expect("the sidebar close button must not remove a folder tab");
+        assert_eq!(tab.folder.as_deref(), Some(folder_id.as_str()));
+        assert_eq!(tab.state, TabState::Discarded);
+        assert_eq!(space.active.as_deref(), Some("tab-1"));
+    });
+}
+
+#[gpui::test]
 fn closing_a_pinned_tab_does_not_activate_another_pinned_tab(cx: &mut gpui::TestAppContext) {
     let _global_guard = crate::plugins::GLOBAL_FEATURE_TEST_LOCK
         .lock()

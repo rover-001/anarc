@@ -1,0 +1,18 @@
+{
+  "name": "anarc-telemetry-convex",
+  "private": true,
+  "type": "module",
+  "description": "Privacy-safe telemetry ingestion and auth-gated rollup dashboard for Anarc",
+  "dependencies": {
+    "@convex-dev/rate-limiter": "0.4.3",
+    "convex": "1.51.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  },
+  "scripts": {
+    "test": "node --test functions/validation.test.mjs",
+    "dev": "convex dev",
+    "deploy": "convex deploy"
+  }
+}

@@ -190,12 +190,7 @@ impl Anarc {
             self.save_state();
         }
     }
-    pub(crate) fn reorder_tab_relative(
-        &mut self,
-        tab_id: &str,
-        target_id: &str,
-        after: bool,
-    ) {
+    pub(crate) fn reorder_tab_relative(&mut self, tab_id: &str, target_id: &str, after: bool) {
         if tab_id == target_id {
             return;
         }
@@ -352,7 +347,7 @@ impl Anarc {
             .tabs
             .iter()
             .find(|tab| tab.id == active_id)
-            .is_some_and(|tab| tab.is_pinned());
+            .is_some_and(|tab| tab.is_kept());
 
         if is_kept {
             self.unload_kept_tab(&active_id);
@@ -361,6 +356,18 @@ impl Anarc {
         }
     }
     pub(crate) fn close_tab_by_id(&mut self, tab_id: &str) -> bool {
+        // Folder tabs are kept entries: every close path (sidebar, shortcut,
+        // agent/CLI) unloads them instead of deleting the sidebar row.
+        let is_folder_tab = self
+            .spaces
+            .iter()
+            .find(|space| space.tabs.iter().any(|tab| tab.id == tab_id))
+            .and_then(|space| space.tabs.iter().find(|tab| tab.id == tab_id))
+            .is_some_and(|tab| tab.folder.is_some());
+        if is_folder_tab {
+            self.unload_kept_tab(tab_id);
+            return true;
+        }
         let Some(space) = self
             .spaces
             .iter_mut()
@@ -450,7 +457,7 @@ impl Anarc {
             .tabs
             .iter()
             .find(|tab| tab.id == tab_id)
-            .is_some_and(|tab| tab.is_pinned());
+            .is_some_and(|tab| tab.is_kept());
         if is_kept_page {
             self.unload_kept_tab(tab_id);
         } else {
@@ -461,7 +468,7 @@ impl Anarc {
         let Some(space) = self
             .spaces
             .iter_mut()
-            .find(|space| space.id == self.active_space)
+            .find(|space| space.tabs.iter().any(|tab| tab.id == tab_id))
         else {
             return;
         };
@@ -473,14 +480,24 @@ impl Anarc {
             return;
         }
 
+        let is_active_space = space.id == self.active_space;
         let was_active = space.active.as_deref() == Some(tab_id);
-        let split_fallback = split_after_close(&space.split, self.focused_pane, tab_id).map(
-            |(remaining_split, next_focused, fallback)| {
-                self.focused_pane = next_focused;
-                space.split = remaining_split;
-                fallback
+        let split_fallback = split_after_close(
+            &space.split,
+            if is_active_space {
+                self.focused_pane
+            } else {
+                0
             },
-        );
+            tab_id,
+        )
+        .map(|(remaining_split, next_focused, fallback)| {
+            if is_active_space {
+                self.focused_pane = next_focused;
+            }
+            space.split = remaining_split;
+            fallback
+        });
         self.engine.close_browser(tab_id);
         space.tabs[index].state = TabState::Discarded;
         if space.tabs[index].is_pinned() {
@@ -493,20 +510,15 @@ impl Anarc {
             }
         }
 
-        if let Some(folder_id) = folder_id {
-            let another_folder_page_is_open = space.tabs.iter().any(|tab| {
-                tab.id != tab_id
-                    && tab.folder.as_deref() == Some(folder_id.as_str())
-                    && tab.state != TabState::Discarded
-            });
-            if !another_folder_page_is_open
-                && let Some(folder) = space
-                    .folders
-                    .iter_mut()
-                    .find(|folder| folder.id == folder_id)
-            {
-                folder.expanded = false;
-            }
+        // Keep the folder expanded so its unloaded tab stays visible instead
+        // of looking like it was removed from the sidebar.
+        if let Some(folder_id) = folder_id
+            && let Some(folder) = space
+                .folders
+                .iter_mut()
+                .find(|folder| folder.id == folder_id)
+        {
+            folder.expanded = true;
         }
 
         if was_active {
@@ -610,9 +622,11 @@ impl Anarc {
             return;
         }
         let space = self.active_space();
-        if !space.tabs.iter().any(|tab| {
-            tab.id == tab_id && tab.url != "about:blank" && !tab.url.is_empty()
-        }) {
+        if !space
+            .tabs
+            .iter()
+            .any(|tab| tab.id == tab_id && tab.url != "about:blank" && !tab.url.is_empty())
+        {
             return;
         }
         let active = space.active.clone().unwrap_or_default();
@@ -632,11 +646,7 @@ impl Anarc {
             self.save_state();
             return;
         };
-        if let Some(existing) = pair
-            .panes()
-            .iter()
-            .position(|id| *id == tab_id)
-        {
+        if let Some(existing) = pair.panes().iter().position(|id| *id == tab_id) {
             self.set_focused_pane(existing);
             return;
         }
@@ -664,7 +674,9 @@ impl Anarc {
         // here silently pulls in unrelated pages (for example a pinned inbox).
         let space = self.active_space_mut();
         let blank_id = next_tab_id(space);
-        space.tabs.push(Tab::new(&blank_id, "New tab", "about:blank"));
+        space
+            .tabs
+            .push(Tab::new(&blank_id, "New tab", "about:blank"));
         let (third, fourth) = if pane_index == 0 {
             (tab_id.to_owned(), blank_id)
         } else {

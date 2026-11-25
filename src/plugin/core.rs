@@ -66,6 +66,16 @@ pub(crate) const PALETTE_COMMANDS: &[PaletteCommand] = &[
         title: "Open plugin folder",
         detail: "Show installed plugin files",
     },
+    PaletteCommand {
+        id: "telemetry-preview",
+        title: "Telemetry: show what would be sent",
+        detail: "Settings · Privacy",
+    },
+    PaletteCommand {
+        id: "telemetry-reset-install-id",
+        title: "Telemetry: reset install ID",
+        detail: "Settings · Privacy",
+    },
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

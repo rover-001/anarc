@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "mode": "real-harness",
+  "seed": null,
+  "harnesses": ["claude", "codex", "antigravity"],
+  "conditions": ["raw_dom", "ref_snapshot"],
+  "tasks": 0,
+  "runs": [],
+  "_instructions": "Fill runs[] with one object per (harness, condition, task_id): {harness, condition, task_id, success, tool_result_tokens:[int], wall_latency_ms:float, tool_calls:int, retries:int}. Keep schema_version at 1. No page content, prompts, URLs or ref labels belong in this file; only counts, lengths, durations and task ids from the public fixture suite."
+}

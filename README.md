@@ -310,6 +310,14 @@ Both MCP surfaces expose the same tool names and JSON schemas on Linux and Windo
 Set both to fresh directories to test with a separate profile.
 
 
+## Telemetry
+
+Agent-control telemetry is **opt-in and off by default**. See
+[TELEMETRY.md](TELEMETRY.md) for the exact payload, local files, and what is
+never sent. Disable it with `--no-telemetry`, `ANARC_TELEMETRY=0`, or the
+Settings > Privacy toggle. Deployment and rollup details are in TELEMETRY.md.
+
+
 ## Development
 
 | Path | What lives there |

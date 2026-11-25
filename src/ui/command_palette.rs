@@ -24,6 +24,8 @@ pub enum PaletteAction {
     DisablePlugin,
     ReloadPlugins,
     OpenPluginFolder,
+    TelemetryPreview,
+    TelemetryResetInstallId,
 }
 
 impl PaletteAction {
@@ -42,6 +44,8 @@ impl PaletteAction {
             "disable-plugin" => Self::DisablePlugin,
             "reload-plugins" => Self::ReloadPlugins,
             "open-plugin-folder" => Self::OpenPluginFolder,
+            "telemetry-preview" => Self::TelemetryPreview,
+            "telemetry-reset-install-id" => Self::TelemetryResetInstallId,
             _ => return None,
         })
     }
@@ -265,5 +269,39 @@ mod tests {
                         enabled: false,
                     })
         }));
+    }
+
+    #[test]
+    fn telemetry_commands_are_registered_and_mapped_to_actions() {
+        assert_eq!(
+            PaletteAction::from_plugin_id("telemetry-preview"),
+            Some(PaletteAction::TelemetryPreview)
+        );
+        assert_eq!(
+            PaletteAction::from_plugin_id("telemetry-reset-install-id"),
+            Some(PaletteAction::TelemetryResetInstallId)
+        );
+        let preview = rank_items(
+            "telemetry show what would be sent",
+            &[],
+            &[],
+            crate::plugin::PALETTE_COMMANDS,
+            &[],
+        );
+        assert!(
+            preview
+                .iter()
+                .any(|item| item.target == PaletteTarget::Action(PaletteAction::TelemetryPreview))
+        );
+        let reset = rank_items(
+            "telemetry reset install id",
+            &[],
+            &[],
+            crate::plugin::PALETTE_COMMANDS,
+            &[],
+        );
+        assert!(reset.iter().any(
+            |item| item.target == PaletteTarget::Action(PaletteAction::TelemetryResetInstallId)
+        ));
     }
 }

@@ -1,3 +1,5 @@
+use anarc_telemetry::schema::ErrorCode;
+
 use super::observe::{build_see_call_script, build_stable_call_script, format_see_output};
 use super::policy::{
     ACTION_CONTEXT, NavigationCheck, PolicyConfig, check_navigation_policy, confirmation_message,
@@ -5,6 +7,12 @@ use super::policy::{
 };
 use super::protocol::AgentResponse;
 use super::refs::RawIndex;
+
+// Error telemetry records an enum chosen at the failure site. No error text
+// (which can embed page content) is ever passed to the counters.
+fn note_error(code: ErrorCode) {
+    super::telemetry::telemetry().counters.note_error(code);
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ScrollDirection {
@@ -1009,18 +1017,29 @@ pub fn execute_dsl(
                     return;
                 }
                 if result.is_none() {
+                    note_error(ErrorCode::Timeout);
                     let _ = response.try_send(AgentResponse::err("wait interrupted. use: see"));
                     return;
                 }
             }
+            // Character length only; the raw JSON string itself never enters
+            // telemetry.
+            let raw_dom_chars = result.as_ref().map_or(0, |json| json.len() as u64);
             let raw = result.and_then(|json| serde_json::from_str::<RawIndex>(&json).ok());
             let reply = if let (Some(raw), Ok(mut state)) = (raw, agent_state.lock()) {
                 let registry = state.registries.entry(target).or_default();
                 let (header, elements, diff, gen_changed) = registry.update_from_raw(raw);
                 let mut reply = format!("{summary} · g{}", header.generation);
                 if gen_changed {
+                    let snapshot = format_see_output(&header, &elements, Some(&tabs));
+                    super::telemetry::telemetry().counters.note_snapshot(
+                        snapshot.len() as u64,
+                        raw_dom_chars,
+                        started.elapsed().as_millis() as u64,
+                        elements.len() as u64,
+                    );
                     reply.push('\n');
-                    reply.push_str(&format_see_output(&header, &elements, Some(&tabs)));
+                    reply.push_str(&snapshot);
                 } else if !diff.is_empty() {
                     reply.push('\n');
                     reply.push_str(&compact_diff(&diff));
@@ -1556,7 +1575,10 @@ fn resolve_tab_target(app: &crate::app::Anarc, target: Option<&str>) -> Result<S
             n.checked_sub(1)
                 .and_then(|idx| app.active_space().tabs.get(idx))
                 .map(|tab| tab.id.clone())
-                .ok_or_else(|| super::plugin::no_such_tab(&super::plugin::compact_tabs(app)))
+                .ok_or_else(|| {
+                    note_error(ErrorCode::NotFound);
+                    super::plugin::no_such_tab(&super::plugin::compact_tabs(app))
+                })
         } else if app.active_space().tabs.iter().any(|tab| tab.id == t) {
             Ok(t.to_string())
         } else if let Some(tab) =
@@ -1566,6 +1588,7 @@ fn resolve_tab_target(app: &crate::app::Anarc, target: Option<&str>) -> Result<S
         {
             Ok(tab.id.clone())
         } else {
+            note_error(ErrorCode::NotFound);
             Err(super::plugin::no_such_tab(&super::plugin::compact_tabs(
                 app,
             )))
@@ -1573,6 +1596,7 @@ fn resolve_tab_target(app: &crate::app::Anarc, target: Option<&str>) -> Result<S
     } else {
         let active = app.active_tab_id();
         if active.is_empty() {
+            note_error(ErrorCode::NotFound);
             Err("no active tab".into())
         } else {
             Ok(active.to_string())
@@ -1916,6 +1940,7 @@ pub fn set_element_value(
             super::playbook::record_action(&format!("set_value {target_str}"));
             return Ok(format!("set {tag} value ({chars} chars)"));
         } else if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+            note_error(ErrorCode::Other);
             return Err(format!("set_value failed: {err}"));
         }
     }
@@ -2000,14 +2025,21 @@ fn resolve_ref_coords(
 ) -> Result<(i32, i32), String> {
     let guard = state_lock
         .lock()
-        .map_err(|_| "state unavailable. use: status")?;
+        .map_err(|_| {
+            note_error(ErrorCode::Other);
+            "state unavailable. use: status"
+        })?;
     let registry = guard
         .registries
         .get(tab_id)
-        .ok_or("index missing. use: see")?;
-    let el = registry
-        .resolve_ref_with_fallback(ref_id)
-        .ok_or("stale ref. use: see")?;
+        .ok_or_else(|| {
+            note_error(ErrorCode::NotFound);
+            "index missing. use: see"
+        })?;
+    let el = registry.resolve_ref_with_fallback(ref_id).ok_or_else(|| {
+        note_error(ErrorCode::StaleRef);
+        "stale ref. use: see"
+    })?;
     Ok(el.center)
 }
 
@@ -2148,11 +2180,14 @@ fn resolve_semantic_coords(
 ) -> Result<(i32, i32, String), String> {
     let guard = state_lock
         .lock()
-        .map_err(|_| "state unavailable. use: status")?;
-    let registry = guard
-        .registries
-        .get(tab_id)
-        .ok_or("index missing. use: see")?;
+        .map_err(|_| {
+            note_error(ErrorCode::Other);
+            "state unavailable. use: status"
+        })?;
+    let registry = guard.registries.get(tab_id).ok_or_else(|| {
+        note_error(ErrorCode::NotFound);
+        "index missing. use: see"
+    })?;
 
     let label_lower = label.to_lowercase();
     for el in registry.current_elements.values() {
@@ -2168,6 +2203,7 @@ fn resolve_semantic_coords(
             return Ok((cur.center.0, cur.center.1, cur.id.clone()));
         }
     }
+    note_error(ErrorCode::StaleRef);
     Err("ref missing. use: see".into())
 }
 

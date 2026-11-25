@@ -121,6 +121,18 @@ impl Anarc {
                         eprintln!("Failed to open plugin folder: {error}");
                     }
                 }
+                PaletteAction::TelemetryPreview => {
+                    crate::settings::refresh_telemetry_preview();
+                    self.app_page = Some(AppPage::Settings);
+                    self.settings_section = SettingsSection::Privacy;
+                    self.plugins_menu_open = false;
+                }
+                PaletteAction::TelemetryResetInstallId => {
+                    self.reset_telemetry_install_id();
+                    self.app_page = Some(AppPage::Settings);
+                    self.settings_section = SettingsSection::Privacy;
+                    self.plugins_menu_open = false;
+                }
             },
         }
         cx.notify();

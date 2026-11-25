@@ -1,3 +1,6 @@
+use anarc_telemetry::counters::action_kind_for_tool;
+use anarc_telemetry::schema::ErrorCode;
+
 use super::protocol::{AgentRequest, AgentResponse};
 #[cfg(windows)]
 use super::transport;
@@ -25,6 +28,18 @@ use std::os::unix::net::UnixListener;
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static ACTIVE_SOCKET: std::sync::Mutex<Option<(PathBuf, File, Option<String>)>> =
     std::sync::Mutex::new(None);
+
+// Telemetry is best-effort: every helper below is infallible and never
+// changes a reply or connection outcome. Only enums cross into the counters.
+fn note_call(op: &str) {
+    super::telemetry::telemetry()
+        .counters
+        .note_call(action_kind_for_tool(op));
+}
+
+fn note_error(code: ErrorCode) {
+    super::telemetry::telemetry().counters.note_error(code);
+}
 
 enum Listener {
     #[cfg(unix)]
@@ -300,6 +315,9 @@ fn handle_connection(
         Err(_) => return,
     };
     let mut authenticated = token.is_none();
+    if authenticated {
+        super::telemetry::telemetry().counters.note_session();
+    }
 
     for line in reader.lines() {
         if !RUNNING.load(Ordering::SeqCst) || handler_tx.is_closed() {
@@ -324,20 +342,30 @@ fn handle_connection(
                 break;
             }
             authenticated = true;
+            super::telemetry::telemetry().counters.note_session();
             continue;
         }
 
         let parsed = parse_client_command(trimmed);
         let op = parsed.as_ref().map_or("unknown", AgentRequest::op);
+        // `do` calls are counted per DSL op in plugin.rs; all other requests
+        // have a single, fixed action kind.
+        if parsed.is_err() {
+            note_error(ErrorCode::Other);
+        } else if !matches!(&parsed, Ok(AgentRequest::Do { .. })) {
+            note_call(op);
+        }
         let response = match parsed {
             Ok(request) => wait_for_tab(request, Duration::from_secs(5), |request| {
                 let (resp_tx, resp_rx) = async_channel::bounded(1);
                 if handler_tx.try_send((request, resp_tx)).is_err() {
+                    note_error(ErrorCode::Other);
                     return AgentResponse::err("agent busy. use: status");
                 }
-                resp_rx
-                    .recv_blocking()
-                    .unwrap_or_else(|_| AgentResponse::err("agent disconnected. use: status"))
+                resp_rx.recv_blocking().unwrap_or_else(|_| {
+                    note_error(ErrorCode::Other);
+                    AgentResponse::err("agent disconnected. use: status")
+                })
             }),
             Err(message) => AgentResponse::err(message),
         };
@@ -356,6 +384,9 @@ fn handle_connection(
             break;
         }
     }
+    // Session end: best-effort daily rollup. Consent and kill switches are
+    // checked at the single send site; this never affects the connection.
+    super::telemetry::flush_daily(env!("CARGO_PKG_VERSION"));
 }
 
 fn log_call(op: &str, ok: bool, reply_bytes: usize) {
@@ -394,6 +425,9 @@ fn wait_for_tab(
         }
         std::thread::sleep(remaining.min(Duration::from_millis(50)));
         response = dispatch(request.clone());
+    }
+    if response.pending_tab.is_some() {
+        note_error(ErrorCode::Timeout);
     }
     response
 }

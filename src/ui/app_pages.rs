@@ -184,6 +184,16 @@ fn settings_content(
                 this.set_settings_section(SettingsSection::Plugins);
                 cx.notify();
             }),
+        ))
+        .child(settings_tab(
+            "Privacy",
+            SettingsSection::Privacy,
+            selected_section,
+            theme,
+            cx.listener(|this, _, _, cx| {
+                this.set_settings_section(SettingsSection::Privacy);
+                cx.notify();
+            }),
         ));
 
     let content = match selected_section {
@@ -486,6 +496,7 @@ fn settings_content(
             expanded_plugins,
             cx,
         ),
+        SettingsSection::Privacy => privacy_content(theme, cx),
     };
 
     div()
@@ -505,6 +516,114 @@ fn settings_content(
         .child(tabs)
         .child(content)
         .into_any_element()
+}
+
+fn privacy_content(theme: SpaceTheme, cx: &mut Context<Anarc>) -> gpui_kit::AnyElement {
+    use anarc_telemetry::config::ConsentState;
+
+    let consent = crate::settings::telemetry_consent();
+    let enabled = consent == ConsentState::Granted;
+    let status = if enabled {
+        "On. Only bucketed agent-control counts are sent."
+    } else {
+        "Off. Nothing is sent."
+    };
+    let telemetry_control = crate::ui::plugin_manager::toggle_switch(
+        "settings-telemetry".to_owned(),
+        enabled,
+        theme,
+        cx.listener(|this, _, _, cx| {
+            let next = if crate::settings::telemetry_consent() == ConsentState::Granted {
+                ConsentState::Denied
+            } else {
+                ConsentState::Granted
+            };
+            this.decide_telemetry_consent(next);
+            cx.notify();
+        }),
+    );
+    let preview_visible = crate::settings::telemetry_preview_visible();
+    let preview_control = action_button(
+        if preview_visible {
+            "Hide what would be sent"
+        } else {
+            "Show what would be sent"
+        },
+        theme,
+        cx.listener(|_, _, _, cx| {
+            if crate::settings::telemetry_preview_visible() {
+                crate::settings::set_telemetry_preview_visible(false);
+            } else {
+                crate::settings::refresh_telemetry_preview();
+            }
+            cx.notify();
+        }),
+    );
+    let reset_control = action_button(
+        "Reset install ID",
+        theme,
+        cx.listener(|this, _, _, cx| {
+            this.reset_telemetry_install_id();
+            cx.notify();
+        }),
+    );
+
+    let mut content = div()
+        .flex()
+        .flex_col()
+        .gap_4()
+        .child(setting_card(
+            "Diagnostics",
+            "Anonymous usage counts",
+            status,
+            telemetry_control,
+            theme,
+        ))
+        .child(setting_card(
+            "Preview",
+            "Show what would be sent",
+            "The exact JSON of the next anonymous ping.",
+            preview_control,
+            theme,
+        ))
+        .child(setting_card(
+            "Install ID",
+            "Reset install ID",
+            "Generates a new random ID with no link to the old one.",
+            reset_control,
+            theme,
+        ));
+    if preview_visible {
+        content = content.child(
+            div()
+                .w_full()
+                .p_3()
+                .rounded_lg()
+                .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+                .border_1()
+                .border_color(rgb(theme.border))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Next ping (exact JSON)"),
+                )
+                // Render the helper output verbatim: no pretty-printing or rewriting.
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(theme.text))
+                        .child(crate::settings::telemetry_preview_json().unwrap_or_default()),
+                ),
+        );
+    }
+    if let Some(notice) = crate::settings::telemetry_notice() {
+        content = content.child(div().text_xs().text_color(rgb(theme.muted)).child(notice));
+    }
+    content.into_any_element()
 }
 
 fn plugin_manager_content(

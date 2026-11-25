@@ -1,6 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// Ref resolution outcomes are recorded as a boolean only: no ref label or
+// element content reaches telemetry. The counter is infallible and best-effort.
+fn note_resolve(success: bool) {
+    super::telemetry::telemetry()
+        .counters
+        .note_ref_resolve(success);
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RawElement {
     pub kind: String,
@@ -217,6 +225,7 @@ impl RefRegistry {
     pub fn resolve_ref_with_fallback(&self, ref_id: &str) -> Option<&ElementRef> {
         // 1. Exact match in current elements
         if let Some(el) = self.current_elements.get(ref_id) {
+            note_resolve(true);
             return Some(el);
         }
 
@@ -225,12 +234,14 @@ impl RefRegistry {
             // 2a. Match by persistent fingerprint
             if let Some(new_id) = self.ref_by_fingerprint.get(&prev.fingerprint)
                 && let Some(cur) = self.current_elements.get(new_id) {
+                    note_resolve(true);
                     return Some(cur);
                 }
             // 2b. Match by kind and identical name
             let prev_name_lower = prev.name.to_lowercase();
             for cur in self.current_elements.values() {
                 if cur.kind == prev.kind && cur.name.to_lowercase() == prev_name_lower {
+                    note_resolve(true);
                     return Some(cur);
                 }
             }
@@ -240,11 +251,13 @@ impl RefRegistry {
                     .filter(|cur| cur.kind == prev.kind && cur.name.to_lowercase().contains(&prev_name_lower))
                     .collect();
                 if candidates.len() == 1 {
+                    note_resolve(true);
                     return candidates.first().copied();
                 }
             }
         }
 
+        note_resolve(false);
         None
     }
 }

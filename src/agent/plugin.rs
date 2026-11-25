@@ -1,3 +1,6 @@
+use anarc_telemetry::counters::harness_from_name;
+use anarc_telemetry::schema::{ActionKind, ErrorCode};
+
 use super::observe::{
     build_read_call_script, build_read_ref_call_script, build_see_call_script, execute_find,
     format_see_output, format_see_output_paged,
@@ -13,6 +16,85 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub static AGENT_PLUGIN_ID: &str = "anarc.agent";
+
+// Telemetry is strictly best-effort: these helpers cannot fail and never
+// influence a request's result. Only enums, lengths, counts and durations
+// reach the counters.
+fn note_call(kind: ActionKind) {
+    super::telemetry::telemetry().counters.note_call(kind);
+}
+
+fn note_error(code: ErrorCode) {
+    super::telemetry::telemetry().counters.note_error(code);
+}
+
+/// Classify one DSL operation as an action kind. Only the returned enum is
+/// recorded; op arguments (refs, text, URLs) are never inspected here.
+fn action_kind_for_op(op: &super::act::ActionOp) -> ActionKind {
+    match op {
+        super::act::ActionOp::Click { .. }
+        | super::act::ActionOp::DomClick { .. }
+        | super::act::ActionOp::SemanticClick { .. }
+        | super::act::ActionOp::Hover { .. }
+        | super::act::ActionOp::Focus { .. }
+        | super::act::ActionOp::Drag { .. }
+        | super::act::ActionOp::XY { .. } => ActionKind::Click,
+        super::act::ActionOp::ClearAndType { .. }
+        | super::act::ActionOp::AppendText { .. }
+        | super::act::ActionOp::TypeSecret { .. }
+        | super::act::ActionOp::SemanticType { .. }
+        | super::act::ActionOp::Paste { .. }
+        | super::act::ActionOp::Key { .. }
+        | super::act::ActionOp::KeyDown { .. }
+        | super::act::ActionOp::KeyUp { .. }
+        | super::act::ActionOp::Submit => ActionKind::Type,
+        super::act::ActionOp::Go { .. }
+        | super::act::ActionOp::Back
+        | super::act::ActionOp::Fwd
+        | super::act::ActionOp::Reload
+        | super::act::ActionOp::Tab { .. } => ActionKind::Navigate,
+        super::act::ActionOp::Scroll { .. }
+        | super::act::ActionOp::Upload { .. }
+        | super::act::ActionOp::Dialog { .. }
+        | super::act::ActionOp::Wait { .. } => ActionKind::Other,
+    }
+}
+
+fn note_dsl_call(op: &super::act::ActionOp) {
+    note_call(action_kind_for_op(op));
+}
+
+/// Detect the driving harness from explicit env signals. Names are consumed
+/// by `harness_from_name`; no string is stored or sent.
+fn note_harness_best_effort() {
+    let name = std::env::var("ANARC_HARNESS")
+        .ok()
+        .or_else(|| std::env::var("CLAUDECODE").ok().map(|_| "claude".to_owned()))
+        .or_else(|| {
+            std::env::var("CODEX_SANDBOX")
+                .ok()
+                .map(|_| "codex".to_owned())
+        })
+        .or_else(|| {
+            std::env::var("ANTIGRAVITY")
+                .ok()
+                .map(|_| "antigravity".to_owned())
+        });
+    if let Some(name) = name {
+        let harness = harness_from_name(&name);
+        super::telemetry::telemetry().counters.note_harness(harness);
+    }
+}
+
+/// Count configured plugins from the persisted config; only the count is kept.
+fn note_plugins_installed() {
+    let count = crate::plugin::PluginConfig::load()
+        .map(|config| config.plugins.len() as u64)
+        .unwrap_or(0);
+    super::telemetry::telemetry()
+        .counters
+        .set_plugins_installed(count);
+}
 
 const WINDOW_NOT_READY: &str =
     "anarc window not ready (no frame painted). use: focus the Anarc window, then retry";
@@ -98,16 +180,19 @@ pub(crate) fn forward_request_to_engine(
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         if !WINDOW_PAINTED.load(Ordering::Acquire) {
+            note_error(ErrorCode::Timeout);
             let _ = resp_tx.try_send(AgentResponse::err(WINDOW_NOT_READY));
             return;
         }
     }
 
     let Some((req_tx, wake_tx)) = wait_for_engine_channel(std::time::Duration::from_secs(2)) else {
+        note_error(ErrorCode::Other);
         let _ = resp_tx.try_send(AgentResponse::err("engine unavailable. use: status"));
         return;
     };
     if let Err(error) = req_tx.try_send((req, resp_tx)) {
+        note_error(ErrorCode::Other);
         let (_, reply) = error.into_inner();
         let _ = reply.try_send(AgentResponse::err("agent busy. use: status"));
     } else {
@@ -178,6 +263,14 @@ impl Plugin for AgentPlugin {
                 "Agent forwarder unavailable; use: status".into(),
             ));
         }
+        note_harness_best_effort();
+        note_plugins_installed();
+        // Best-effort daily rollup. Consent is unset by default, so this is a
+        // no-op until the user opts in; it runs off the plugin thread.
+        std::thread::Builder::new()
+            .name("anarc-telemetry-flush".into())
+            .spawn(|| super::telemetry::flush_daily(env!("CARGO_PKG_VERSION")))
+            .ok();
         ctx.effect(move || {
             dispose_rx.close();
             stop_server();
@@ -209,6 +302,7 @@ pub(crate) fn handle_agent_request(
         match super::act::parse_dsl(ops) {
             Ok(ops) => ops,
             Err(e) => {
+                note_error(ErrorCode::Other);
                 let _ = resp_tx.try_send(AgentResponse::err(e));
                 return;
             }
@@ -216,6 +310,9 @@ pub(crate) fn handle_agent_request(
     } else {
         Vec::new()
     };
+    for op in &parsed_ops {
+        note_dsl_call(op);
+    }
     let tab_only = !parsed_ops.is_empty()
         && parsed_ops
             .iter()
@@ -259,11 +356,13 @@ pub(crate) fn handle_agent_request(
                 .find(|tab| tab.id == target)
                 .map(|tab| (space.id.clone(), tab.url.clone()))
         }) else {
+            note_error(ErrorCode::NotFound);
             let _ = resp_tx.try_send(AgentResponse::err(no_such_tab(&compact_tabs(app))));
             return;
         };
         if !app.engine.has_browser(&target) {
             if !app.engine.is_initialized() {
+                note_error(ErrorCode::Other);
                 let _ =
                     resp_tx.try_send(AgentResponse::err("CEF unavailable. use: anarc-ctl doctor"));
                 return;
@@ -279,11 +378,14 @@ pub(crate) fn handle_agent_request(
                     .ensure_browser(&space_id, &target, url, 768, 512, 0, 0.0)
                 {
                     eprintln!("anarc-agent: wake {target:?} failed: {error}");
+                    note_error(ErrorCode::Other);
                     let _ = resp_tx
                         .try_send(AgentResponse::err("tab wake failed. use: anarc-ctl doctor"));
                     return;
                 }
             }
+            // A still-loading tab is retried by the server; the timeout is
+            // recorded there once the retry deadline is actually reached.
             let mut response = AgentResponse::err("tab still loading. use: anarc-ctl doctor");
             response.pending_tab = Some(target);
             let _ = resp_tx.try_send(response);
@@ -405,15 +507,18 @@ pub(crate) fn handle_agent_request(
             std::thread::Builder::new()
                 .name("anarc-see-worker".into())
                 .spawn(move || {
+                    let started = std::time::Instant::now();
                     let raw_res = futures_lite::future::block_on(async { eval_rx.recv().await });
                     let raw_json = match raw_res {
                         Ok(Ok(s)) => s,
                         Ok(Err(_)) => {
+                            note_error(ErrorCode::Other);
                             let _ =
                                 resp_tx.try_send(AgentResponse::err("page unavailable. use: tabs"));
                             return;
                         }
                         Err(_) => {
+                            note_error(ErrorCode::Timeout);
                             let _ = resp_tx
                                 .try_send(AgentResponse::err("page disconnected. use: tabs"));
                             return;
@@ -423,6 +528,7 @@ pub(crate) fn handle_agent_request(
                     let raw_index: RawIndex = match serde_json::from_str(&raw_json) {
                         Ok(idx) => idx,
                         Err(_) => {
+                            note_error(ErrorCode::Other);
                             let _ = resp_tx
                                 .try_send(AgentResponse::err("index unavailable. use: tabs"));
                             return;
@@ -432,6 +538,7 @@ pub(crate) fn handle_agent_request(
                     let mut guard = match state_arc.lock() {
                         Ok(g) => g,
                         Err(_) => {
+                            note_error(ErrorCode::Other);
                             let _ = resp_tx
                                 .try_send(AgentResponse::err("state unavailable. use: status"));
                             return;
@@ -462,6 +569,15 @@ pub(crate) fn handle_agent_request(
                     ) {
                         formatted = format!("!human {reason}\n{formatted}");
                     }
+                    // Only lengths, an elapsed duration and a count cross into
+                    // telemetry; neither the ref snapshot nor the DOM text is
+                    // inspected or copied there.
+                    super::telemetry::telemetry().counters.note_snapshot(
+                        formatted.len() as u64,
+                        raw_json.len() as u64,
+                        started.elapsed().as_millis() as u64,
+                        elements.len() as u64,
+                    );
                     let _ = resp_tx.try_send(AgentResponse::success(formatted));
                 })
                 .ok();
@@ -524,10 +640,12 @@ pub(crate) fn handle_agent_request(
                     let text = match raw_res {
                         Ok(Ok(s)) => s,
                         Ok(Err(_)) => {
+                            note_error(ErrorCode::Other);
                             let _ = resp_tx.try_send(AgentResponse::err("read failed. use: see"));
                             return;
                         }
                         Err(_) => {
+                            note_error(ErrorCode::Timeout);
                             let _ = resp_tx
                                 .try_send(AgentResponse::err("page disconnected. use: tabs"));
                             return;
@@ -559,6 +677,7 @@ pub(crate) fn handle_agent_request(
             let guard = match agent_state.lock() {
                 Ok(g) => g,
                 Err(_) => {
+                    note_error(ErrorCode::Other);
                     let _ = resp_tx.try_send(AgentResponse::err("state unavailable. use: status"));
                     return;
                 }
@@ -568,6 +687,7 @@ pub(crate) fn handle_agent_request(
                 let results = execute_find(registry, &query);
                 let _ = resp_tx.try_send(AgentResponse::success(results));
             } else {
+                note_error(ErrorCode::NotFound);
                 let _ = resp_tx.try_send(AgentResponse::err("index missing. use: see"));
             }
         }
@@ -599,14 +719,17 @@ pub(crate) fn handle_agent_request(
                                     let _ = resp_tx.try_send(AgentResponse::success(shot_str));
                                     return;
                                 }
+                            note_error(ErrorCode::Other);
                             let _ = resp_tx
                                 .try_send(AgentResponse::err("screenshot invalid. use: see"));
                         }
                         Ok(Err(_)) => {
+                            note_error(ErrorCode::Other);
                             let _ =
                                 resp_tx.try_send(AgentResponse::err("screenshot failed. use: see"));
                         }
                         Err(_) => {
+                            note_error(ErrorCode::Timeout);
                             let _ = resp_tx
                                 .try_send(AgentResponse::err("page disconnected. use: tabs"));
                         }
@@ -626,9 +749,11 @@ pub(crate) fn handle_agent_request(
                             let _ = resp_tx.try_send(AgentResponse::success(s));
                         }
                         Ok(Err(e)) => {
+                            note_error(ErrorCode::Other);
                             let _ = resp_tx.try_send(AgentResponse::err(format!("eval failed: {e}")));
                         }
                         Err(_) => {
+                            note_error(ErrorCode::Timeout);
                             let _ = resp_tx
                                 .try_send(AgentResponse::err("page disconnected. use: tabs"));
                         }
@@ -654,6 +779,7 @@ pub(crate) fn handle_agent_request(
                     let _ = resp_tx.try_send(AgentResponse::success(msg));
                 }
                 Err(err) => {
+                    note_error(ErrorCode::Other);
                     let _ = resp_tx.try_send(AgentResponse::err(err));
                 }
             }
@@ -694,6 +820,7 @@ pub(crate) fn handle_agent_request(
                                 } else if let Some(err) =
                                     val.get("error").and_then(|v| v.as_str())
                                 {
+                                    note_error(ErrorCode::Timeout);
                                     let _ = resp_tx.try_send(AgentResponse::err(err.to_string()));
                                     return;
                                 }
@@ -701,10 +828,12 @@ pub(crate) fn handle_agent_request(
                             let _ = resp_tx.try_send(AgentResponse::success(s));
                         }
                         Ok(Err(e)) => {
+                            note_error(ErrorCode::Timeout);
                             let _ =
                                 resp_tx.try_send(AgentResponse::err(format!("wait_for failed: {e}")));
                         }
                         Err(_) => {
+                            note_error(ErrorCode::Timeout);
                             let _ = resp_tx
                                 .try_send(AgentResponse::err("page disconnected. use: tabs"));
                         }
@@ -803,6 +932,38 @@ pub(crate) fn register(host: &mut PluginHost) {
 
 #[cfg(test)]
 mod tests {
+    use super::ActionKind;
+
+    #[test]
+    fn dsl_ops_map_to_action_kinds_without_a_browser() {
+        use super::super::act::{ActionOp, WaitCondition};
+        assert_eq!(
+            super::action_kind_for_op(&ActionOp::Click {
+                ref_id: "b1".into()
+            }),
+            ActionKind::Click
+        );
+        assert_eq!(
+            super::action_kind_for_op(&ActionOp::ClearAndType {
+                ref_id: "i1".into(),
+                text: String::new(),
+            }),
+            ActionKind::Type
+        );
+        assert_eq!(
+            super::action_kind_for_op(&ActionOp::Go {
+                url: "https://example.com".into()
+            }),
+            ActionKind::Navigate
+        );
+        assert_eq!(
+            super::action_kind_for_op(&ActionOp::Wait {
+                condition: WaitCondition::Idle
+            }),
+            ActionKind::Other
+        );
+    }
+
     #[test]
     fn missing_tab_includes_selection_hint() {
         assert_eq!(

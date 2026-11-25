@@ -38,6 +38,11 @@ fn main() {
     if handle_import_cli() {
         return;
     }
+    // Kill switch: any one of --no-telemetry, ANARC_TELEMETRY=0, or the
+    // settings toggle wins at the telemetry send site.
+    anarc_telemetry::set_cli_kill_switch(
+        std::env::args().skip(1).any(|arg| arg == "--no-telemetry"),
+    );
     #[cfg(target_os = "linux")]
     {
         // Prevent glibc from thrashing mmap/munmap syscalls and page faults on 8.3MB frame buffers

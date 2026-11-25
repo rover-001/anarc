@@ -58,6 +58,12 @@ impl Tab {
         self.pinned || self.favorite
     }
 
+    /// Kept tabs survive close: pinned/favorite tabs unload to their pinned
+    /// destination, folder tabs stay filed under their space folder.
+    pub fn is_kept(&self) -> bool {
+        self.is_pinned() || self.folder.is_some()
+    }
+
     /// Writes both flags so the alias never diverges in new saves.
     pub fn set_pinned(&mut self, pinned: bool) {
         self.pinned = pinned;
