@@ -13,7 +13,6 @@ const MIN_FLING_PIXELS_PER_FRAME: f32 = 0.5;
 pub(super) struct ScrollMotion {
     accum_x: f32,
     accum_y: f32,
-    pending: (f32, f32),
     velocity: (f32, f32),
     last_event: Option<Instant>,
     last_frame: Option<Instant>,
@@ -38,8 +37,9 @@ impl ScrollMotion {
         )
     }
 
-    // Send the start of a gesture immediately. Coalesce subsequent input with
-    // the display-paced driver to avoid flooding CEF between painted frames.
+    // Send pointer scroll deltas immediately so CEF receives input with zero
+    // frame-queue latency, while keeping the display-paced driver only for
+    // post-gesture inertia coasting.
     pub(super) fn record_pointer_scroll(
         &mut self,
         delta: (f32, f32),
@@ -57,8 +57,6 @@ impl ScrollMotion {
         let fresh = !self.running || interval.is_none_or(|gap| gap > INPUT_GAP);
         self.velocity.0 = input_velocity(self.velocity.0, delta.0, seconds, fresh);
         self.velocity.1 = input_velocity(self.velocity.1, delta.1, seconds, fresh);
-        self.pending.0 += delta.0;
-        self.pending.1 += delta.1;
         self.last_event = Some(now);
         self.last_position = position;
         self.modifiers = modifiers;
@@ -72,12 +70,7 @@ impl ScrollMotion {
                 view.scroll_momentum_tick(generation, window, cx);
             });
         }
-        if fresh {
-            let pending = std::mem::take(&mut self.pending);
-            self.accumulate(pending)
-        } else {
-            (0, 0)
-        }
+        self.accumulate(delta)
     }
 
     pub(super) fn interrupt(&mut self) {
@@ -109,12 +102,11 @@ impl WebViewport {
         let now = Instant::now();
         let previous_frame = motion.last_frame.replace(now).unwrap_or(now);
         let last_event = motion.last_event.unwrap_or(now);
-        let mut delta = std::mem::take(&mut motion.pending);
-        let input_pending = delta != (0.0, 0.0);
+        let mut delta = (0.0, 0.0);
         // Integrate only the portion of this frame after direct input ceased.
         // Bound recovery after a delayed frame so inertia continues smoothly
         // without either a large catch-up jump or abruptly killing the fling.
-        if !input_pending && now.duration_since(last_event) > INPUT_GAP {
+        if now.duration_since(last_event) > INPUT_GAP {
             let start = previous_frame.max(last_event + INPUT_GAP);
             let elapsed = now
                 .saturating_duration_since(start)
@@ -134,8 +126,7 @@ impl WebViewport {
             .refresh_interval(cx)
             .unwrap_or(Duration::from_millis(16));
         let stop_speed = (MIN_FLING_PIXELS_PER_FRAME / display_interval.as_secs_f32()).max(2.0);
-        let keep_running = input_pending
-            || now.duration_since(last_event) <= INPUT_GAP
+        let keep_running = now.duration_since(last_event) <= INPUT_GAP
             || motion.velocity.0.abs().max(motion.velocity.1.abs()) >= stop_speed;
         motion.running = keep_running;
 

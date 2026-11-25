@@ -97,6 +97,7 @@ impl Render for Anarc {
                     .timer(std::time::Duration::from_millis(180))
                     .await;
                 let mut had_peer_cursors = false;
+                let mut last_periodic_housekeeping = Instant::now() - std::time::Duration::from_secs(1);
                 loop {
                     // A queued wake can be coalesced into this update. A wake that
                     // arrives during the update stays queued for the next pass.
@@ -267,67 +268,72 @@ impl Render for Anarc {
                             }
                         }
                         this.process_agent_requests();
-                        if let Some(mtime) = crate::persist::spaces_mtime()
-                            && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
-                        {
-                            let mtime_ms = d.as_millis() as u64;
-                            let last = this
-                                .last_spaces_mtime
-                                .load(std::sync::atomic::Ordering::Relaxed);
-                            if mtime_ms > last {
-                                this.last_spaces_mtime
-                                    .store(mtime_ms, std::sync::atomic::Ordering::Relaxed);
-                                this.sync_external_spaces(cx);
+                        let run_periodic = last_periodic_housekeeping.elapsed()
+                            >= std::time::Duration::from_millis(250);
+                        if run_periodic {
+                            last_periodic_housekeeping = std::time::Instant::now();
+                            if let Some(mtime) = crate::persist::spaces_mtime()
+                                && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
+                            {
+                                let mtime_ms = d.as_millis() as u64;
+                                let last = this
+                                    .last_spaces_mtime
+                                    .load(std::sync::atomic::Ordering::Relaxed);
+                                if mtime_ms > last {
+                                    this.last_spaces_mtime
+                                        .store(mtime_ms, std::sync::atomic::Ordering::Relaxed);
+                                    this.sync_external_spaces(cx);
+                                }
                             }
-                        }
 
-                        let cookies_path = crate::paths::config_dir().join("shared-cookies.json");
-                        if let Ok(meta) = std::fs::metadata(&cookies_path)
-                            && let Ok(mtime) = meta.modified()
-                            && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
-                        {
-                            let mtime_ms = d.as_millis() as u64;
-                            let last = this
-                                .last_shared_cookies_mtime
-                                .load(std::sync::atomic::Ordering::Relaxed);
-                            if mtime_ms > last {
-                                this.last_shared_cookies_mtime
-                                    .store(mtime_ms, std::sync::atomic::Ordering::Relaxed);
-                                this.inject_shared_cookies_into_all_tabs();
+                            let cookies_path = crate::paths::config_dir().join("shared-cookies.json");
+                            if let Ok(meta) = std::fs::metadata(&cookies_path)
+                                && let Ok(mtime) = meta.modified()
+                                && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
+                            {
+                                let mtime_ms = d.as_millis() as u64;
+                                let last = this
+                                    .last_shared_cookies_mtime
+                                    .load(std::sync::atomic::Ordering::Relaxed);
+                                if mtime_ms > last {
+                                    this.last_shared_cookies_mtime
+                                        .store(mtime_ms, std::sync::atomic::Ordering::Relaxed);
+                                    this.inject_shared_cookies_into_all_tabs();
+                                }
                             }
-                        }
 
-                        // Live Share publishes session transitions as a tiny file.
-                        // Export the host's full account/session snapshot the moment
-                        // sharing starts, before any peer connects.
-                        let session_path = crate::paths::config_dir().join("live-share-session.json");
-                        if let Ok(meta) = std::fs::metadata(&session_path)
-                            && let Ok(mtime) = meta.modified()
-                            && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
-                        {
-                            let mtime_ms = d.as_millis() as u64;
-                            let last = this
-                                .last_live_share_session_mtime
-                                .load(std::sync::atomic::Ordering::Relaxed);
-                            if mtime_ms > last {
-                                this.last_live_share_session_mtime
-                                    .store(mtime_ms, std::sync::atomic::Ordering::Relaxed);
-                                if let Ok(content) = std::fs::read_to_string(&session_path)
-                                    && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
-                                {
-                                    let generation = val.get("generation").and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let is_host = val.get("is_host").and_then(|v| v.as_bool()).unwrap_or(false);
-                                    let space_id = val
-                                        .get("space_id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let new_session = generation != this.live_share_session_generation;
-                                    this.live_share_session_generation = generation;
-                                    this.live_share_is_host = is_host;
-                                    this.live_share_space_id = space_id;
-                                    if new_session && is_host {
-                                        this.sync_host_cookies_if_needed(true);
+                            // Live Share publishes session transitions as a tiny file.
+                            // Export the host's full account/session snapshot the moment
+                            // sharing starts, before any peer connects.
+                            let session_path = crate::paths::config_dir().join("live-share-session.json");
+                            if let Ok(meta) = std::fs::metadata(&session_path)
+                                && let Ok(mtime) = meta.modified()
+                                && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
+                            {
+                                let mtime_ms = d.as_millis() as u64;
+                                let last = this
+                                    .last_live_share_session_mtime
+                                    .load(std::sync::atomic::Ordering::Relaxed);
+                                if mtime_ms > last {
+                                    this.last_live_share_session_mtime
+                                        .store(mtime_ms, std::sync::atomic::Ordering::Relaxed);
+                                    if let Ok(content) = std::fs::read_to_string(&session_path)
+                                        && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
+                                    {
+                                        let generation = val.get("generation").and_then(|v| v.as_u64()).unwrap_or(0);
+                                        let is_host = val.get("is_host").and_then(|v| v.as_bool()).unwrap_or(false);
+                                        let space_id = val
+                                            .get("space_id")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let new_session = generation != this.live_share_session_generation;
+                                        this.live_share_session_generation = generation;
+                                        this.live_share_is_host = is_host;
+                                        this.live_share_space_id = space_id;
+                                        if new_session && is_host {
+                                            this.sync_host_cookies_if_needed(true);
+                                        }
                                     }
                                 }
                             }
@@ -400,7 +406,9 @@ impl Render for Anarc {
                             this.save_state();
                             cx.notify();
                         }
-                        this.update_discord_presence();
+                        if run_periodic || has_root_updates {
+                            this.update_discord_presence();
+                        }
                         let has_peer_cursors = !crate::app::live_cursor::get_active_peer_cursors().is_empty();
                         if !was_initialized {
                             cx.notify();
