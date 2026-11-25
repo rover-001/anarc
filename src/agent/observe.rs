@@ -176,8 +176,15 @@ pub fn build_indexer_injection_script() -> &'static str {
 }
 
 pub fn build_see_call_script(scope: &str) -> String {
+    build_see_call_script_with_len(scope, None)
+}
+
+pub fn build_see_call_script_with_len(scope: &str, max_name_len: Option<usize>) -> String {
+    let len_arg = max_name_len
+        .map(|l| format!(", {l}"))
+        .unwrap_or_default();
     format!(
-        "if (typeof window.__anarc_index !== 'function') {{ {INDEXER_JS} }} window.__anarc_index({});",
+        "if (typeof window.__anarc_index !== 'function') {{ {INDEXER_JS} }} window.__anarc_index({}{len_arg});",
         serde_json::json!(scope)
     )
 }

@@ -66,7 +66,7 @@ fn print_usage() {
            wait-for <cond> [target]     Event-driven wait (text/selector appears/disappears, stable)\n\
            shot [ref|view]              Save a PNG and print its path\n\
            wait stable [ms]             Wait for the latest text to stop growing\n\
-           stats                        Show agent call and token statistics\n\
+           stats [--session|--reset]    Show agent call and token statistics\n\
            status                       Show agent server status\n\
            pause                        Pause agent actions\n\
            resume                       Resume agent actions\n\
@@ -330,6 +330,9 @@ fn get_tool_definitions() -> serde_json::Value {
                         "description": "Scope: view (default), all, main, <ref>, or +",
                         "enum": ["view", "all", "main", "+"]
                     },
+                    "max_name_len": {
+                        "type": "integer"
+                    },
                     "tab_id": {
                         "type": "string"
                     }
@@ -338,13 +341,16 @@ fn get_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "do",
-            "description": format!("Actions: click, type, fill, key, keydown, keyup, submit, navigate, upload, scroll, tab. {RECOVERY}"),
+            "description": format!("Actions: click, dblclick, drag, set, type, fill, paste, key, submit, navigate, upload, scroll, tab, space, split, wait. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "ops": {
                         "type": "string",
-                        "description": "DSL ops (e.g. b1; i2=\"text\"; key Enter; navigate https://...; upload /path; tab select 2)"
+                        "description": "DSL ops (Sheets: use paste \"A\\tB\\n1\\t2\" in 1 call, not cell-by-cell Tab; e.g. b1; set @i1 \"750\" enter; wait 300)"
+                    },
+                    "delay_ms": {
+                        "type": "integer"
                     },
                     "tab_id": {
                         "type": "string"
@@ -364,8 +370,8 @@ fn get_tool_definitions() -> serde_json::Value {
                     },
                     "mode": {
                         "type": "string",
-                        "description": "Mode: text, table, links, or outline",
-                        "enum": ["text", "table", "links", "outline"]
+                        "description": "Mode: text, table, links, outline, cards, or list",
+                        "enum": ["text", "table", "links", "outline", "cards", "list"]
                     },
                     "max": {
                         "type": "integer"
@@ -470,6 +476,9 @@ fn get_tool_definitions() -> serde_json::Value {
                     "scale": {
                         "type": "number"
                     },
+                    "inline": {
+                        "type": "boolean"
+                    },
                     "tab_id": {
                         "type": "string"
                     }
@@ -495,7 +504,7 @@ fn get_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "set_value",
-            "description": format!("Directly set text value on input, textarea, or contenteditable. {RECOVERY}"),
+            "description": format!("Set text on input/contenteditable, or mode='paste' for TSV tables into Sheets/canvas. {RECOVERY}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -510,6 +519,12 @@ fn get_tool_definitions() -> serde_json::Value {
                     "mode": {
                         "type": "string",
                         "enum": ["set", "append", "paste"]
+                    },
+                    "no_wait": {
+                        "type": "boolean"
+                    },
+                    "wait_ms": {
+                        "type": "integer"
                     },
                     "tab_id": {
                         "type": "string"
@@ -586,7 +601,8 @@ fn handle_mcp_request(
                     "serverInfo": {
                         "name": "anarc",
                         "version": env!("CARGO_PKG_VERSION")
-                    }
+                    },
+                    "instructions": "Anarc browser control. Tips: (1) For Google Sheets/canvas grids, focus A1 with `set css=#t-name-box \"A1\" enter` and populate the whole table in 1 call via `do` `paste \"Col1\\tCol2\\nVal1\\tVal2\"` or `set_value` (`mode=\"paste\"`) — never fill cell-by-cell with Tab/type. (2) Use `read(mode=\"cards\")` for flight/search result lists. (3) Use `do` `split <url>` to open a second tab side-by-side in the active workspace."
                 }
             }))
         }
@@ -666,14 +682,17 @@ fn handle_mcp_request(
                 "see" => serde_json::json!({
                     "cmd": "see",
                     "tab_id": tab_id,
-                    "scope": arguments.get("scope").and_then(|v| v.as_str())
+                    "scope": arguments.get("scope").and_then(|v| v.as_str()),
+                    "max_name_len": arguments.get("max_name_len").and_then(|v| v.as_u64()).map(|u| u as usize)
                 }),
                 "do" => {
                     let ops = arguments.get("ops").and_then(|v| v.as_str()).unwrap_or("");
+                    let delay_ms = arguments.get("delay_ms").and_then(|v| v.as_u64());
                     serde_json::json!({
                         "cmd": "do",
                         "tab_id": tab_id,
-                        "ops": ops
+                        "ops": ops,
+                        "delay_ms": delay_ms
                     })
                 }
                 "eval" | "evaluate" | "evaluate_script" => {
@@ -710,12 +729,20 @@ fn handle_mcp_request(
                     let mode = arguments
                         .get("mode")
                         .and_then(|v| v.as_str());
+                    let no_wait = arguments
+                        .get("no_wait")
+                        .and_then(|v| v.as_bool());
+                    let wait_ms = arguments
+                        .get("wait_ms")
+                        .and_then(|v| v.as_u64());
                     serde_json::json!({
                         "cmd": "set_value",
                         "tab_id": tab_id,
                         "target": target,
                         "value": value,
-                        "mode": mode
+                        "mode": mode,
+                        "no_wait": no_wait,
+                        "wait_ms": wait_ms
                     })
                 }
                 "wait_for" => {
@@ -886,10 +913,14 @@ fn handle_mcp_request(
                 }
             };
 
+            let inline_shot = arguments
+                .get("inline")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let result = send_socket_request(socket, &socket_req, true);
             let content = if tool_name == "shot" {
                 result.and_then(|reply| {
-                    if shot_as_path {
+                    if shot_as_path && !inline_shot {
                         save_screenshot(&reply).map(|text| serde_json::json!({"type": "text", "text": text}))
                     } else {
                         let image = screenshot_data(&reply)?;
@@ -1353,7 +1384,21 @@ fn main() {
     }
 
     if cmd == "stats" {
-        match read_stats() {
+        let reset = filtered_args.iter().any(|a| a == "--reset");
+        let session = filtered_args.iter().any(|a| a == "--session");
+        if reset {
+            match reset_session_stats() {
+                Ok(msg) => println!("{msg}"),
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            }
+            if !session {
+                return;
+            }
+        }
+        match read_stats_filtered(session) {
             Ok(stats) => println!("{stats}"),
             Err(error) => {
                 eprintln!("{error}");
@@ -1657,16 +1702,48 @@ fn save_screenshot(reply: &str) -> Result<String, String> {
     ))
 }
 
-fn read_stats() -> Result<String, String> {
+fn session_offset_path() -> PathBuf {
+    paths::data_dir().join("agent/session_offset")
+}
+
+fn reset_session_stats() -> Result<String, String> {
+    let dir = paths::data_dir().join("agent");
+    std::fs::create_dir_all(&dir).map_err(|_| "stats dir unavailable. use: status")?;
+    let log_len = std::fs::metadata(dir.join("log.jsonl"))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    std::fs::write(session_offset_path(), log_len.to_string())
+        .map_err(|_| "failed to write session offset. use: status")?;
+    Ok("session stats reset".into())
+}
+
+fn read_stats_filtered(session_only: bool) -> Result<String, String> {
+    use std::io::{Seek, SeekFrom};
     let dir = paths::data_dir();
-    let log = match std::fs::File::open(dir.join("agent/log.jsonl")) {
+    let mut log = match std::fs::File::open(dir.join("agent/log.jsonl")) {
         Ok(log) => log,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok("no calls recorded".into());
+            return Ok(if session_only {
+                "no calls recorded in session".into()
+            } else {
+                "no calls recorded".into()
+            });
         }
         Err(_) => return Err("stats unavailable. use: status".into()),
     };
+    if session_only
+        && let Ok(raw) = std::fs::read_to_string(session_offset_path())
+        && let Ok(offset) = raw.trim().parse::<u64>()
+    {
+        let file_len = log.metadata().map(|m| m.len()).unwrap_or(0);
+        if offset <= file_len {
+            let _ = log.seek(SeekFrom::Start(offset));
+        }
+    }
     let mut groups = std::collections::BTreeMap::<String, (Vec<f64>, usize)>::new();
+    let mut total_calls = 0usize;
+    let mut total_tokens = 0.0f64;
+    let mut total_errors = 0usize;
     for line in BufReader::new(log).lines() {
         let line = line.map_err(|_| "stats unreadable. use: status")?;
         let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else {
@@ -1682,14 +1759,26 @@ fn read_stats() -> Result<String, String> {
         let (samples, errors) = groups.entry(op.to_string()).or_default();
         samples.push(tokens);
         *errors += usize::from(!ok);
+        total_calls += 1;
+        total_tokens += tokens;
+        total_errors += usize::from(!ok);
     }
     if groups.is_empty() {
-        return Ok("no calls recorded".into());
+        return Ok(if session_only {
+            "no calls recorded in session".into()
+        } else {
+            "no calls recorded".into()
+        });
     }
-    let mut lines = vec!["op count p50_est_tokens p95_est_tokens error_rate".to_string()];
+    let mut lines = vec![if session_only {
+        "op count total_est_tokens p50_est_tokens p95_est_tokens error_rate".to_string()
+    } else {
+        "op count p50_est_tokens p95_est_tokens error_rate".to_string()
+    }];
     for (op, (mut samples, errors)) in groups {
         samples.sort_by(f64::total_cmp);
         let count = samples.len();
+        let sum: f64 = samples.iter().sum();
         let quantile = |percent: usize| {
             samples
                 .get((count * percent).div_ceil(100).saturating_sub(1))
@@ -1697,10 +1786,24 @@ fn read_stats() -> Result<String, String> {
                 .unwrap_or(0.0)
         };
         let error_rate = 100.0 * errors as f64 / count as f64;
+        if session_only {
+            lines.push(format!(
+                "{op} {count} {sum:.1} {:.1} {:.1} {error_rate:.1}%",
+                quantile(50),
+                quantile(95)
+            ));
+        } else {
+            lines.push(format!(
+                "{op} {count} {:.1} {:.1} {error_rate:.1}%",
+                quantile(50),
+                quantile(95)
+            ));
+        }
+    }
+    if session_only {
+        let total_err_rate = 100.0 * total_errors as f64 / total_calls as f64;
         lines.push(format!(
-            "{op} {count} {:.1} {:.1} {error_rate:.1}%",
-            quantile(50),
-            quantile(95)
+            "TOTAL {total_calls} {total_tokens:.1} - - {total_err_rate:.1}%"
         ));
     }
     Ok(lines.join("\n"))
@@ -1965,5 +2068,70 @@ mod tests {
         });
         let up_resp = handle_mcp_request(&up_req, &socket_path, false).unwrap();
         assert_eq!(up_resp.get("id").unwrap().as_i64(), Some(13));
+    }
+
+    #[test]
+    fn test_session_stats_and_reset() {
+        let temp_dir = std::env::temp_dir().join(format!("anarc-stats-test-{}", std::process::id()));
+        let agent_dir = temp_dir.join("agent");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        unsafe {
+            std::env::set_var("ANARC_DATA_DIR", &temp_dir);
+        }
+
+        let log_path = agent_dir.join("log.jsonl");
+        std::fs::write(
+            &log_path,
+            "{\"op\":\"see\",\"ok\":true,\"reply_bytes\":350,\"est_tokens\":100.0}\n",
+        )
+        .unwrap();
+
+        let all_stats = read_stats_filtered(false).unwrap();
+        assert!(all_stats.contains("see 1 100.0 100.0 0.0%"), "{all_stats}");
+
+        assert_eq!(reset_session_stats().unwrap(), "session stats reset");
+        assert_eq!(
+            read_stats_filtered(true).unwrap(),
+            "no calls recorded in session"
+        );
+
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        writeln!(
+            f,
+            "{{\"op\":\"do\",\"ok\":true,\"reply_bytes\":70,\"est_tokens\":20.0}}"
+        )
+        .unwrap();
+
+        let sess = read_stats_filtered(true).unwrap();
+        assert!(sess.contains("do 1 20.0 20.0 20.0 0.0%"), "{sess}");
+        assert!(sess.contains("TOTAL 1 20.0 - - 0.0%"), "{sess}");
+        assert!(!sess.contains("see "), "{sess}");
+
+        unsafe {
+            std::env::remove_var("ANARC_DATA_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_shot_inline_flag_accepted_in_schema() {
+        let tools = get_tool_definitions();
+        let shot_tool = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("shot"))
+            .unwrap();
+        assert!(
+            shot_tool
+                .pointer("/inputSchema/properties/inline/type")
+                .and_then(|v| v.as_str())
+                == Some("boolean")
+        );
     }
 }

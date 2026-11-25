@@ -16,39 +16,40 @@
     return rect.top < vh && rect.bottom > 0 && rect.left < vw && rect.right > 0;
   }
 
-  function getAccessibleName(el) {
+  function getAccessibleName(el, maxLen) {
+    maxLen = maxLen || 40;
     let name = el.getAttribute('aria-label');
-    if (name) return name.trim().slice(0, 40);
+    if (name) return name.trim().slice(0, maxLen);
 
     const labelledBy = el.getAttribute('aria-labelledby');
     if (labelledBy) {
       const labelEl = document.getElementById(labelledBy);
-      if (labelEl && labelEl.innerText) return labelEl.innerText.trim().slice(0, 40);
+      if (labelEl && labelEl.innerText) return labelEl.innerText.trim().slice(0, maxLen);
     }
 
     if (el.id) {
       const label = document.querySelector(`label[for="${el.id}"]`);
-      if (label && label.innerText) return label.innerText.trim().slice(0, 40);
+      if (label && label.innerText) return label.innerText.trim().slice(0, maxLen);
     }
     const parentLabel = el.closest ? el.closest('label') : null;
     if (parentLabel && parentLabel.innerText) {
-      return parentLabel.innerText.trim().slice(0, 40);
+      return parentLabel.innerText.trim().slice(0, maxLen);
     }
 
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) {
-      if (el.getAttribute('aria-label')) return el.getAttribute('aria-label').trim().slice(0, 40);
-      if (el.placeholder) return el.placeholder.trim().slice(0, 40);
-      if (el.getAttribute('data-placeholder')) return el.getAttribute('data-placeholder').trim().slice(0, 40);
-      if (el.value && el.type !== 'password') return el.value.trim().slice(0, 40);
+      if (el.getAttribute('aria-label')) return el.getAttribute('aria-label').trim().slice(0, maxLen);
+      if (el.placeholder) return el.placeholder.trim().slice(0, maxLen);
+      if (el.getAttribute('data-placeholder')) return el.getAttribute('data-placeholder').trim().slice(0, maxLen);
+      if (el.value && el.type !== 'password') return el.value.trim().slice(0, maxLen);
     }
 
     if (el.innerText && el.innerText.trim()) {
-      return el.innerText.trim().replace(/\s+/g, ' ').slice(0, 40);
+      return el.innerText.trim().replace(/\s+/g, ' ').slice(0, maxLen);
     }
 
-    if (el.title) return el.title.trim().slice(0, 40);
-    if (el.getAttribute('alt')) return el.getAttribute('alt').trim().slice(0, 40);
-    if (el.getAttribute('src')) return el.getAttribute('src').split('/').pop().slice(0, 40);
+    if (el.title) return el.title.trim().slice(0, maxLen);
+    if (el.getAttribute('alt')) return el.getAttribute('alt').trim().slice(0, maxLen);
+    if (el.getAttribute('src')) return el.getAttribute('src').split('/').pop().slice(0, maxLen);
 
     return '';
   }
@@ -154,8 +155,9 @@
     }
   }
 
-  window.__anarc_index = function(scope) {
+  window.__anarc_index = function(scope, maxNameLen) {
     scope = scope || 'view';
+    maxNameLen = maxNameLen || (scope === 'main' ? 120 : 40);
     const all = [];
     const elements = [];
     collectElementsWithShadow(document, elements);
@@ -170,11 +172,11 @@
       const kind = getKind(el);
       if (!kind) continue;
 
-      const name = getAccessibleName(el);
+      const name = getAccessibleName(el, maxNameLen);
       const flags = getFlags(el, kind);
       const path = getPath(el);
       const isBanner = Boolean(el.closest && el.closest('[role="banner"], [role="alert"], .cookie-banner, #cookie-banner, .banner, .toast, .alert'));
-      const isDialog = Boolean(el.closest && el.closest('dialog, [role="dialog"], [role="alertdialog"], .modal'));
+      const isDialog = Boolean(el.closest && el.closest('dialog, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [aria-modal="true"], [data-radix-popper-content-wrapper], .modal, .popover'));
 
       all.push({
         kind,
@@ -372,7 +374,15 @@
     }
 
     if (condition === 'stable') {
-      return window.__anarc_wait_stable(Math.min(timeoutMs, 2000));
+      await window.__anarc_wait_stable(Math.min(timeoutMs, 2000));
+      const elapsed = Math.round(performance.now() - start);
+      return JSON.stringify({
+        ok: true,
+        condition: 'stable',
+        elapsed_ms: elapsed,
+        url: location.href || '',
+        title: document.title || ''
+      });
     }
 
     while (true) {
@@ -464,6 +474,40 @@
         lines.push('---');
       }
       return lines.join('\n');
+    }
+
+    if (mode === 'cards' || mode === 'list') {
+      const candidates = Array.from(document.querySelectorAll('li, [role="listitem"], [role="row"], article, [data-testid*="card"], [class*="card"], [class*="result"]'))
+        .filter(isVisible);
+      const seenCards = new Set();
+      const cards = [];
+      let totalLen = 0;
+      for (const el of candidates) {
+        if (el.closest('nav, header, footer')) continue;
+        // Skip outer containers that wrap multiple other candidate cards
+        if (el.querySelector && el.querySelectorAll('li, [role="listitem"], article').length > 2) continue;
+        const rawText = (el.innerText || '').trim();
+        if (!rawText || rawText.length < 4) continue;
+        const parts = [];
+        const seenParts = new Set();
+        for (const line of rawText.split(/\n+/)) {
+          const clean = line.replace(/[ \t]+/g, ' ').trim();
+          if (!clean) continue;
+          const key = clean.toLowerCase();
+          if (!seenParts.has(key)) {
+            seenParts.add(key);
+            parts.push(clean);
+          }
+        }
+        const summary = parts.join(' · ');
+        if (!summary || seenCards.has(summary)) continue;
+        seenCards.add(summary);
+        if (totalLen + summary.length + 1 > maxChars) break;
+        cards.push(summary);
+        totalLen += summary.length + 1;
+        if (cards.length >= 80) break;
+      }
+      return cards.join('\n');
     }
 
     // Default 'text' mode: chat bubbles first when a messaging surface is

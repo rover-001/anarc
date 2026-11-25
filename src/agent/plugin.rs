@@ -33,7 +33,9 @@ fn note_error(code: ErrorCode) {
 fn action_kind_for_op(op: &super::act::ActionOp) -> ActionKind {
     match op {
         super::act::ActionOp::Click { .. }
+        | super::act::ActionOp::ForceClick { .. }
         | super::act::ActionOp::DomClick { .. }
+        | super::act::ActionOp::DblClick { .. }
         | super::act::ActionOp::SemanticClick { .. }
         | super::act::ActionOp::Hover { .. }
         | super::act::ActionOp::Focus { .. }
@@ -41,8 +43,10 @@ fn action_kind_for_op(op: &super::act::ActionOp) -> ActionKind {
         | super::act::ActionOp::XY { .. } => ActionKind::Click,
         super::act::ActionOp::ClearAndType { .. }
         | super::act::ActionOp::AppendText { .. }
+        | super::act::ActionOp::TypeActive { .. }
         | super::act::ActionOp::TypeSecret { .. }
         | super::act::ActionOp::SemanticType { .. }
+        | super::act::ActionOp::SetValue { .. }
         | super::act::ActionOp::Paste { .. }
         | super::act::ActionOp::Key { .. }
         | super::act::ActionOp::KeyDown { .. }
@@ -52,7 +56,9 @@ fn action_kind_for_op(op: &super::act::ActionOp) -> ActionKind {
         | super::act::ActionOp::Back
         | super::act::ActionOp::Fwd
         | super::act::ActionOp::Reload
-        | super::act::ActionOp::Tab { .. } => ActionKind::Navigate,
+        | super::act::ActionOp::Tab { .. }
+        | super::act::ActionOp::Space { .. }
+        | super::act::ActionOp::Split { .. } => ActionKind::Navigate,
         super::act::ActionOp::Scroll { .. }
         | super::act::ActionOp::Upload { .. }
         | super::act::ActionOp::Dialog { .. }
@@ -314,9 +320,14 @@ pub(crate) fn handle_agent_request(
         note_dsl_call(op);
     }
     let tab_only = !parsed_ops.is_empty()
-        && parsed_ops
-            .iter()
-            .all(|op| matches!(op, super::act::ActionOp::Tab { .. }));
+        && parsed_ops.iter().all(|op| {
+            matches!(
+                op,
+                super::act::ActionOp::Tab { .. }
+                    | super::act::ActionOp::Space { .. }
+                    | super::act::ActionOp::Split { .. }
+            )
+        });
     if !tab_only && let Some(tab_id) = req.target_tab_mut() {
         let raw_target = tab_id
             .clone()
@@ -331,17 +342,21 @@ pub(crate) fn handle_agent_request(
             .iter()
             .any(|s| s.tabs.iter().any(|t| t.id == raw_target))
         {
-            app.spaces()
+            let lower = raw_target.to_lowercase();
+            let matches_tab = |t: &&crate::model::Tab| {
+                t.url.contains(&raw_target) || t.title.to_lowercase().contains(&lower)
+            };
+            app.active_space()
+                .tabs
                 .iter()
-                .find_map(|s| {
-                    s.tabs
+                .find(matches_tab)
+                .or_else(|| {
+                    app.spaces()
                         .iter()
-                        .find(|t| {
-                            t.url.contains(&raw_target)
-                                || t.title.to_lowercase().contains(&raw_target.to_lowercase())
-                        })
-                        .map(|t| t.id.clone())
+                        .flat_map(|s| s.tabs.iter())
+                        .find(matches_tab)
                 })
+                .map(|t| t.id.clone())
                 .unwrap_or(raw_target)
         } else {
             raw_target
@@ -463,41 +478,62 @@ pub(crate) fn handle_agent_request(
             )));
         }
         AgentRequest::Tabs => {
-            let mut lines = Vec::new();
-            for space in app.spaces() {
-                lines.push(format!("Workspace: {} ({})", space.name, space.id));
-                for tab in &space.tabs {
-                    let active_mark = if space.active.as_deref() == Some(&tab.id) {
-                        "*"
-                    } else {
-                        " "
-                    };
-                    // Favorites and pins are one section; report one flag.
-                    let mut flags = Vec::new();
-                    if tab.is_pinned() {
-                        flags.push("pinned");
-                    }
-                    let flag_str = if flags.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" [{}]", flags.join(","))
-                    };
-                    lines.push(format!(
-                        "  [{active_mark}] {}{} \"{}\" -> {} ({})",
-                        tab.id,
-                        flag_str,
-                        tab.title,
-                        tab.url,
-                        browser_state(app, &tab.id)
-                    ));
+            let active_space = app.active_space();
+            let active_space_id = active_space.id.clone();
+            let active_tab = app.active_tab_id().to_string();
+            let mut lines = vec![format!(
+                "Active: {} (Workspace: {} ({}) [ACTIVE] · use \"tab new\" to open a tab here)",
+                active_tab, active_space.name, active_space_id
+            )];
+            for tab in &active_space.tabs {
+                let active_mark = if active_space.active.as_deref() == Some(&tab.id) {
+                    "*"
+                } else {
+                    " "
+                };
+                let mut flags = Vec::new();
+                if tab.is_pinned() {
+                    flags.push("pinned");
                 }
+                let flag_str = if flags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", flags.join(","))
+                };
+                lines.push(format!(
+                    "  [{active_mark}] {}{} \"{}\" -> {} ({})",
+                    tab.id,
+                    flag_str,
+                    tab.title,
+                    tab.url,
+                    browser_state(app, &tab.id)
+                ));
+            }
+            let others: Vec<String> = app
+                .spaces()
+                .iter()
+                .filter(|s| s.id != active_space_id)
+                .map(|s| format!("{} ({}, {} tabs)", s.name, s.id, s.tabs.len()))
+                .collect();
+            if !others.is_empty() {
+                lines.push(format!(
+                    "Other workspaces (switch with do \"space <id|name>\"): {}",
+                    others.join(", ")
+                ));
             }
             let _ = resp_tx.try_send(AgentResponse::success(lines.join("\n")));
         }
-        AgentRequest::See { tab_id, scope } => {
+        AgentRequest::See {
+            tab_id,
+            scope,
+            max_name_len,
+        } => {
             let target_tab = tab_id.unwrap_or_default();
 
-            let script = build_see_call_script(scope.as_deref().unwrap_or("view"));
+            let script = super::observe::build_see_call_script_with_len(
+                scope.as_deref().unwrap_or("view"),
+                max_name_len,
+            );
             let is_plus = scope.as_deref() == Some("+");
             let eval_rx = app.engine.evaluate(&target_tab, &script);
             let state_arc = agent_state.clone();
@@ -691,21 +727,41 @@ pub(crate) fn handle_agent_request(
                 let _ = resp_tx.try_send(AgentResponse::err("index missing. use: see"));
             }
         }
-        AgentRequest::Do { tab_id, .. } => {
+        AgentRequest::Do {
+            tab_id,
+            delay_ms,
+            ..
+        } => {
             let target_tab = tab_id.unwrap_or_else(|| app.active_tab_id().to_string());
-            super::act::execute_dsl(app, &target_tab, &parsed_ops, resp_tx);
+            super::act::execute_dsl(app, &target_tab, &parsed_ops, delay_ms, resp_tx);
         }
         AgentRequest::Shot {
             tab_id,
             target: _,
-            scale: _,
+            scale,
         } => {
             let target_tab = tab_id.unwrap_or_default();
+            let mut params = serde_json::json!({"format": "png"});
+            if let Some(s) = scale.filter(|&s| (0.1..1.0).contains(&s))
+                && let Ok(Ok(dim_json)) = app
+                    .engine
+                    .evaluate(&target_tab, "[window.innerWidth, window.innerHeight]")
+                    .recv_blocking()
+                && let Ok([w, h]) = serde_json::from_str::<[f64; 2]>(&dim_json)
+            {
+                params["clip"] = serde_json::json!({
+                    "x": 0,
+                    "y": 0,
+                    "width": w.max(1.0),
+                    "height": h.max(1.0),
+                    "scale": s
+                });
+            }
 
             let devtools_rx = app.engine.devtools(
                 &target_tab,
                 "Page.captureScreenshot",
-                Some("{\"format\":\"png\"}"),
+                Some(&params.to_string()),
             );
             std::thread::Builder::new()
                 .name("anarc-shot-worker".into())
@@ -766,6 +822,8 @@ pub(crate) fn handle_agent_request(
             target,
             value,
             mode,
+            no_wait,
+            wait_ms,
         } => {
             let target_tab = tab_id.unwrap_or_else(|| app.active_tab_id().to_string());
             match super::act::set_element_value(
@@ -774,6 +832,8 @@ pub(crate) fn handle_agent_request(
                 target.as_deref(),
                 &value,
                 mode.as_deref(),
+                no_wait.unwrap_or(false),
+                wait_ms,
             ) {
                 Ok(msg) => {
                     let _ = resp_tx.try_send(AgentResponse::success(msg));
@@ -813,9 +873,14 @@ pub(crate) fn handle_agent_request(
                                         .get("elapsed_ms")
                                         .and_then(|v| v.as_u64())
                                         .unwrap_or(0);
-                                    let _ = resp_tx.try_send(AgentResponse::success(format!(
-                                        "ok wait_for {condition} ({elapsed}ms)"
-                                    )));
+                                    let url = val.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                                    let title = val.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                                    let msg = if url.is_empty() {
+                                        format!("ok wait_for {condition} ({elapsed}ms)")
+                                    } else {
+                                        format!("ok wait_for {condition} ({elapsed}ms) · {url} \"{title}\"")
+                                    };
+                                    let _ = resp_tx.try_send(AgentResponse::success(msg));
                                     return;
                                 } else if let Some(err) =
                                     val.get("error").and_then(|v| v.as_str())

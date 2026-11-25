@@ -553,6 +553,15 @@ cef::wrap_app! {
                 let name = CefString::from("user-agent");
                 let value = CefString::from(default_user_agent());
                 command_line.append_switch_with_value(Some(&name), Some(&value));
+                // CEF OSR can default to pointer: none / hover: none when no
+                // native pointer device is attached to the offscreen host,
+                // breaking sites that gate hover/peek UI on (hover: hover)
+                // and (pointer: fine) (e.g. ChatGPT's desktop sidebar).
+                let name = CefString::from("blink-settings");
+                let value = CefString::from(
+                    "primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2",
+                );
+                command_line.append_switch_with_value(Some(&name), Some(&value));
                 let has_gpu = has_hardware_gpu();
                 for name in [
                     "disable-background-networking",

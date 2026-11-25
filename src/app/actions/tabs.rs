@@ -570,7 +570,7 @@ impl Anarc {
         }
         self.save_state();
     }
-    pub(in crate::app) fn split_tabs(&mut self, first: &str, second: &str) -> bool {
+    pub(crate) fn split_tabs(&mut self, first: &str, second: &str) -> bool {
         if !crate::plugins::split_view_enabled() {
             return false;
         }

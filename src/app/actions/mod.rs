@@ -740,7 +740,7 @@ impl Anarc {
                 .all(|id| space.tabs.iter().any(|tab| &tab.id == id)))
         .then(|| pair.clone())
     }
-    pub(in crate::app) fn split_active_with_next(&mut self) {
+    pub(crate) fn split_active_with_next(&mut self) {
         let space = self.active_space_mut();
         let Some(first) = space.active.clone() else {
             return;
@@ -803,7 +803,7 @@ impl Anarc {
             self.save_state();
         }
     }
-    pub(in crate::app) fn exit_split(&mut self) {
+    pub(crate) fn exit_split(&mut self) {
         if self.active_space().split.is_some() {
             self.active_space_mut().split = None;
             self.focused_pane = 0;

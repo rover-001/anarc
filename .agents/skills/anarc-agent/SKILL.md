@@ -39,23 +39,28 @@ Compact index of what can be acted on.
 Execute batch actions using the `do` DSL.
 - **Args**: `ops` (semicolon or newline separated)
 - **Syntax**:
-  - `b1` / `click b1` / `click css=button` / `click aria="Send"` : Click element
+  - `b1` / `click b1` / `click "Add a new color"` / `click xy X Y` / `click! b1` / `click css=button` : Click element (`click!` skips occlusion check)
+  - `dblclick @b1` / `dblclick xy X Y` / `dblclick "Text"` : Double-click element or coordinates
+  - `set @i10 "750"; set @i8 "80" enter` : Batch `set_value` inside `do` with optional trailing `enter`
   - `clickjs b1` / `domclick b1` : Direct DOM `.click()` via CDP for React/SPA links that swallow coordinate clicks
   - `i1="text"` / `fill i1 text` / `fill css=input text` : Focus, clear, and type into input
   - `i1+"text"` / `type append i1 text` / `type i1 text append=true` : Append text without wiping rich tokens (Slate.js/Draft.js)
+  - `type "text"` / `paste "text"` : Type or paste directly into `document.activeElement` (for `<canvas>` apps like Google Sheets; for tables, focus `A1` with `set css=#t-name-box "A1" enter` and `paste "Col1\\tCol2\\nVal1\\tVal2"` in 1 call — never fill cell-by-cell with `Tab`/`Enter`)
   - `type i1 text` : Type into input/contenteditable emitting standard `insertText` events
   - `i2=@secret:github` : Inject secret from local vault (value never enters context)
   - `b:"Sign in"` : Semantic selector resolved at runtime
-  - `key Enter` / `key "Ctrl+v"` / `key Shift+Tab` : Dispatch keypress or keyboard chord
+  - `key Enter` / `key "Ctrl+v"` / `key Control+v` / `key Shift+Tab` : Dispatch keypress or keyboard chord (`Ctrl+`/`Control+`/`Alt+`/`Shift+`/`Cmd+`)
   - `keydown Shift; key ArrowLeft; keyup Shift` : Hold and release modifiers
   - `navigate https://example.com` / `go https://example.com` | `back` | `fwd` | `reload`
   - `scroll down` | `scroll up` | `scroll top` | `scroll end`
-  - `hover b1` | `focus i1` | `drag b1 b2` | `xy X Y` (canvas fallback)
+  - `hover b1` | `focus i1` | `drag b1 b2` / `drag x1 y1 x2 y2` | `xy X Y` (canvas fallback)
   - `upload [target] /path/file` : Upload file to target or page `<input type=file>`
-  - `dialog ok` | `dialog cancel` | `tab new [url]` | `tab select <id|N>` | `tab close`
+  - `dialog ok` | `dialog cancel` | `tab new [url]` | `tab select <id|N>` | `tab close` (`tab new` opens in the active workspace)
+  - `space <id|name|N>` : Switch active workspace
+  - `split` | `split <url>` | `split <tab1> <tab2>` | `split off` : Open or exit split view in the active workspace
   - `tab pin [id]` / `tab unpin [id]` : Pin/unpin a tab. Favorites and pins are the same sidebar section: `tab fav`/`tab unfav` (bare `fav`/`unfav`) are aliases.
   - `submit` : Press Enter or click the nearest send button
-  - `wait idle` | `wait 500` | `wait "Results"` | `wait stable [ms]` at the end of a batch
+  - `wait idle` | `wait 500` | `wait "Results"` / `wait_for "Results"` | `wait stable [ms]` (and optional `delay_ms` on `do` for inter-op settle time)
 - **Diff replies**:
   If generation didn't change, returns minimal diff:
   ```text
@@ -78,15 +83,15 @@ Execute batch actions using the `do` DSL.
 
 ### 3. `read`
 Extract page content in structured, budgeted modes.
-- **Args**: `target` (ref, `page`, or `last`), `mode` (`text` | `table` | `links` | `outline`), `max` (character limit, default: 4000)
+- **Args**: `target` (ref, `page`, or `last`), `mode` (`text` | `table` | `links` | `outline` | `cards` | `list`), `max` (character limit, default: 4000)
 
 ### 4. `find`
 Locate up to 5 elements matching text or keyword query.
 - **Args**: `q` (search query)
 
 ### 5. `shot`
-Capture a viewport screenshot. CLI prints a PNG path. MCP returns an image, with `mcp --shot-as path` available for path output.
-- **Args**: `target` (ref or `view`), `scale` (0.1 to 1.0)
+Capture a viewport screenshot. CLI prints a PNG path. MCP returns an image, with `mcp --shot-as path` available for path output (pass `inline: true` to override and return inline image).
+- **Args**: `target` (ref or `view`), `scale` (0.1 to 1.0), `inline` (boolean)
 
 ### 6. `upload`
 Upload local files to target element or page file input without native OS dialog friction.
@@ -99,7 +104,7 @@ Execute arbitrary JavaScript in the active or target tab context and return the 
 
 ### 8. `set_value`
 Directly set text value of input, textarea, or contenteditable/rich-text element without keystroke simulation or delimiter clashing.
-- **Args**: `value` (raw text content, up to 100KB+), `target` (optional ref e.g. `i1` or CSS selector), `mode` (`set` | `append` | `paste`), `tab_id` (optional).
+- **Args**: `value` (raw text content, up to 100KB+), `target` (optional ref e.g. `i1` or CSS selector), `mode` (`set` | `append` | `paste`), `no_wait` (boolean, skip blocking eval wait), `wait_ms` (integer, max wait ms), `tab_id` (optional).
 - **Use when**: Injecting large prompts, dossiers, markdown audits, or text containing quotes and semicolons. Bypasses DSL syntax parsing and eliminates focus-loss / typing latency.
 
 ### 9. `wait_for`

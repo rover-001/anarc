@@ -446,6 +446,7 @@ pub fn parse_client_command(input: &str) -> Result<AgentRequest, &'static str> {
             AgentRequest::See {
                 tab_id: None,
                 scope,
+                max_name_len: None,
             }
         }
         "read" => {
@@ -468,6 +469,7 @@ pub fn parse_client_command(input: &str) -> Result<AgentRequest, &'static str> {
         "wait" => AgentRequest::Do {
             tab_id: None,
             ops: input.to_string(),
+            delay_ms: None,
         },
         "eval" | "evaluate" => {
             let script = input.strip_prefix(cmd).unwrap_or("").trim().to_string();
@@ -484,6 +486,8 @@ pub fn parse_client_command(input: &str) -> Result<AgentRequest, &'static str> {
                 target,
                 value: val,
                 mode: None,
+                no_wait: None,
+                wait_ms: None,
             }
         }
         "wait-for" | "wait_for" => {
@@ -515,6 +519,7 @@ mod tests {
         let request = AgentRequest::See {
             tab_id: None,
             scope: None,
+            max_name_len: None,
         };
         let pending = || {
             let mut response = AgentResponse::err("tab not ready, retry in 1s");

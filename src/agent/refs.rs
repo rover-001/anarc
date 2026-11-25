@@ -90,6 +90,7 @@ pub struct RefRegistry {
     pub current_elements: HashMap<String, ElementRef>,
     pub previous_elements: HashMap<String, ElementRef>,
     pub ref_by_fingerprint: HashMap<String, String>,
+    pub ref_by_path: HashMap<String, String>,
     pub last_url: String,
     /// Cursor for `see +` pagination into the last full index.
     pub see_plus_offset: usize,
@@ -116,6 +117,7 @@ impl RefRegistry {
             current_elements: HashMap::new(),
             previous_elements: HashMap::new(),
             ref_by_fingerprint: HashMap::new(),
+            ref_by_path: HashMap::new(),
             last_url: String::new(),
             see_plus_offset: 0,
             next_index_by_kind: HashMap::new(),
@@ -134,6 +136,7 @@ impl RefRegistry {
             generation_changed = true;
             self.next_index_by_kind.clear();
             self.ref_by_fingerprint.clear();
+            self.ref_by_path.clear();
             self.see_plus_offset = 0;
         }
         self.last_url = clean_url.clone();
@@ -146,13 +149,31 @@ impl RefRegistry {
             let kind_char = raw_el.kind.chars().next().unwrap_or('x');
             let fingerprint = format!("{}:{}:{}", kind_char, raw_el.name, raw_el.path);
 
-            let ref_id = if let Some(existing_id) = self.ref_by_fingerprint.get(&fingerprint) {
+            let path_key = format!("{kind_char}:{}", raw_el.path);
+            let ref_id = if let Some(existing_id) = self
+                .ref_by_fingerprint
+                .get(&fingerprint)
+                .filter(|id| !current_map.contains_key(id.as_str()))
+            {
+                existing_id.clone()
+            } else if kind_char == 'i'
+                && !raw_el.path.is_empty()
+                && let Some(existing_id) = self
+                    .ref_by_path
+                    .get(&path_key)
+                    .filter(|id| !current_map.contains_key(id.as_str()))
+            {
+                self.ref_by_fingerprint
+                    .insert(fingerprint.clone(), existing_id.clone());
                 existing_id.clone()
             } else {
                 let idx = self.next_index_by_kind.entry(kind_char).or_insert(1);
                 let id = format!("{kind_char}{idx}");
                 *idx = idx.saturating_add(1);
                 self.ref_by_fingerprint.insert(fingerprint.clone(), id.clone());
+                if kind_char == 'i' && !raw_el.path.is_empty() {
+                    self.ref_by_path.insert(path_key, id.clone());
+                }
                 id
             };
 
@@ -182,27 +203,33 @@ impl RefRegistry {
             new_elements.push(el_ref);
         }
 
-        // Calculate diff against previous elements
+        // Calculate diff against previous elements in DOM order, prioritizing
+        // newly opened dialog/popover elements so modals aren't truncated.
         let mut diff = SnapshotDiff::default();
-        for (id, cur) in &current_map {
-            if let Some(prev) = self.previous_elements.get(id) {
+        let mut added_dialog = Vec::new();
+        let mut added_normal = Vec::new();
+        for cur in &new_elements {
+            let flags_str = if cur.flags.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", cur.flags.join(" "))
+            };
+            if let Some(prev) = self.previous_elements.get(&cur.id) {
                 if prev.name != cur.name || prev.flags != cur.flags {
-                    let flags_str = if cur.flags.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" {}", cur.flags.join(" "))
-                    };
-                    diff.changed.push(format!("{id} \"{}\"{flags_str}", cur.name));
+                    diff.changed
+                        .push(format!("{} \"{}\"{flags_str}", cur.id, cur.name));
                 }
             } else {
-                let flags_str = if cur.flags.is_empty() {
-                    String::new()
+                let entry = format!("{} \"{}\"{flags_str}", cur.id, cur.name);
+                if cur.is_dialog {
+                    added_dialog.push(entry);
                 } else {
-                    format!(" {}", cur.flags.join(" "))
-                };
-                diff.added.push(format!("{id} \"{}\"{flags_str}", cur.name));
+                    added_normal.push(entry);
+                }
             }
         }
+        diff.added.extend(added_dialog);
+        diff.added.extend(added_normal);
 
         for id in self.previous_elements.keys() {
             if !current_map.contains_key(id) {
@@ -402,5 +429,86 @@ mod tests {
             elements: vec![],
         });
         assert_eq!(reg.see_plus_offset, 0);
+    }
+
+    #[test]
+    fn test_dialog_elements_prioritized_in_diff() {
+        let mut reg = RefRegistry::new();
+        reg.update_from_raw(RawIndex {
+            title: "App".into(),
+            url: "https://example.com".into(),
+            scroll_remaining: 0,
+            elements: vec![],
+        });
+        let (_, _, diff, _) = reg.update_from_raw(RawIndex {
+            title: "App".into(),
+            url: "https://example.com".into(),
+            scroll_remaining: 0,
+            elements: vec![
+                RawElement {
+                    kind: "b".into(),
+                    name: "Background".into(),
+                    flags: vec![],
+                    x: 10,
+                    y: 10,
+                    box_bounds: None,
+                    path: "button.bg".into(),
+                    is_banner: false,
+                    is_dialog: false,
+                },
+                RawElement {
+                    kind: "b".into(),
+                    name: "Add a new color".into(),
+                    flags: vec![],
+                    x: 50,
+                    y: 50,
+                    box_bounds: None,
+                    path: "div[role=dialog]>button.add".into(),
+                    is_banner: false,
+                    is_dialog: true,
+                },
+            ],
+        });
+        assert_eq!(diff.added.len(), 2);
+        assert!(diff.added[0].contains("Add a new color"), "{:?}", diff.added);
+        assert!(diff.added[1].contains("Background"), "{:?}", diff.added);
+    }
+
+    #[test]
+    fn test_input_ref_stays_stable_when_value_name_changes() {
+        let mut reg = RefRegistry::new();
+        reg.update_from_raw(RawIndex {
+            title: "Sheets".into(),
+            url: "https://docs.google.com/spreadsheets/d/1".into(),
+            scroll_remaining: 0,
+            elements: vec![RawElement {
+                kind: "i".into(),
+                name: "A1".into(),
+                flags: vec![],
+                x: 40,
+                y: 80,
+                box_bounds: None,
+                path: "input#t-name-box".into(),
+                is_banner: false,
+                is_dialog: false,
+            }],
+        });
+        let (_, els2, _, _) = reg.update_from_raw(RawIndex {
+            title: "Sheets".into(),
+            url: "https://docs.google.com/spreadsheets/d/1".into(),
+            scroll_remaining: 0,
+            elements: vec![RawElement {
+                kind: "i".into(),
+                name: "A2".into(),
+                flags: vec![],
+                x: 40,
+                y: 80,
+                box_bounds: None,
+                path: "input#t-name-box".into(),
+                is_banner: false,
+                is_dialog: false,
+            }],
+        });
+        assert_eq!(els2[0].id, "i1");
     }
 }

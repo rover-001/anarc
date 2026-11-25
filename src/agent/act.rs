@@ -37,6 +37,14 @@ pub enum TabAction {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum SplitAction {
+    WithNext,
+    WithUrl(String),
+    Pair(String, String),
+    Exit,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum WaitCondition {
     Idle,
     Stable(u64),
@@ -46,12 +54,128 @@ pub enum WaitCondition {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum DragTarget {
+    Ref(String),
+    Coords(i32, i32),
+}
+
+impl DragTarget {
+    fn into_pair(self, other: Self) -> (Self, Self) {
+        (self, other)
+    }
+}
+
+fn is_ref_id(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && !chars.as_str().is_empty()
+        && chars.all(|c| c.is_ascii_digit())
+}
+
+fn normalize_ref_token(s: &str) -> &str {
+    if let Some(rest) = s.strip_prefix('@')
+        && is_ref_id(rest)
+    {
+        return rest;
+    }
+    s
+}
+
+fn is_file_path_arg(arg: &str) -> bool {
+    if arg.starts_with('/')
+        || arg.starts_with("./")
+        || arg.starts_with("../")
+        || arg.starts_with('~')
+    {
+        return true;
+    }
+    let bytes = arg.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        return true;
+    }
+    !is_ref_id(normalize_ref_token(arg))
+        && !arg.starts_with("css=")
+        && !arg.starts_with("css:")
+        && !arg.starts_with("aria=")
+        && !arg.starts_with("aria:")
+        && std::path::Path::new(arg).exists()
+}
+
+fn split_shell_args(input: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut in_backtick = false;
+    let mut escaped = false;
+    let mut has_token = false;
+
+    for ch in input.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            has_token = true;
+            continue;
+        }
+        if ch == '\\' && !in_single {
+            escaped = true;
+            has_token = true;
+            continue;
+        }
+        if ch == '"' && !in_single && !in_backtick {
+            in_double = !in_double;
+            has_token = true;
+            continue;
+        }
+        if ch == '\'' && !in_double && !in_backtick {
+            in_single = !in_single;
+            has_token = true;
+            continue;
+        }
+        if ch == '`' && !in_single && !in_double {
+            in_backtick = !in_backtick;
+            has_token = true;
+            continue;
+        }
+        if ch.is_whitespace() && !in_single && !in_double && !in_backtick {
+            if has_token {
+                args.push(std::mem::take(&mut current));
+                has_token = false;
+            }
+        } else {
+            current.push(ch);
+            has_token = true;
+        }
+    }
+    if has_token {
+        args.push(current);
+    }
+    args
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum DblClickTarget {
+    Target(String),
+    Coords(i32, i32),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum ActionOp {
     Click {
         ref_id: String,
     },
+    ForceClick {
+        ref_id: String,
+    },
     DomClick {
         ref_id: String,
+    },
+    DblClick {
+        target: DblClickTarget,
     },
     SemanticClick {
         kind: char,
@@ -65,6 +189,9 @@ pub enum ActionOp {
         ref_id: String,
         text: String,
     },
+    TypeActive {
+        text: String,
+    },
     TypeSecret {
         ref_id: String,
         secret_name: String,
@@ -73,6 +200,11 @@ pub enum ActionOp {
         kind: char,
         label: String,
         text: String,
+    },
+    SetValue {
+        target: String,
+        value: String,
+        enter: bool,
     },
     Paste {
         ref_id: Option<String>,
@@ -104,8 +236,8 @@ pub enum ActionOp {
         ref_id: String,
     },
     Drag {
-        from_ref: String,
-        to_ref: String,
+        from: DragTarget,
+        to: DragTarget,
     },
     XY {
         x: i32,
@@ -120,6 +252,12 @@ pub enum ActionOp {
     },
     Tab {
         action: TabAction,
+    },
+    Space {
+        target: String,
+    },
+    Split {
+        action: SplitAction,
     },
     Wait {
         condition: WaitCondition,
@@ -379,27 +517,89 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
 
     // Hover
     if let Some(stripped) = s.strip_prefix("hover ") {
-        let r = stripped.trim().to_string();
+        let r = normalize_ref_token(unquote(stripped.trim()).trim()).to_string();
         return Ok(ActionOp::Hover { ref_id: r });
     }
 
     // Focus
     if let Some(stripped) = s.strip_prefix("focus ") {
-        let r = stripped.trim().to_string();
+        let r = normalize_ref_token(unquote(stripped.trim()).trim()).to_string();
         return Ok(ActionOp::Focus { ref_id: r });
     }
 
-    // Drag: "drag b1 b2"
-    if let Some(stripped) = s.strip_prefix("drag ") {
-        let parts: Vec<&str> = stripped.split_whitespace().collect();
-        let from = parts.first().copied().unwrap_or("").to_string();
-        let to = parts.get(1).copied().unwrap_or("").to_string();
-        if from.is_empty() || to.is_empty() {
-            return Err("missing drag refs. use: see".into());
+    // Double-click: "dblclick @b1", "dblclick xy 100 200", "dblclick 100 200", "dblclick \"Text\""
+    if let Some(stripped) = s
+        .strip_prefix("dblclick ")
+        .or_else(|| (s == "dblclick").then_some(""))
+    {
+        let rest = stripped.trim();
+        if rest.is_empty() {
+            return Err("missing dblclick target. use: do \"dblclick @b1\"".into());
         }
+        if let Some(xy_rest) = rest.strip_prefix("xy ") {
+            let parts: Vec<&str> = xy_rest.split_whitespace().collect();
+            if let (Some(Ok(x)), Some(Ok(y))) = (
+                parts.first().map(|v| v.parse::<i32>()),
+                parts.get(1).map(|v| v.parse::<i32>()),
+            ) {
+                return Ok(ActionOp::DblClick {
+                    target: DblClickTarget::Coords(x, y),
+                });
+            }
+            return Err("invalid dblclick xy coords. use: do \"dblclick xy 100 200\"".into());
+        }
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        if parts.len() == 2
+            && let (Ok(x), Ok(y)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>())
+        {
+            return Ok(ActionOp::DblClick {
+                target: DblClickTarget::Coords(x, y),
+            });
+        }
+        let target = normalize_ref_token(unquote(rest).trim()).to_string();
+        return Ok(ActionOp::DblClick {
+            target: DblClickTarget::Target(target),
+        });
+    }
+
+    // Drag: "drag b1 b2", "drag x1 y1 x2 y2", "drag xy x1 y1 x2 y2", "drag b1 x2 y2", "drag x1 y1 b2"
+    if let Some(stripped) = s.strip_prefix("drag ") {
+        let rest = stripped.trim().strip_prefix("xy ").unwrap_or(stripped.trim());
+        let args = split_shell_args(rest);
+        let drag = match args.as_slice() {
+            [a, b] => DragTarget::Ref(normalize_ref_token(a).to_string())
+                .into_pair(DragTarget::Ref(normalize_ref_token(b).to_string())),
+            [a, b, c] => {
+                if let (Ok(x2), Ok(y2)) = (b.parse::<i32>(), c.parse::<i32>()) {
+                    (
+                        DragTarget::Ref(normalize_ref_token(a).to_string()),
+                        DragTarget::Coords(x2, y2),
+                    )
+                } else if let (Ok(x1), Ok(y1)) = (a.parse::<i32>(), b.parse::<i32>()) {
+                    (
+                        DragTarget::Coords(x1, y1),
+                        DragTarget::Ref(normalize_ref_token(c).to_string()),
+                    )
+                } else {
+                    return Err("invalid drag arguments. use: do \"drag b1 b2\" or \"drag 10 20 30 40\"".into());
+                }
+            }
+            [a, b, c, d] => {
+                let (Ok(x1), Ok(y1), Ok(x2), Ok(y2)) = (
+                    a.parse::<i32>(),
+                    b.parse::<i32>(),
+                    c.parse::<i32>(),
+                    d.parse::<i32>(),
+                ) else {
+                    return Err("invalid drag coordinates. use: do \"drag 10 20 30 40\"".into());
+                };
+                (DragTarget::Coords(x1, y1), DragTarget::Coords(x2, y2))
+            }
+            _ => return Err("missing drag refs. use: see".into()),
+        };
         return Ok(ActionOp::Drag {
-            from_ref: from,
-            to_ref: to,
+            from: drag.0,
+            to: drag.1,
         });
     }
 
@@ -464,29 +664,27 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
 
     // Upload: "up ref /path/file...", "upload ref /path/file...", "upload /path/file..."
     if let Some(stripped) = s.strip_prefix("upload ").or_else(|| s.strip_prefix("up ")) {
-        let parts: Vec<&str> = stripped.split_whitespace().collect();
-        let first = match parts.first() {
-            Some(first) => *first,
+        let args = split_shell_args(stripped);
+        let first = match args.first() {
+            Some(first) => first.as_str(),
             None => {
                 return Err("missing upload ref and path. use: do \"upload i1 /path/file\"".into());
             }
         };
-        let (r, raw_paths) = if first.starts_with('/')
-            || first.starts_with("./")
-            || first.starts_with('~')
-            || std::path::Path::new(first).exists()
-        {
-            (String::new(), &parts[..])
+        let (r, raw_paths) = if is_file_path_arg(first) {
+            (String::new(), &args[..])
         } else {
-            (first.to_string(), parts.get(1..).unwrap_or(&[]))
+            (
+                normalize_ref_token(first).to_string(),
+                args.get(1..).unwrap_or(&[]),
+            )
         };
         if raw_paths.is_empty() {
             return Err("missing upload file path. use: do \"upload i1 /path/file\"".into());
         }
         let mut file_paths = Vec::new();
-        for &raw_path in raw_paths {
-            let unq = unquote(raw_path);
-            let expanded = expand_file_arg(&unq);
+        for raw_path in raw_paths {
+            let expanded = expand_file_arg(raw_path);
             file_paths.extend(expanded);
         }
         if file_paths.is_empty() {
@@ -646,8 +844,48 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         });
     }
 
-    // Wait: "wait idle", "wait 500", "wait stream", "wait stream 15000", "wait text-quiescent 1000", "wait \"Text\""
-    if let Some(stripped) = s.strip_prefix("wait ") {
+    // Space: "space <id|name|index>"
+    if let Some(stripped) = s
+        .strip_prefix("space ")
+        .or_else(|| (s == "space").then_some(""))
+    {
+        let target = unquote(stripped.trim()).trim().to_string();
+        if target.is_empty() {
+            return Err("missing space name or id. use: do \"space <name>\"".into());
+        }
+        return Ok(ActionOp::Space { target });
+    }
+
+    // Split: "split", "split off", "split <url>", "split <tab1> <tab2>"
+    if s == "split" {
+        return Ok(ActionOp::Split {
+            action: SplitAction::WithNext,
+        });
+    }
+    if let Some(stripped) = s.strip_prefix("split ") {
+        let rest = stripped.trim();
+        let action = if matches!(rest, "off" | "close" | "exit" | "none") {
+            SplitAction::Exit
+        } else {
+            let args = split_shell_args(rest);
+            match args.as_slice() {
+                [single] if single.starts_with("http://") || single.starts_with("https://") => {
+                    SplitAction::WithUrl(single.clone())
+                }
+                [a, b] => SplitAction::Pair(a.clone(), b.clone()),
+                _ => {
+                    return Err("invalid split args. use: do \"split\" or \"split <url>\"".into());
+                }
+            }
+        };
+        return Ok(ActionOp::Split { action });
+    }
+
+    // Wait: "wait idle", "wait 500", "wait stream", "wait stream 15000", "wait text-quiescent 1000", "wait \"Text\"", "wait_for \"Text\""
+    if let Some(stripped) = s
+        .strip_prefix("wait ")
+        .or_else(|| s.strip_prefix("wait_for "))
+    {
         let w = stripped.trim();
         let condition = if w == "idle" {
             WaitCondition::Idle
@@ -729,22 +967,79 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         }
     }
 
+    // Batch set_value: "set @i10 \"750\"", "set @i8 \"80\" enter"
+    if let Some(stripped) = s
+        .strip_prefix("set ")
+        .or_else(|| (s == "set").then_some(""))
+    {
+        let args = split_shell_args(stripped);
+        let (raw_target, raw_val, enter) = match args.as_slice() {
+            [single] if single.contains('=') => {
+                let (t, v) = single.split_once('=').unwrap_or(("", ""));
+                (t.trim(), v.trim().to_string(), false)
+            }
+            [target, val] => (target.as_str(), val.clone(), false),
+            [target, val, flag]
+                if flag.eq_ignore_ascii_case("enter") || flag.eq_ignore_ascii_case("commit") =>
+            {
+                (target.as_str(), val.clone(), true)
+            }
+            _ => {
+                return Err("invalid set syntax. use: do \"set @i10 \\\"750\\\"\"".into());
+            }
+        };
+        let target = normalize_ref_token(raw_target).to_string();
+        if target.is_empty() {
+            return Err("missing set target. use: do \"set @i10 \\\"750\\\"\"".into());
+        }
+        let value = if let Some(file_path) = raw_val.trim().strip_prefix("@file:") {
+            read_file_arg(file_path)?
+        } else {
+            raw_val
+        };
+        return Ok(ActionOp::SetValue {
+            target,
+            value,
+            enter,
+        });
+    }
+
     // Direct DOM click: "clickjs b1", "domclick b1". Dispatches element.click()
     // over CDP, which SPAs with synthetic event delegation do not swallow.
     if let Some(stripped) = s
         .strip_prefix("clickjs ")
         .or_else(|| s.strip_prefix("domclick "))
     {
-        let target = unquote(stripped.trim()).to_string();
+        let target = normalize_ref_token(unquote(stripped.trim()).trim()).to_string();
         if target.is_empty() {
             return Err("missing click target. use: do \"clickjs b1\"".into());
         }
         return Ok(ActionOp::DomClick { ref_id: target });
     }
 
-    // Click command: "click b1", "click css=...", "click aria=..."
+    // Force click: "click! b1", "click! \"Rename\"" (bypasses occlusion check)
+    if let Some(stripped) = s.strip_prefix("click! ") {
+        let target = normalize_ref_token(unquote(stripped.trim()).trim()).to_string();
+        if target.is_empty() {
+            return Err("missing click target. use: do \"click! b1\"".into());
+        }
+        return Ok(ActionOp::ForceClick { ref_id: target });
+    }
+
+    // Click command: "click b1", "click xy 100 200", "click css=...", "click aria=...", "click \"Add a new color\""
     if let Some(stripped) = s.strip_prefix("click ") {
-        let target = unquote(stripped.trim()).to_string();
+        let rest = stripped.trim();
+        if let Some(xy_rest) = rest.strip_prefix("xy ") {
+            let parts: Vec<&str> = xy_rest.split_whitespace().collect();
+            if let (Some(Ok(x)), Some(Ok(y))) = (
+                parts.first().map(|v| v.parse::<i32>()),
+                parts.get(1).map(|v| v.parse::<i32>()),
+            ) {
+                return Ok(ActionOp::XY { x, y });
+            }
+            return Err("invalid click xy coords. use: do \"click xy 100 200\"".into());
+        }
+        let target = normalize_ref_token(unquote(rest).trim()).to_string();
         if target.is_empty() {
             return Err("missing click target. use: do \"click b1\"".into());
         }
@@ -764,9 +1059,25 @@ fn parse_single_op(raw: &str) -> Result<ActionOp, String> {
         });
     }
 
-    // Type command: "type css=... text", "type aria=... text", "type i1 text", "type append i1 text"
+    // Type command: "type \"Rank\"" (into activeElement), "type css=... text", "type aria=... text", "type i1 text", "type append i1 text"
     if let Some(stripped) = s.strip_prefix("type ") {
         let rest = stripped.trim();
+        let is_quoted_single = ((rest.starts_with('"') && rest.ends_with('"'))
+            || (rest.starts_with('\'') && rest.ends_with('\''))
+            || (rest.starts_with('`') && rest.ends_with('`')))
+            && rest.len() >= 2;
+        if is_quoted_single && !rest.starts_with("css=") && !rest.starts_with("aria=") {
+            let args = split_shell_args(rest);
+            if args.len() == 1 {
+                return Ok(ActionOp::TypeActive {
+                    text: args.into_iter().next().unwrap_or_default(),
+                });
+            }
+        }
+        if let Some(file_path) = rest.strip_prefix("@file:") {
+            let content = read_file_arg(file_path)?;
+            return Ok(ActionOp::TypeActive { text: content });
+        }
         let (is_append, remainder) = if let Some(r) = rest.strip_prefix("append ") {
             (true, r.trim())
         } else {
@@ -916,6 +1227,7 @@ pub fn execute_dsl(
     app: &mut crate::app::Anarc,
     tab_id: &str,
     ops: &[ActionOp],
+    delay_ms: Option<u64>,
     response: async_channel::Sender<AgentResponse>,
 ) {
     let agent_state = app.engine.agent_state();
@@ -977,8 +1289,16 @@ pub fn execute_dsl(
             let _ = response.try_send(AgentResponse::err(error));
             return;
         }
-        if matches!(op, ActionOp::Tab { .. }) {
+        if matches!(
+            op,
+            ActionOp::Tab { .. } | ActionOp::Space { .. } | ActionOp::Split { .. }
+        ) {
             target = app.active_tab_id().to_owned();
+        }
+        if let Some(ms) = delay_ms.filter(|&ms| ms > 0)
+            && index + 1 < actions.len()
+        {
+            std::thread::sleep(std::time::Duration::from_millis(ms.min(5000)));
         }
     }
     let count = ops.len();
@@ -1068,11 +1388,52 @@ fn execute_single_op(
             super::playbook::record_action(ref_id);
             Ok(())
         }
+        ActionOp::ForceClick { ref_id } => {
+            let (cx, cy) = resolve_target_coords(app, ref_id, tab_id, state_lock)?;
+            click_at(app, tab_id, cx, cy, policy_config)?;
+            super::playbook::record_action(&format!("click! {ref_id}"));
+            Ok(())
+        }
+        ActionOp::TypeActive { text } => {
+            app.engine.set_focus(tab_id, true);
+            app.engine
+                .input_type(tab_id, text)
+                .recv_blocking()
+                .ok()
+                .and_then(Result::ok)
+                .ok_or("typing failed. use: see")?;
+            super::playbook::record_action(&format!("type \"{text}\""));
+            Ok(())
+        }
         ActionOp::DomClick { ref_id } => {
             let (cx, cy) = resolve_target_coords(app, ref_id, tab_id, state_lock)?;
             check_occlusion(app, tab_id, cx, cy, ref_id, state_lock)?;
             dom_click(app, tab_id, cx, cy, policy_config)?;
             super::playbook::record_action(&format!("clickjs {ref_id}"));
+            Ok(())
+        }
+        ActionOp::DblClick { target } => {
+            let (cx, cy, label) = match target {
+                DblClickTarget::Coords(x, y) => (*x, *y, format!("xy {x} {y}")),
+                DblClickTarget::Target(ref_id) => {
+                    let (x, y) = resolve_target_coords(app, ref_id, tab_id, state_lock)?;
+                    check_occlusion(app, tab_id, x, y, ref_id, state_lock)?;
+                    (x, y, ref_id.clone())
+                }
+            };
+            dblclick_at(app, tab_id, cx, cy, policy_config)?;
+            super::playbook::record_action(&format!("dblclick {label}"));
+            Ok(())
+        }
+        ActionOp::SetValue {
+            target,
+            value,
+            enter,
+        } => {
+            set_element_value(app, tab_id, Some(target), value, Some("set"), false, None)?;
+            if *enter {
+                press_key(app, tab_id, "Enter", &gpui_kit::Modifiers::default());
+            }
             Ok(())
         }
         ActionOp::ClearAndType { ref_id, text } | ActionOp::AppendText { ref_id, text } => {
@@ -1246,9 +1607,15 @@ fn execute_single_op(
             app.engine.execute_script(tab_id, &focus_script);
             Ok(())
         }
-        ActionOp::Drag { from_ref, to_ref } => {
-            let (x1, y1) = resolve_target_coords(app, from_ref, tab_id, state_lock)?;
-            let (x2, y2) = resolve_target_coords(app, to_ref, tab_id, state_lock)?;
+        ActionOp::Drag { from, to } => {
+            let (x1, y1) = match from {
+                DragTarget::Ref(r) => resolve_target_coords(app, r, tab_id, state_lock)?,
+                DragTarget::Coords(x, y) => (*x, *y),
+            };
+            let (x2, y2) = match to {
+                DragTarget::Ref(r) => resolve_target_coords(app, r, tab_id, state_lock)?,
+                DragTarget::Coords(x, y) => (*x, *y),
+            };
             check_click_policy(app, tab_id, x1, y1, policy_config)?;
             check_click_policy(app, tab_id, x2, y2, policy_config)?;
             let mods = gpui_kit::Modifiers::default();
@@ -1261,7 +1628,7 @@ fn execute_single_op(
                 1,
                 &mods,
             );
-            // Intermediate drag steps
+            // Intermediate drag steps with brief pacing for SPA pointermove/rAF handlers
             let steps = 5;
             for i in 1..=steps {
                 let cur_x = x1.saturating_add(x2.saturating_sub(x1).saturating_mul(i) / steps);
@@ -1274,6 +1641,7 @@ fn execute_single_op(
                     &mods,
                     Some(gpui_kit::MouseButton::Left),
                 );
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
             app.engine
                 .send_mouse_click(tab_id, x2, y2, cef::MouseButtonType::LEFT, true, 1, &mods);
@@ -1286,8 +1654,9 @@ fn execute_single_op(
                 click_at(app, tab_id, cx, cy, policy_config)?;
             }
             let paste_content = if let Some(t) = text {
-                crate::engine::clipboard::write_system_clipboard(t);
-                t.clone()
+                let unescaped = t.replace("\\t", "\t").replace("\\n", "\n");
+                crate::engine::clipboard::write_system_clipboard(&unescaped);
+                unescaped
             } else {
                 crate::engine::clipboard::read_system_clipboard().unwrap_or_default()
             };
@@ -1296,7 +1665,22 @@ fn execute_single_op(
                 r#"(function() {{
                     const text = {text_json};
                     const active = document.activeElement;
-                    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {{
+                    const isTableOrCanvasInput = text.includes('\t') || text.includes('\n')
+                        || (active && active.classList && (active.classList.contains('trix-offscreen') || active.classList.contains('cell-input')));
+                    let handled = false;
+                    if (isTableOrCanvasInput || !(active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'))) {{
+                        try {{
+                            const event = new ClipboardEvent('paste', {{
+                                clipboardData: new DataTransfer(),
+                                bubbles: true,
+                                cancelable: true
+                            }});
+                            event.clipboardData.setData('text/plain', text);
+                            if (active) handled = !active.dispatchEvent(event);
+                            else handled = !document.dispatchEvent(event);
+                        }} catch (_) {{}}
+                    }}
+                    if (!handled && active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {{
                         const start = active.selectionStart ?? active.value.length;
                         const end = active.selectionEnd ?? active.value.length;
                         active.setRangeText(text, start, end, 'end');
@@ -1304,17 +1688,6 @@ fn execute_single_op(
                         active.dispatchEvent(new Event('change', {{ bubbles: true }}));
                         return 'ok';
                     }}
-                    let handled = false;
-                    try {{
-                        const event = new ClipboardEvent('paste', {{
-                            clipboardData: new DataTransfer(),
-                            bubbles: true,
-                            cancelable: true
-                        }});
-                        event.clipboardData.setData('text/plain', text);
-                        if (active) handled = !active.dispatchEvent(event);
-                        else handled = !document.dispatchEvent(event);
-                    }} catch (_) {{}}
                     if (!handled) {{
                         try {{
                             document.execCommand('insertText', false, text);
@@ -1437,6 +1810,55 @@ fn execute_single_op(
                         )
                         .recv_blocking();
                 }
+            } else {
+                // Fallback for cross-origin iframes (e.g. Google Picker): pierce all
+                // frames via CDP DOM.getFlattenedDocument and set files by backendNodeId.
+                let flat_params = serde_json::json!({ "depth": -1, "pierce": true });
+                if let Ok(Ok(flat_res)) = app
+                    .engine
+                    .devtools(
+                        tab_id,
+                        "DOM.getFlattenedDocument",
+                        Some(&flat_params.to_string()),
+                    )
+                    .recv_blocking()
+                    && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&flat_res)
+                    && let Some(nodes) = parsed.get("nodes").and_then(|v| v.as_array())
+                {
+                    let backend_id = nodes.iter().find_map(|node| {
+                        let is_input = node
+                            .get("nodeName")
+                            .and_then(|v| v.as_str())
+                            .is_some_and(|n| n.eq_ignore_ascii_case("INPUT"));
+                        if !is_input {
+                            return None;
+                        }
+                        let attrs = node.get("attributes").and_then(|v| v.as_array())?;
+                        let has_file_type = attrs.chunks_exact(2).any(|pair| {
+                            pair[0].as_str() == Some("type")
+                                && pair[1].as_str().is_some_and(|v| v.eq_ignore_ascii_case("file"))
+                        });
+                        if has_file_type {
+                            node.get("backendNodeId").and_then(|v| v.as_i64())
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(backend_node_id) = backend_id {
+                        let set_files_params = serde_json::json!({
+                            "files": valid_paths,
+                            "backendNodeId": backend_node_id
+                        });
+                        let _ = app
+                            .engine
+                            .devtools(
+                                tab_id,
+                                "DOM.setFileInputFiles",
+                                Some(&set_files_params.to_string()),
+                            )
+                            .recv_blocking();
+                    }
+                }
             }
 
             // Click to trigger native file chooser if necessary (which LumenDialogHandler intercepts)
@@ -1554,6 +1976,77 @@ fn execute_single_op(
             }
             Ok(())
         }
+        ActionOp::Space { target } => {
+            let t = target.trim();
+            let space_id = if let Ok(idx) = t.parse::<usize>() {
+                idx.checked_sub(1)
+                    .and_then(|i| app.spaces().get(i))
+                    .map(|s| s.id.clone())
+            } else {
+                let lower = t.to_lowercase();
+                app.spaces()
+                    .iter()
+                    .find(|s| s.id == t || s.name.to_lowercase() == lower)
+                    .or_else(|| {
+                        app.spaces()
+                            .iter()
+                            .find(|s| s.name.to_lowercase().contains(&lower))
+                    })
+                    .map(|s| s.id.clone())
+            }
+            .ok_or_else(|| {
+                note_error(ErrorCode::NotFound);
+                format!("unknown space '{t}'. use: tabs")
+            })?;
+            app.activate_space(&space_id);
+            Ok(())
+        }
+        ActionOp::Split { action } => {
+            match action {
+                SplitAction::WithNext => {
+                    app.split_active_with_next();
+                }
+                SplitAction::Exit => {
+                    app.exit_split();
+                }
+                SplitAction::WithUrl(url) => {
+                    let first = app.active_tab_id().to_owned();
+                    app.add_tab();
+                    let second = app.active_tab_id().to_owned();
+                    app.engine.navigate(&second, url);
+                    if let Some(tab) =
+                        app.active_space_mut().tabs.iter_mut().find(|t| t.id == second)
+                    {
+                        tab.url = url.clone();
+                    }
+                    app.save_state();
+                    if !first.is_empty() && first != second {
+                        let _ = app.split_tabs(&first, &second);
+                    }
+                }
+                SplitAction::Pair(a, b) => {
+                    let first = resolve_tab_target(app, Some(a))?;
+                    let second = if b.starts_with("http://") || b.starts_with("https://") {
+                        app.add_tab();
+                        let id = app.active_tab_id().to_owned();
+                        app.engine.navigate(&id, b);
+                        if let Some(tab) =
+                            app.active_space_mut().tabs.iter_mut().find(|t| t.id == id)
+                        {
+                            tab.url = b.clone();
+                        }
+                        app.save_state();
+                        id
+                    } else {
+                        resolve_tab_target(app, Some(b))?
+                    };
+                    if !app.split_tabs(&first, &second) {
+                        return Err("split failed. use: tabs".into());
+                    }
+                }
+            }
+            Ok(())
+        }
         ActionOp::Wait { condition } => {
             match condition {
                 WaitCondition::Stable(_) | WaitCondition::Stream { .. } => {}
@@ -1561,7 +2054,14 @@ fn execute_single_op(
                     std::thread::sleep(std::time::Duration::from_millis((*ms).min(30000)))
                 }
                 WaitCondition::Idle => std::thread::sleep(std::time::Duration::from_millis(150)),
-                WaitCondition::Text(_) => std::thread::sleep(std::time::Duration::from_millis(200)),
+                WaitCondition::Text(text) => {
+                    let wait_script = format!(
+                        "{} window.__anarc_wait_for('text_appears', {}, 8000);",
+                        super::observe::build_indexer_injection_script(),
+                        serde_json::json!(text)
+                    );
+                    let _ = evaluate_action(app, tab_id, &wait_script);
+                }
             }
             Ok(())
         }
@@ -1657,6 +2157,33 @@ fn click_at(
             .ok()
             .and_then(Result::ok)
             .ok_or("click failed. use: see")?;
+    }
+    Ok(())
+}
+
+fn dblclick_at(
+    app: &crate::app::Anarc,
+    tab: &str,
+    x: i32,
+    y: i32,
+    policy: &PolicyConfig,
+) -> Result<(), String> {
+    check_click_policy(app, tab, x, y, policy)?;
+    app.engine.set_focus(tab, true);
+    for click_count in [1, 2] {
+        for kind in ["mousePressed", "mouseReleased"] {
+            let params = serde_json::json!({
+                "type": kind, "x": x, "y": y, "button": "left", "clickCount": click_count,
+            });
+            let result =
+                app.engine
+                    .devtools(tab, "Input.dispatchMouseEvent", Some(&params.to_string()));
+            result
+                .recv_blocking()
+                .ok()
+                .and_then(Result::ok)
+                .ok_or("dblclick failed. use: see")?;
+        }
     }
     Ok(())
 }
@@ -1802,10 +2329,12 @@ pub fn set_element_value(
     target: Option<&str>,
     value: &str,
     mode: Option<&str>,
+    no_wait: bool,
+    wait_ms: Option<u64>,
 ) -> Result<String, String> {
     app.engine.set_focus(tab_id, true);
     let mode_str = mode.unwrap_or("set");
-    let target_str = target.unwrap_or("").trim();
+    let target_str = normalize_ref_token(target.unwrap_or("").trim());
 
     let mut ref_coords = None;
     if !target_str.is_empty() {
@@ -1849,6 +2378,22 @@ pub fn set_element_value(
             const isSelect = targetEditable instanceof HTMLSelectElement;
             const isStandardInput = targetEditable.tagName === 'INPUT' || targetEditable.tagName === 'TEXTAREA';
             const isContentEditable = targetEditable.isContentEditable || targetEditable.getAttribute('contenteditable') === 'true' || targetEditable.getAttribute('role') === 'textbox';
+
+            if (mode === 'paste') {{
+                let pasted = false;
+                try {{
+                    const evt = new ClipboardEvent('paste', {{
+                        clipboardData: new DataTransfer(),
+                        bubbles: true,
+                        cancelable: true
+                    }});
+                    evt.clipboardData.setData('text/plain', val);
+                    pasted = !targetEditable.dispatchEvent(evt);
+                }} catch (_) {{}}
+                if (pasted || (!isSelect && !isStandardInput && !isContentEditable)) {{
+                    return JSON.stringify({{ ok: true, tag: targetEditable.tagName || 'element', chars: val.length }});
+                }}
+            }}
 
             if (isSelect) {{
                 targetEditable.value = val;
@@ -1926,7 +2471,36 @@ pub fn set_element_value(
         cy = ref_coords.map(|(_, y)| y).unwrap_or(0),
     );
 
-    let res_str = evaluate_action(app, tab_id, &script)?;
+    if no_wait || wait_ms == Some(0) {
+        app.engine.execute_script(tab_id, &script);
+        super::playbook::record_action(&format!("set_value {target_str}"));
+        return Ok(format!("set value ({} chars, no_wait)", value.len()));
+    }
+
+    let res_str = if let Some(ms) = wait_ms {
+        let eval_rx = app.engine.evaluate(tab_id, &script);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+        loop {
+            match eval_rx.try_recv() {
+                Ok(Ok(s)) => break s,
+                Ok(Err(_)) | Err(async_channel::TryRecvError::Closed) => {
+                    return Err("page unavailable. use: see".into());
+                }
+                Err(async_channel::TryRecvError::Empty) => {
+                    if std::time::Instant::now() >= deadline {
+                        super::playbook::record_action(&format!("set_value {target_str}"));
+                        return Ok(format!(
+                            "set value ({} chars, wait_ms {ms} elapsed)",
+                            value.len()
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+        }
+    } else {
+        evaluate_action(app, tab_id, &script)?
+    };
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&res_str) {
         if parsed.get("ok").and_then(|v| v.as_bool()) == Some(true) {
             let chars = parsed
@@ -2053,14 +2627,28 @@ fn live_coords_for_name(app: &crate::app::Anarc, tab_id: &str, name: &str) -> Op
         r#"(() => {{
             const name = {n};
             const all = [];
+            const sel = 'input, textarea, select, button, [contenteditable]:not([contenteditable=false]), [role=textbox], [role=button], [role=option], [role=menuitem], [role=tab], [role=radio], [role=checkbox], [role=switch], [role=listitem], a[href], [aria-label], [title]';
             const walk = root => {{
-                for (const el of root.querySelectorAll('input, textarea, select, button, [contenteditable]:not([contenteditable=false]), [role=textbox], a[href]')) all.push(el);
+                for (const el of root.querySelectorAll(sel)) all.push(el);
                 for (const host of root.querySelectorAll('*')) if (host.shadowRoot) walk(host.shadowRoot);
             }};
             walk(document);
-            const el = all.find(el =>
-                (el.getAttribute('aria-label') || el.placeholder || el.innerText || '').toLowerCase().includes(name)
-            );
+            const labelOf = el => (el.getAttribute('aria-label') || el.getAttribute('title') || el.placeholder || el.value || el.innerText || '').trim().toLowerCase();
+            const isVis = el => {{
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            }};
+            const inDialog = el => Boolean(el.closest && el.closest('dialog, [role=dialog], [role=alertdialog], [role=menu], [role=listbox], [aria-modal=true], .modal, .popover'));
+            const matches = all.filter(el => isVis(el) && labelOf(el).includes(name));
+            matches.sort((a, b) => {{
+                const aExact = labelOf(a) === name ? 1 : 0;
+                const bExact = labelOf(b) === name ? 1 : 0;
+                if (aExact !== bExact) return bExact - aExact;
+                const aDlg = inDialog(a) ? 1 : 0;
+                const bDlg = inDialog(b) ? 1 : 0;
+                return bDlg - aDlg;
+            }});
+            const el = matches.at(0);
             if (!el) return null;
             el.scrollIntoView({{ block: 'nearest', inline: 'nearest' }});
             el.focus?.();
@@ -2096,7 +2684,7 @@ fn resolve_target_coords(
     tab_id: &str,
     state_lock: &std::sync::Arc<std::sync::Mutex<super::plugin::AgentState>>,
 ) -> Result<(i32, i32), String> {
-    let target = target.trim();
+    let target = normalize_ref_token(target.trim());
     if let Some(css) = target
         .strip_prefix("css=")
         .or_else(|| target.strip_prefix("css:"))
@@ -2141,6 +2729,45 @@ fn resolve_target_coords(
         let coords_res = evaluate_action(app, tab_id, &script)?;
         let coords: Option<(i32, i32)> = serde_json::from_str(&coords_res).ok().flatten();
         return coords.ok_or_else(|| format!("element not found for aria: {label}. use: see"));
+    }
+
+    if !is_ref_id(target) {
+        let lower = target.to_lowercase();
+        if let Ok(guard) = state_lock.lock()
+            && let Some(registry) = guard.registries.get(tab_id)
+        {
+            // Prefer exact match and dialog elements first, then substring match.
+            let mut best: Option<&super::refs::ElementRef> = None;
+            let mut best_score = 0u8;
+            for el in registry.current_elements.values() {
+                let el_lower = el.name.to_lowercase();
+                let match_score = if el_lower == lower {
+                    2
+                } else if el_lower.contains(&lower) {
+                    1
+                } else {
+                    0
+                };
+                if match_score == 0 {
+                    continue;
+                }
+                let score = match_score * 2 + u8::from(el.is_dialog);
+                if score > best_score {
+                    best = Some(el);
+                    best_score = score;
+                }
+            }
+            if let Some(el) = best
+                && coords_still_valid(app, tab_id, el.center)
+            {
+                return Ok(el.center);
+            }
+        }
+        if let Some(coords) = live_coords_for_name(app, tab_id, &lower) {
+            return Ok(coords);
+        }
+        note_error(ErrorCode::NotFound);
+        return Err(format!("element not found for text: {target}. use: find"));
     }
 
     let cached = resolve_ref_coords(target, tab_id, state_lock);
@@ -2327,12 +2954,26 @@ fn check_occlusion(
     ref_id: &str,
     state_lock: &std::sync::Arc<std::sync::Mutex<super::plugin::AgentState>>,
 ) -> Result<(), String> {
-    let expected = ref_name(tab_id, ref_id, state_lock).to_lowercase();
+    let norm = normalize_ref_token(ref_id.trim());
+    let mut expected = ref_name(tab_id, norm, state_lock).to_lowercase();
+    if expected.is_empty()
+        && !is_ref_id(norm)
+        && !norm.starts_with("css=")
+        && !norm.starts_with("css:")
+        && !norm.starts_with("aria=")
+        && !norm.starts_with("aria:")
+    {
+        expected = norm.to_lowercase();
+    }
     let script = format!(
         r#"(function() {{
             const el = document.elementFromPoint({x}, {y});
             if (!el) return 'ok';
-            if (el.closest('[role="banner"], [role="alert"], .cookie-banner, .toast')) return '!banner';
+            const hit = el.closest('a[href], button, [role=button], [role=link], [role=menuitem], [role=option], input, textarea, [contenteditable]') || el;
+            const actual = ((hit.getAttribute('aria-label') || hit.getAttribute('title') || hit.innerText || hit.value || '') + '').trim().toLowerCase();
+            const wanted = {expected};
+            if (wanted && actual && (actual.includes(wanted) || wanted.includes(actual))) return 'ok';
+            if (el.closest('.cookie-banner, #cookie-banner, .toast, [data-testid="cookie-banner"]')) return '!banner';
             let overlay = false;
             for (let p = el; p && p !== document.body; p = p.parentElement) {{
                 const style = getComputedStyle(p);
@@ -2343,10 +2984,7 @@ fn check_occlusion(
                 }}
             }}
             if (!overlay) return 'ok';
-            const hit = el.closest('a[href], button, [role=button], [role=link], input, textarea, [contenteditable]') || el;
-            const actual = ((hit.getAttribute('aria-label') || hit.getAttribute('title') || hit.innerText || hit.value || '') + '').trim().toLowerCase();
             if (!actual) return 'ok';
-            const wanted = {expected};
             if (wanted && (actual.includes(wanted) || wanted.includes(actual))) return 'ok';
             return '!overlay:' + actual;
         }})()"#,
@@ -2762,6 +3400,189 @@ mod tests {
             Some(&ActionOp::Tab {
                 action: TabAction::Select("personal-tab-4".into())
             })
+        );
+    }
+
+    #[test]
+    fn test_batch_set_dblclick_drag_upload_and_text_click() {
+        let script = r##"
+            set @i10 "750";
+            set @i12 "120";
+            set @i8 "80" enter;
+            dblclick @b1;
+            dblclick xy 100 200;
+            dblclick "Edit text";
+            drag @b1 @b2;
+            drag 10 20 30 40;
+            drag xy 50 60 70 80;
+            drag @b1 30 40;
+            upload "/tmp/a.png" "/tmp/b.png";
+            click "Add a new color";
+            click "#18c3da";
+        "##;
+        let ops = parse_dsl(script).unwrap();
+        assert_eq!(
+            ops[0],
+            ActionOp::SetValue {
+                target: "i10".into(),
+                value: "750".into(),
+                enter: false
+            }
+        );
+        assert_eq!(
+            ops[1],
+            ActionOp::SetValue {
+                target: "i12".into(),
+                value: "120".into(),
+                enter: false
+            }
+        );
+        assert_eq!(
+            ops[2],
+            ActionOp::SetValue {
+                target: "i8".into(),
+                value: "80".into(),
+                enter: true
+            }
+        );
+        assert_eq!(
+            ops[3],
+            ActionOp::DblClick {
+                target: DblClickTarget::Target("b1".into())
+            }
+        );
+        assert_eq!(
+            ops[4],
+            ActionOp::DblClick {
+                target: DblClickTarget::Coords(100, 200)
+            }
+        );
+        assert_eq!(
+            ops[5],
+            ActionOp::DblClick {
+                target: DblClickTarget::Target("Edit text".into())
+            }
+        );
+        assert_eq!(
+            ops[6],
+            ActionOp::Drag {
+                from: DragTarget::Ref("b1".into()),
+                to: DragTarget::Ref("b2".into())
+            }
+        );
+        assert_eq!(
+            ops[7],
+            ActionOp::Drag {
+                from: DragTarget::Coords(10, 20),
+                to: DragTarget::Coords(30, 40)
+            }
+        );
+        assert_eq!(
+            ops[8],
+            ActionOp::Drag {
+                from: DragTarget::Coords(50, 60),
+                to: DragTarget::Coords(70, 80)
+            }
+        );
+        assert_eq!(
+            ops[9],
+            ActionOp::Drag {
+                from: DragTarget::Ref("b1".into()),
+                to: DragTarget::Coords(30, 40)
+            }
+        );
+        assert_eq!(
+            ops[10],
+            ActionOp::Upload {
+                ref_id: String::new(),
+                file_paths: vec!["/tmp/a.png".into(), "/tmp/b.png".into()]
+            }
+        );
+        assert_eq!(
+            ops[11],
+            ActionOp::Click {
+                ref_id: "Add a new color".into()
+            }
+        );
+        assert_eq!(
+            ops[12],
+            ActionOp::Click {
+                ref_id: "#18c3da".into()
+            }
+        );
+
+        let extra = parse_dsl(
+            r#"click! @i2; click xy 120 340; type "Rank"; paste "A\tB\n1\t2""#,
+        )
+        .unwrap();
+        assert_eq!(
+            extra[0],
+            ActionOp::ForceClick {
+                ref_id: "i2".into()
+            }
+        );
+        assert_eq!(extra[1], ActionOp::XY { x: 120, y: 340 });
+        assert_eq!(
+            extra[2],
+            ActionOp::TypeActive {
+                text: "Rank".into()
+            }
+        );
+        assert_eq!(
+            extra[3],
+            ActionOp::Paste {
+                ref_id: None,
+                text: Some(r"A\tB\n1\t2".into())
+            }
+        );
+
+        let ws = parse_dsl(
+            r#"space "Work"; split; split https://sheets.new; split 1 2; split off"#,
+        )
+        .unwrap();
+        assert_eq!(
+            ws[0],
+            ActionOp::Space {
+                target: "Work".into()
+            }
+        );
+        assert_eq!(
+            ws[1],
+            ActionOp::Split {
+                action: SplitAction::WithNext
+            }
+        );
+        assert_eq!(
+            ws[2],
+            ActionOp::Split {
+                action: SplitAction::WithUrl("https://sheets.new".into())
+            }
+        );
+        assert_eq!(
+            ws[3],
+            ActionOp::Split {
+                action: SplitAction::Pair("1".into(), "2".into())
+            }
+        );
+        assert_eq!(
+            ws[4],
+            ActionOp::Split {
+                action: SplitAction::Exit
+            }
+        );
+
+        let waits = parse_dsl(r#"wait 300; wait_for "Goa""#).unwrap();
+        assert_eq!(
+            waits[0],
+            ActionOp::Wait {
+                condition: WaitCondition::Millis(300)
+            }
+        );
+        assert_eq!(
+            waits[1],
+            ActionOp::Wait {
+                condition: WaitCondition::Text("Goa".into())
+            }
         );
     }
 }

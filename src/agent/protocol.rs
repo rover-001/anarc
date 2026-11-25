@@ -6,6 +6,8 @@ pub enum AgentRequest {
     See {
         tab_id: Option<String>,
         scope: Option<String>,
+        #[serde(default)]
+        max_name_len: Option<usize>,
     },
     Read {
         tab_id: Option<String>,
@@ -22,6 +24,8 @@ pub enum AgentRequest {
     Do {
         tab_id: Option<String>,
         ops: String,
+        #[serde(default)]
+        delay_ms: Option<u64>,
     },
     Shot {
         tab_id: Option<String>,
@@ -37,6 +41,10 @@ pub enum AgentRequest {
         target: Option<String>,
         value: String,
         mode: Option<String>,
+        #[serde(default)]
+        no_wait: Option<bool>,
+        #[serde(default)]
+        wait_ms: Option<u64>,
     },
     WaitFor {
         tab_id: Option<String>,
