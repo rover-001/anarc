@@ -592,10 +592,7 @@ cef::wrap_download_image_callback! {
                 return;
             };
 
-            let mut display_buffer = img_buffer.clone();
-            rgba_to_bgra_in_place(&mut display_buffer);
-            let frame = image::Frame::new(display_buffer);
-            let render_image = Arc::new(RenderImage::new(smallvec::smallvec![frame]));
+            let render_image = render_image_from_rgba(img_buffer.clone());
             if let Ok(mut state) = self.shared.lock() {
                 let img_url_string = image_url.map(|s| s.to_string());
                 let target_host = self
@@ -852,10 +849,7 @@ cef::wrap_display_handler! {
                             if let Some(ref host) = target_host {
                                 save_favicon_to_disk(host, &rgba);
                             }
-                            let mut display_buffer = rgba;
-                            rgba_to_bgra_in_place(&mut display_buffer);
-                            let frame = image::Frame::new(display_buffer);
-                            let render_image = Arc::new(RenderImage::new(smallvec::smallvec![frame]));
+                            let render_image = render_image_from_rgba(rgba);
                             if let Ok(mut state) = self.shared.lock() {
                                 state.favicon = Some(render_image);
                                 state.favicon_host = target_host;

@@ -93,8 +93,7 @@ impl Engine {
                 .unwrap_or_else(|| exe_dir.to_path_buf())
         } else if let Ok(path) = std::env::var("PATH") {
             let sep = if cfg!(windows) { ';' } else { ':' };
-            path
-                .split(sep)
+            path.split(sep)
                 .map(std::path::PathBuf::from)
                 .find(|p| p.join("resources.pak").exists())
                 .unwrap_or_else(|| exe_dir.to_path_buf())
@@ -210,8 +209,14 @@ impl Engine {
                     .ok()
                     .map(|guard| guard.space_id.clone())
                     .unwrap_or_default();
-                self.browsers
-                    .insert(id.clone(), BrowserEntry { browser, state, space_id });
+                self.browsers.insert(
+                    id.clone(),
+                    BrowserEntry {
+                        browser,
+                        state,
+                        space_id,
+                    },
+                );
                 self.lifecycle.opened(&id, Instant::now());
                 changed = true;
             }

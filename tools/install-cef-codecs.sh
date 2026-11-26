@@ -19,7 +19,23 @@ URL="https://github.com/tobagin/karere/releases/download/${RELEASE_TAG}/$(printf
 # Offline / mirrored installs: CEF_ARCHIVE_URL=file:///path/to/archive.zip
 URL="${CEF_ARCHIVE_URL:-$URL}"
 DEST="${CEF_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/anarc-cef}"
+STAMP_FILE="$DEST/.cef-codecs-stamp"
+EXPECTED_STAMP="${CEF_VERSION}:${SHA256}"
 WORK="${TMPDIR:-/tmp}/anarc-cef-codecs.$$"
+
+is_installed() {
+    [ -f "$DEST/libcef.so" ] && [ -f "$STAMP_FILE" ] && [ "$(cat "$STAMP_FILE" 2>/dev/null || true)" = "$EXPECTED_STAMP" ]
+}
+
+if [ "${1:-}" = "--check" ]; then
+    is_installed
+    exit $?
+fi
+
+if [ "${FORCE_CEF_INSTALL:-0}" != "1" ] && is_installed; then
+    echo "==> Codec-enabled CEF $CEF_VERSION already installed in $DEST; reusing."
+    exit 0
+fi
 
 [ "$(uname -s)" = Linux ] || { echo "error: this script supports Linux only" >&2; exit 1; }
 case "$(uname -m)" in
@@ -64,6 +80,7 @@ done
 cp -a "$SRC/Resources/locales" "$DEST/locales.tmp"
 rm -rf "$DEST/locales"
 mv -f "$DEST/locales.tmp" "$DEST/locales"
+printf '%s\n' "$EXPECTED_STAMP" > "$STAMP_FILE"
 
 echo "==> Done. Restart Anarc to load the new libcef.so."
 echo "    Original runtime backed up at $BACKUP"

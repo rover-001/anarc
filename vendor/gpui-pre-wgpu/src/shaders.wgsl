@@ -1293,10 +1293,27 @@ fn vs_poly_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
 
 @fragment
 fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
-    let sample = textureSample(t_sprite, s_sprite, input.tile_position);
+    let dx = dpdx(input.tile_position);
+    let dy = dpdy(input.tile_position);
+    let tex_size = vec2<f32>(textureDimensions(t_sprite, 0));
+    let footprint = max(length(dx * tex_size), length(dy * tex_size));
+    var sample = textureSample(t_sprite, s_sprite, input.tile_position);
     // Alpha clip after using the derivatives.
     if (any(input.clip_distances < vec4<f32>(0.0))) {
         return vec4<f32>(0.0);
+    }
+
+    if (footprint > 1.25) {
+        // 4-tap rotated-grid supersampling for minified sprites so downscaled
+        // favicons and logos do not alias against a single bilinear tap.
+        let o1 = dx * 0.375 + dy * 0.125;
+        let o2 = -dx * 0.125 + dy * 0.375;
+        sample = 0.25 * (
+            textureSampleLevel(t_sprite, s_sprite, input.tile_position + o1, 0.0) +
+            textureSampleLevel(t_sprite, s_sprite, input.tile_position - o1, 0.0) +
+            textureSampleLevel(t_sprite, s_sprite, input.tile_position + o2, 0.0) +
+            textureSampleLevel(t_sprite, s_sprite, input.tile_position - o2, 0.0)
+        );
     }
 
     let sprite = load_poly_sprite(input.sprite_id);

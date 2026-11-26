@@ -1,7 +1,7 @@
 ---
 type: decision
 title: "Consolidated: UI System & Theme"
-timestamp: 2026-11-25T15:24:16.140673017+00:00
+timestamp: 2026-11-26T04:14:16.293374138+00:00
 tags: [consolidated, "ui-system-&-theme"]
 ---
 
@@ -11,6 +11,9 @@ Consolidated architectural decisions, system invariants, and implementation patt
 
 ## Core System Decisions & Invariants
 
+- **Modularize shield, plugin distribution/wasm_host, context_menus/sidebar, and agent act parse/exec**: Split 7 monolithic files (>870 lines each) into focused submodules with shared helpers and zero behavioral/UI changes: src/shield/, src/plugin/distribution/, src/plugin/wasm_host/, src/app/render/context_menus/, src/app/render/sidebar/, src/agent/act/parse/, src/agent/act/exec/.
+- **Plugins settings page uses 4-column grid layout**: Updated src/ui/plugin_manager.rs to render plugin cards in a 4-column grid (.grid().grid_cols(4).gap_3()) with card headers (name, kind, version, toggle/Required badge), wrapped text, and bottom action buttons (Open/Remove) while preserving all existing click handlers and debug selectors.
+- **Smooth favicon and logo rendering via RGSS minification and 48px Triangle pre-downscale**: Fixed aliased/overly-sharp favicons and Anarc logo caused by single-tap bilinear sampling of un-mipmapped atlas textures during heavy downscaling (96px->20px logo, 128-512px->14px favicons) and Lanczos3 ringing. Added 4-tap rotated-grid supersampling (RGSS) in fs_poly_sprite (vendor/gpui-pre-wgpu/src/shaders.wgsl) when texel footprint > 1.25, downscaled anarc_logo to 48x48 with FilterType::Triangle in src/ui/visual.rs, and unified favicon RenderImage creation via render_image_from_rgba in src/engine/mod.rs capping uploaded favicons at 48x48 with Triangle filtering.
 - **Automatic YouTube Picture-in-Picture (PiP) built-in plugin with hover controls and captions**: Added toggleable built-in plugin anarc.pip (src/pip.rs, src/plugins.rs). Injects a YouTube DOM/video bridge on page.load_end that reports playback, mute, caption toggle, and live caption text via [ANARC_CB_PIP] console messages into BrowserSharedState.pip. Switching away from a playing YouTube tab activates floating PiP (pip_tab_id), keeps the background tab in visible_ids at 384x216 so CEF OSR continues painting frames, and renders the video, live captions, and hover controls (play/pause, -10s/+10s seek, mute, CC toggle, back-to-tab, close) in src/app/render/shell/mod.rs.
 - **Default CEF runtime uses proprietary-codec build for H.264 playback**: Anarc on Linux now installs a checksum-pinned CEF 156.0.26 build with proprietary_codecs=true (H.264/AAC) via tools/install-cef-codecs.sh, called by install.sh by default (--no-codecs opts out). Stock cef-dll-sys uses the Spotify minimal build where canPlayType(avc1) is empty, breaking MP4 previews in web apps. Original runtime is backed up to ~/.local/share/anarc-cef-minimal-backup. Verified canPlayType(avc1.640028)=probably and VideoDecoder avc1.640028 supported=true, plus real MP4 playback at 1920x1080.
 - **Four-pane split grid and drag-to-pane split UX**: Space.split remains Option<SplitPair> for save compatibility; SplitPair gained optional third/fourth tab ids (serde default) forming a 2x2 grid. Lumen gained third/fourth WebViewports, split_ratio_y and split_resizing_horizontal. Ctrl+Shift+S grows 2 panes to 4; Ctrl+Alt+arrows cycles panes 0..3. Dropping a sidebar TabDrag on a browser pane splits/extends/replaces that pane. Kept-tile drag preview opens the after-slot by default so the hovered tile slides left; the bottom dashed row is transparent until hovered. User-visible Lumen strings and the Rust type were renamed to Anarc; plugin ids/config keys/MCP tool names kept for compatibility.
@@ -38,14 +41,20 @@ Consolidated architectural decisions, system invariants, and implementation patt
 - `install.sh`
 - `main.rs`
 - `src/app/render/shell/mod.rs`
+- `src/engine/mod.rs`
 - `src/main.rs`
 - `src/pip.rs`
 - `src/plugins.rs`
 - `src/ui/motion.rs`
+- `src/ui/plugin_manager.rs`
+- `src/ui/visual.rs`
 - `tools/install-cef-codecs.sh`
 
-## Consolidated Evolution History (21 items archived)
+## Consolidated Evolution History (24 items archived)
 
+- 2026-11-26 — Modularize shield, plugin distribution/wasm_host, context_menus/sidebar, and agent act parse/exec (`modularize-shield-plugin-distributionwasmhost-contextmenussidebar-and-agent-act-parseexec.md`)
+- 2026-11-26 — Plugins settings page uses 4-column grid layout (`plugins-settings-page-uses-4-column-grid-layout.md`)
+- 2026-11-26 — Smooth favicon and logo rendering via RGSS minification and 48px Triangle pre-downscale (`smooth-favicon-and-logo-rendering-via-rgss-minification-and-48px-triangle-pre-downscale.md`)
 - 2026-11-25 — Automatic YouTube Picture-in-Picture (PiP) built-in plugin with hover controls and captions (`automatic-youtube-picture-in-picture-pip-built-in-plugin-with-hover-controls-and-captions.md`)
 - 2026-11-24 — Default CEF runtime uses proprietary-codec build for H.264 playback (`default-cef-runtime-uses-proprietary-codec-build-for-h264-playback.md`)
 - 2026-11-23 — Four-pane split grid and drag-to-pane split UX (`four-pane-split-grid-and-drag-to-pane-split-ux.md`)

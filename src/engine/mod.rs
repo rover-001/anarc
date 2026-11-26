@@ -201,12 +201,31 @@ pub fn save_favicon_to_disk(host: &str, image: &image::RgbaImage) {
     }
 }
 
+/// Cap uploaded favicon dimensions to 2x display scale so large site icons
+/// (128px-512px) don't alias when minified to ~14px in the sidebar.
+const MAX_FAVICON_RENDER_PX: u32 = 48;
+
 /// GPUI uploads `RenderImage` frames as BGRA, while favicons are decoded as
 /// RGBA. Swap the red/blue channels so icons keep their true colours.
 fn rgba_to_bgra_in_place(buffer: &mut image::RgbaImage) {
     for pixel in buffer.pixels_mut() {
         pixel.0.swap(0, 2);
     }
+}
+
+pub(super) fn render_image_from_rgba(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
+    if rgba.width() > MAX_FAVICON_RENDER_PX || rgba.height() > MAX_FAVICON_RENDER_PX {
+        rgba = image::DynamicImage::ImageRgba8(rgba)
+            .resize(
+                MAX_FAVICON_RENDER_PX,
+                MAX_FAVICON_RENDER_PX,
+                image::imageops::FilterType::Triangle,
+            )
+            .to_rgba8();
+    }
+    rgba_to_bgra_in_place(&mut rgba);
+    let frame = image::Frame::new(rgba);
+    Arc::new(RenderImage::new(smallvec::smallvec![frame]))
 }
 
 pub fn load_favicon_from_disk(host: &str) -> Option<Arc<RenderImage>> {
@@ -229,10 +248,7 @@ fn read_favicon(dir: &Path, clean_host: &str) -> Option<Arc<RenderImage>> {
     };
 
     let decoded = image::open(final_path).ok()?;
-    let mut rgba = decoded.to_rgba8();
-    rgba_to_bgra_in_place(&mut rgba);
-    let frame = image::Frame::new(rgba);
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
+    Some(render_image_from_rgba(decoded.to_rgba8()))
 }
 
 pub fn favicon_url_score(url: &str) -> i32 {

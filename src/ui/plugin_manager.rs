@@ -232,7 +232,7 @@ pub(crate) fn render(
             .cmp(&b.descriptor.name.to_lowercase())
             .then_with(|| a.descriptor.id.cmp(&b.descriptor.id))
     });
-    let mut list = div().w_full().flex().flex_col().gap_2();
+    let mut list = div().w_full().grid().grid_cols(4).gap_3();
     for row in &sorted_rows {
         let detail = details
             .iter()
@@ -380,8 +380,68 @@ fn plugin_row(
     let details_callback_id = plugin_id.clone();
     let handled_by_card = handled_by_control.clone();
 
+    let open_button = if row.descriptor.kind == crate::plugin::PluginKind::Panel && row.enabled {
+        let callback = on_open.clone();
+        let handled = handled_by_control.clone();
+        let plugin_id = plugin_id.clone();
+        Some(
+            div()
+                .id(format!("plugin-open-{plugin_id}"))
+                .debug_selector(|| format!("plugin-open-{plugin_id}"))
+                .px_3()
+                .py_1p5()
+                .rounded_md()
+                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
+                .text_xs()
+                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                .text_color(rgb(theme.text))
+                .cursor_pointer()
+                .flex_shrink_0()
+                .active(|style| style.opacity(0.88))
+                .hover(move |style| style.bg(rgb(theme.accent)).text_color(rgb(theme.base)))
+                .child("Open")
+                .on_click(move |event, window, app| {
+                    handled.set(true);
+                    callback(plugin_id.clone(), event, window, app);
+                }),
+        )
+    } else {
+        None
+    };
+
+    let remove_button = if can_remove(row) {
+        let callback = on_remove.clone();
+        let handled = handled_by_control.clone();
+        let plugin_id = plugin_id.clone();
+        Some(
+            div()
+                .id(format!("plugin-remove-{plugin_id}"))
+                .px_3()
+                .py_1p5()
+                .rounded_md()
+                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
+                .text_xs()
+                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                .text_color(rgb(theme.text))
+                .cursor_pointer()
+                .flex_shrink_0()
+                .active(|style| style.opacity(0.88))
+                .hover(|style| style.bg(rgb(0xef4444)).text_color(rgb(0xffffff)))
+                .child("Remove")
+                .on_click(move |event, window, app| {
+                    handled.set(true);
+                    callback(plugin_id.clone(), event, window, app);
+                }),
+        )
+    } else {
+        None
+    };
+    let has_footer_actions = open_button.is_some() || remove_button.is_some();
+
     div()
         .w_full()
+        .h_full()
+        .min_w_0()
         .id(format!("plugin-card-click-{plugin_id}"))
         .debug_selector(|| format!("plugin-card-{plugin_id}"))
         .cursor_pointer()
@@ -404,26 +464,27 @@ fn plugin_row(
         .border_color(rgb(theme.border))
         .flex()
         .flex_col()
-        .gap_2()
+        .justify_between()
+        .gap_3()
         .child(
             div()
                 .w_full()
                 .flex()
-                .items_center()
+                .items_start()
                 .justify_between()
-                .gap_3()
+                .gap_2()
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap_2()
+                        .flex_col()
+                        .gap_1()
                         .child(
                             div()
                                 .text_sm()
                                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                .whitespace_normal()
                                 .text_color(rgb(theme.text))
                                 .child(if row.descriptor.id == "lumen.core" {
                                     "Anarc Core".to_string()
@@ -433,79 +494,48 @@ fn plugin_row(
                         )
                         .child(
                             div()
-                                .text_xs()
-                                .text_color(rgb(theme.muted))
-                                .child(kind_label(row.descriptor.kind)),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(theme.muted))
-                                .child(format!("v{}", row.descriptor.version)),
+                                .flex()
+                                .flex_wrap()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(theme.muted))
+                                        .child(kind_label(row.descriptor.kind)),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(theme.muted))
+                                        .child(format!("v{}", row.descriptor.version)),
+                                ),
                         ),
                 )
                 .child(
                     div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
                         .flex_shrink_0()
-                        .debug_selector(|| format!("plugin-actions-{plugin_id}"))
-                        .child(if row.descriptor.kind == crate::plugin::PluginKind::Panel && row.enabled {
-                            let callback = on_open.clone();
-                            let handled = handled_by_control.clone();
+                        .when(!has_footer_actions, |el| {
                             let plugin_id = plugin_id.clone();
-                            div()
-                                .id(format!("plugin-open-{plugin_id}"))
-                                .debug_selector(|| format!("plugin-open-{plugin_id}"))
-                                .px_3()
-                                .py_1p5()
-                                .rounded_md()
-                                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
-                                .text_xs()
-                                .font_weight(gpui_kit::FontWeight::MEDIUM)
-                                .text_color(rgb(theme.text))
-                                .cursor_pointer()
-                                .flex_shrink_0()
-                                .active(|style| style.opacity(0.88))
-                                .hover(move |style| style.bg(rgb(theme.accent)).text_color(rgb(theme.base)))
-                                .child("Open")
-                                .on_click(move |event, window, app| {
-                                    handled.set(true);
-                                    callback(plugin_id.clone(), event, window, app);
-                                })
-                                .into_any_element()
-                        } else {
-                            div().into_any_element()
-                        })
-                        .child(if can_remove(row) {
-                            let callback = on_remove.clone();
-                            let handled = handled_by_control.clone();
-                            div()
-                                .id(format!("plugin-remove-{plugin_id}"))
-                                .px_3()
-                                .py_1p5()
-                                .rounded_md()
-                                .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
-                                .text_xs()
-                                .font_weight(gpui_kit::FontWeight::MEDIUM)
-                                .text_color(rgb(theme.text))
-                                .cursor_pointer()
-                                .flex_shrink_0()
-                                .active(|style| style.opacity(0.88))
-                                .hover(|style| style.bg(rgb(0xef4444)).text_color(rgb(0xffffff)))
-                                .child("Remove")
-                                .on_click(move |event, window, app| {
-                                    handled.set(true);
-                                    callback(plugin_id.clone(), event, window, app);
-                                })
-                                .into_any_element()
-                        } else {
-                            div().into_any_element()
+                            el.debug_selector(move || format!("plugin-actions-{plugin_id}"))
                         })
                         .child(control),
                 ),
         )
+        .when(has_footer_actions, |card| {
+            let plugin_id = plugin_id.clone();
+            card.child(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .debug_selector(move || format!("plugin-actions-{plugin_id}"))
+                    .children(open_button)
+                    .children(remove_button),
+            )
+        })
         .when(expanded, |card| {
             card.child(
                 div()
@@ -526,24 +556,28 @@ fn plugin_row(
                     .child(
                         div()
                             .text_xs()
+                            .whitespace_normal()
                             .text_color(rgb(theme.muted))
                             .child(format!("Status: {}", runtime_label(&row.runtime))),
                     )
                     .child(
                         div()
                             .text_xs()
+                            .whitespace_normal()
                             .text_color(rgb(theme.muted))
                             .child(permission_summary),
                     )
                     .child(
                         div()
                             .text_xs()
+                            .whitespace_normal()
                             .text_color(rgb(theme.muted))
                             .child(format!("Configuration: {configuration}")),
                     )
                     .child(if let Some(error) = details.error.clone() {
                         div()
                             .text_xs()
+                            .whitespace_normal()
                             .text_color(rgb(theme.text))
                             .child(format!("Error: {error}"))
                             .into_any_element()

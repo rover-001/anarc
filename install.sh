@@ -166,26 +166,37 @@ if [ -n "$UPDATER_SRC" ]; then
     ln -sf "$APP_DIR/bin/anarc-update" "$BIN_DIR/anarc-update"
 fi
 
-# CEF runtime: copy only runtime files (skip cmake/, include/, CMakeLists, etc.)
-echo "==> Installing CEF runtime to $CEF_DIR"
-mkdir -p "$CEF_DIR"
-for item in libcef.so libcef_dll chrome-sandbox chrome_100_percent.pak \
-            chrome_200_percent.pak icudtl.dat resources.pak v8_context_snapshot.bin \
-            vk_swiftshader_icd.json libvk_swiftshader.so libvulkan.so.1 locales; do
-    if [ -e "$BUNDLE_CEF/$item" ]; then
-        if [ -f "$BUNDLE_CEF/$item" ]; then
-            cp -f "$BUNDLE_CEF/$item" "$CEF_DIR/$item.tmp" 2>/dev/null && mv -f "$CEF_DIR/$item.tmp" "$CEF_DIR/$item" || cp -rf "$BUNDLE_CEF/$item" "$CEF_DIR/"
-        else
-            cp -rf "$BUNDLE_CEF/$item" "$CEF_DIR/"
+# CEF runtime: reuse an already-installed runtime when it matches, otherwise
+# copy only runtime files (skip cmake/, include/, CMakeLists, etc.)
+CEF_REUSED=0
+if [ "$NO_CODECS" -eq 0 ] && [ -f "$SCRIPT_DIR/tools/install-cef-codecs.sh" ] && \
+   CEF_INSTALL_DIR="$CEF_DIR" sh "$SCRIPT_DIR/tools/install-cef-codecs.sh" --check; then
+    echo "==> Reusing existing codec-enabled CEF runtime in $CEF_DIR"
+    CEF_REUSED=1
+elif [ -f "$CEF_DIR/libcef.so" ] && cmp -s "$BUNDLE_CEF/libcef.so" "$CEF_DIR/libcef.so"; then
+    echo "==> Reusing existing CEF runtime in $CEF_DIR"
+else
+    echo "==> Installing CEF runtime to $CEF_DIR"
+    mkdir -p "$CEF_DIR"
+    rm -f "$CEF_DIR/.cef-codecs-stamp" 2>/dev/null || true
+    for item in libcef.so libcef_dll chrome-sandbox chrome_100_percent.pak \
+                chrome_200_percent.pak icudtl.dat resources.pak v8_context_snapshot.bin \
+                vk_swiftshader_icd.json libvk_swiftshader.so libvulkan.so.1 locales; do
+        if [ -e "$BUNDLE_CEF/$item" ]; then
+            if [ -f "$BUNDLE_CEF/$item" ]; then
+                cp -f "$BUNDLE_CEF/$item" "$CEF_DIR/$item.tmp" 2>/dev/null && mv -f "$CEF_DIR/$item.tmp" "$CEF_DIR/$item" || cp -rf "$BUNDLE_CEF/$item" "$CEF_DIR/"
+            else
+                cp -rf "$BUNDLE_CEF/$item" "$CEF_DIR/"
+            fi
         fi
-    fi
-done
+    done
+fi
 
 # By default, swap in a codec-enabled CEF runtime: the stock cef-dll-sys
 # download is a minimal build without H.264/AAC, so video previews fail in
 # web apps. Keep installs working offline by treating download failures as
 # warnings; pass --no-codecs to skip this step entirely.
-if [ "$NO_CODECS" -eq 0 ] && [ -f "$SCRIPT_DIR/tools/install-cef-codecs.sh" ]; then
+if [ "$CEF_REUSED" -eq 0 ] && [ "$NO_CODECS" -eq 0 ] && [ -f "$SCRIPT_DIR/tools/install-cef-codecs.sh" ]; then
     if ! CEF_INSTALL_DIR="$CEF_DIR" sh "$SCRIPT_DIR/tools/install-cef-codecs.sh"; then
         echo "warning: codec-enabled CEF install failed; MP4/H.264 previews may not work" >&2
     fi
