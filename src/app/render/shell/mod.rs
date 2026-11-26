@@ -29,13 +29,9 @@ impl Anarc {
         {
             window.toggle_fullscreen();
         }
-        let sidebar_width_f32 = self.sidebar_width_transition.map_or_else(
-            || self.effective_sidebar_width(),
-            |(from, to, started, _)| {
-                let progress = ui::motion::sidebar().progress(started.elapsed());
-                from + (to - from) * progress
-            },
-        );
+        let sidebar_width_f32 = self
+            .sidebar_width_transition
+            .map_or_else(|| self.effective_sidebar_width(), |transition| transition.width());
         // Keep a borrowed view of the active space. Cloning it here also
         // clones every tab and its strings on every browser frame render.
         let active_space = self.active_space();
@@ -146,9 +142,41 @@ impl Anarc {
                 .child(main_column)
         };
 
-        if let Some(page) = self
+        let visible_app_page = self
             .app_page
-            .filter(|page| *page != AppPage::Downloads || crate::plugins::downloads_enabled())
+            .filter(|page| *page != AppPage::Downloads || crate::plugins::downloads_enabled());
+        if let Some(page) = visible_app_page {
+            if self.app_page_was_open != Some(page) {
+                self.app_page_serial = self.app_page_serial.wrapping_add(1);
+                self.app_page_was_open = Some(page);
+                self.app_page_closing = None;
+            }
+        } else if let Some(prev_page) = self.app_page_was_open.take() {
+            self.app_page_serial = self.app_page_serial.wrapping_add(1);
+            let serial = self.app_page_serial;
+            if !ui::motion::reduced_motion() {
+                self.app_page_closing = Some((prev_page, serial));
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(ui::motion::sheet().duration())
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.app_page_closing.is_some_and(|(_, id)| id == serial) {
+                            this.app_page_closing = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
+
+        if let Some((page, is_closing, serial)) = visible_app_page
+            .map(|page| (page, false, self.app_page_serial))
+            .or_else(|| {
+                self.app_page_closing
+                    .map(|(page, serial)| (page, true, serial))
+            })
         {
             let active_url = self
                 .active_space()
@@ -179,28 +207,45 @@ impl Anarc {
                 self.expanded_plugins.clone(),
                 cx,
             );
-            root = root.child(
-                div()
-                    .id("app-page-overlay")
-                    .occlude()
-                    .absolute()
-                    .top(px(topbar_height))
-                    .bottom(px(CONTENT_BEZEL_BOTTOM))
-                    .left(px(if sidebar_on_right {
-                        CONTENT_BEZEL_X
-                    } else {
-                        sidebar_width_f32 + CONTENT_BEZEL_X
-                    }))
-                    .right(px(if sidebar_on_right {
-                        sidebar_width_f32 + CONTENT_BEZEL_X
-                    } else {
-                        CONTENT_BEZEL_X
-                    }))
-                    .rounded(px(visual::active_card_radius()))
-                    .bg(rgb(theme.base))
-                    .overflow_hidden()
-                    .child(content),
-            );
+            let spring = if is_closing {
+                ui::motion::sheet().between(1.0, 0.0)
+            } else {
+                ui::motion::sheet().enter()
+            };
+            let overlay = div()
+                .id("app-page-overlay")
+                .when(!is_closing, |el| el.occlude())
+                .absolute()
+                .top(px(topbar_height))
+                .bottom(px(CONTENT_BEZEL_BOTTOM))
+                .left(px(if sidebar_on_right {
+                    CONTENT_BEZEL_X
+                } else {
+                    sidebar_width_f32 + CONTENT_BEZEL_X
+                }))
+                .right(px(if sidebar_on_right {
+                    sidebar_width_f32 + CONTENT_BEZEL_X
+                } else {
+                    CONTENT_BEZEL_X
+                }))
+                .rounded(px(visual::active_card_radius()))
+                .bg(rgb(theme.base))
+                .overflow_hidden()
+                .child(content)
+                .with_spring(
+                    format!(
+                        "app-page-overlay-{}-{serial}",
+                        if is_closing { "exit" } else { "enter" }
+                    ),
+                    spring,
+                    move |overlay, progress| {
+                        let p = ui::motion::clamp_percentage(progress);
+                        overlay
+                            .top(px(topbar_height + 18.0 * UI_SCALE * (1.0 - p)))
+                            .opacity(p)
+                    },
+                );
+            root = root.child(overlay);
         }
 
         if !self.is_sidebar_collapsed() {
@@ -219,9 +264,17 @@ impl Anarc {
                     .left(px(cut_x - handle_w / 2.0))
                     .w(px(handle_w))
                     .cursor_col_resize()
+                    .active(|style| style.bg(rgb(theme.accent)))
                     .on_mouse_down(
                         gpui_kit::MouseButton::Left,
                         cx.listener(|this, _, _window, cx| {
+                            if let Some(transition) = this.sidebar_width_transition.take() {
+                                this.sidebar_width =
+                                    transition.width().clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+                                this.sidebar_transition_serial =
+                                    this.sidebar_transition_serial.wrapping_add(1);
+                            }
+                            this.sidebar_resize_tracker.clear();
                             this.sidebar_resizing = true;
                             #[cfg(not(test))]
                             this.begin_browser_resize_drag(_window, false, false);
@@ -400,8 +453,44 @@ impl Anarc {
             this.child(list)
         });
 
-        root = root.when(self.show_find, |root| {
-            root.child(
+        if self.show_find {
+            if !self.find_was_open {
+                self.find_serial = self.find_serial.wrapping_add(1);
+                self.find_was_open = true;
+                self.find_closing = None;
+            }
+        } else if self.find_was_open {
+            self.find_was_open = false;
+            self.find_serial = self.find_serial.wrapping_add(1);
+            let serial = self.find_serial;
+            if !ui::motion::reduced_motion() {
+                self.find_closing = Some(serial);
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(ui::motion::popover().duration())
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.find_closing == Some(serial) {
+                            this.find_closing = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
+
+        if let Some((is_closing, serial)) = if self.show_find {
+            Some((false, self.find_serial))
+        } else {
+            self.find_closing.map(|serial| (true, serial))
+        } {
+            let spring = if is_closing {
+                ui::motion::popover().between(1.0, 0.0)
+            } else {
+                ui::motion::popover().enter()
+            };
+            root = root.child(
                 div()
                     .id("find-in-page")
                     .absolute()
@@ -420,11 +509,53 @@ impl Anarc {
                             .id("find-input")
                             .w_full()
                             .appearance(false),
+                    )
+                    .with_spring(
+                        format!(
+                            "find-in-page-{}-{serial}",
+                            if is_closing { "exit" } else { "enter" }
+                        ),
+                        spring,
+                        |bar, progress| {
+                            let p = ui::motion::clamp_percentage(progress);
+                            bar.top(px((8.0 - 8.0 * (1.0 - p)) * UI_SCALE)).opacity(p)
+                        },
                     ),
-            )
-        });
+            );
+        }
 
         if self.show_command_palette {
+            if !self.command_palette_was_open {
+                self.command_palette_serial = self.command_palette_serial.wrapping_add(1);
+                self.command_palette_was_open = true;
+                self.command_palette_closing = None;
+            }
+        } else if self.command_palette_was_open {
+            self.command_palette_was_open = false;
+            self.command_palette_serial = self.command_palette_serial.wrapping_add(1);
+            let serial = self.command_palette_serial;
+            if !ui::motion::reduced_motion() {
+                self.command_palette_closing = Some(serial);
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(ui::motion::popover().duration())
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.command_palette_closing == Some(serial) {
+                            this.command_palette_closing = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
+
+        if let Some((is_closing, serial)) = if self.show_command_palette {
+            Some((false, self.command_palette_serial))
+        } else {
+            self.command_palette_closing.map(|serial| (true, serial))
+        } {
             let query = self.command_input.read(cx).value().to_string();
             let items = self.command_items(&query);
             self.command_palette_scroll
@@ -456,6 +587,7 @@ impl Anarc {
                                 .cursor_pointer()
                                 .when(selected_command == index, |row| row.bg(rgb(surface_hover)))
                                 .hover(|style| style.bg(rgb(surface_hover)))
+                                .active(|style| style.opacity(0.88))
                                 .child(
                                     div()
                                         .flex()
@@ -507,8 +639,15 @@ impl Anarc {
                 )
                 .child(list)
                 .with_spring(
-                    "command-palette-entrance",
-                    ui::motion::popover().enter(),
+                    format!(
+                        "command-palette-{}-{serial}",
+                        if is_closing { "exit" } else { "enter" }
+                    ),
+                    if is_closing {
+                        ui::motion::popover().between(1.0, 0.0)
+                    } else {
+                        ui::motion::popover().enter()
+                    },
                     |panel, progress| {
                         panel
                             .w(px(640.0 * UI_SCALE * (0.96 + 0.04 * progress)))
@@ -523,13 +662,53 @@ impl Anarc {
                     .right(px(0.0))
                     .flex()
                     .justify_center()
-                    .occlude()
+                    .when(!is_closing, |el| el.occlude())
                     .child(panel),
             );
         }
 
-        if let Some(peek) = self.peek.clone()
-            && self.fullscreen_tab.is_none()
+        let visible_peek = self
+            .peek
+            .clone()
+            .filter(|_| self.fullscreen_tab.is_none());
+        if let Some(peek) = &visible_peek {
+            if self
+                .peek_last
+                .as_ref()
+                .is_none_or(|prev| prev.id != peek.id)
+            {
+                self.peek_closing_serial = self.peek_closing_serial.wrapping_add(1);
+            }
+            self.peek_last = Some(peek.clone());
+            self.peek_closing = None;
+        } else if let Some(prev_peek) = self.peek_last.take() {
+            self.peek_closing_serial = self.peek_closing_serial.wrapping_add(1);
+            let serial = self.peek_closing_serial;
+            if !ui::motion::reduced_motion() && self.fullscreen_tab.is_none() {
+                self.peek_closing = Some((prev_peek, serial));
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(ui::motion::sheet().duration())
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.peek_closing.as_ref().is_some_and(|(_, id)| *id == serial) {
+                            this.peek_closing = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
+
+        if let Some((peek, is_closing, serial)) = visible_peek
+            .map(|peek| (peek, false, self.peek_closing_serial))
+            .or_else(|| {
+                self.peek_closing
+                    .clone()
+                    .filter(|_| self.fullscreen_tab.is_none())
+                    .map(|(peek, serial)| (peek, true, serial))
+            })
         {
             let (window_width, window_height) = {
                 let bounds = window.bounds();
@@ -597,7 +776,7 @@ impl Anarc {
             let inner_radius = (CARD_RADIUS - 1.0).max(0.0);
             let card = div()
                 .id("peek-overlay")
-                .occlude()
+                .when(!is_closing, |el| el.occlude())
                 .absolute()
                 .left(px(layout.card_x))
                 .top(px(layout.card_y))
@@ -612,9 +791,21 @@ impl Anarc {
                 .flex()
                 .flex_col()
                 .with_spring(
-                    format!("peek-overlay-enter-{}", peek.id),
-                    ui::motion::sheet().enter(),
-                    |card, progress| card.opacity(ui::motion::clamp_percentage(progress)),
+                    format!(
+                        "peek-overlay-{}-{}-{serial}",
+                        if is_closing { "exit" } else { "enter" },
+                        peek.id
+                    ),
+                    if is_closing {
+                        ui::motion::sheet().between(1.0, 0.0)
+                    } else {
+                        ui::motion::sheet().enter()
+                    },
+                    move |card, progress| {
+                        let p = ui::motion::clamp_percentage(progress);
+                        card.top(px(layout.card_y + 18.0 * UI_SCALE * (1.0 - p)))
+                            .opacity(p)
+                    },
                 )
                 .child(
                     div()
@@ -755,10 +946,11 @@ impl Anarc {
 
         if let Some((from_theme, _, transition_id)) = self.theme_transition {
             let to_theme = target_theme;
-            root.with_animation(
+            root.with_spring(
                 format!("space-theme-transition-{transition_id}"),
-                ui::motion::theme().animation(),
+                ui::motion::theme().enter(),
                 move |root, progress| {
+                    let progress = ui::motion::clamp_percentage(progress);
                     let theme = visual::interpolate_theme(from_theme, to_theme, progress);
                     root.bg(rgb(theme.base)).text_color(rgb(theme.text))
                 },

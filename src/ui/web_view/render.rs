@@ -911,11 +911,11 @@ impl Render for WebViewport {
                         .left_0()
                         .size_full()
                         .overflow_hidden()
-                        .with_animation(
+                        .with_spring(
                             format!("web-view-outgoing-{transition_id}"),
-                            crate::ui::motion::content().animation(),
-                            |element, progress| {
-                                element.opacity(crate::ui::motion::clamp_percentage(1.0 - progress))
+                            crate::ui::motion::content().between(1.0, 0.0),
+                            |element, remaining| {
+                                element.opacity(crate::ui::motion::clamp_percentage(remaining))
                             },
                         )
                         .child(browser_frame(image, corner_radii).size_full()),
@@ -968,12 +968,16 @@ impl Render for WebViewport {
                 browser_frame(image, corner_radii).size_full()
             };
             let current = if transitioning {
-                current
-                    .with_animation(
+                div()
+                    .relative()
+                    .size_full()
+                    .child(current)
+                    .with_spring(
                         format!("web-view-incoming-{transition_id}"),
-                        crate::ui::motion::content().animation(),
+                        crate::ui::motion::content().enter(),
                         |element, progress| {
-                            element.opacity(crate::ui::motion::clamp_percentage(progress))
+                            let p = crate::ui::motion::clamp_percentage(progress);
+                            element.top(px(6.0 * (1.0 - p))).opacity(p)
                         },
                     )
                     .into_any_element()

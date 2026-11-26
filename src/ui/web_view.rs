@@ -200,6 +200,12 @@ impl WebViewport {
                 self.transition_waiting_for_image = false;
                 self.transition_cleanup_scheduled = false;
             }
+        } else if self.image.is_none() && image.is_some() {
+            self.previous_image = None;
+            self.transition_id = self.transition_id.wrapping_add(1);
+            self.transition_tab = Some(tab_id.clone());
+            self.transition_cleanup_scheduled = false;
+            self.transition_waiting_for_image = false;
         } else if self
             .resize_frame_handoff
             .target_frame_arrived(drag_edge_color.is_some())

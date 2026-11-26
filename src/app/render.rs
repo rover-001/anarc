@@ -585,13 +585,9 @@ impl Render for Anarc {
 
         #[cfg(not(test))]
         let scale = _window.scale_factor();
-        let sidebar_width_f32 = self.sidebar_width_transition.map_or_else(
-            || self.effective_sidebar_width(),
-            |(from, to, started, _)| {
-                let progress = ui::motion::sidebar().progress(started.elapsed());
-                from + (to - from) * progress
-            },
-        );
+        let sidebar_width_f32 = self
+            .sidebar_width_transition
+            .map_or_else(|| self.effective_sidebar_width(), |transition| transition.width());
         #[cfg(not(test))]
         let bounds = _window.bounds();
         #[cfg(not(test))]
@@ -874,7 +870,6 @@ impl Render for Anarc {
                         .px_3()
                         .py_3()
                         .gap_2()
-                        .bg(rgb(old_theme.base))
                         .child(
                             div()
                                 .flex()
@@ -977,15 +972,16 @@ impl Render for Anarc {
                     let initial_offset = state.outgoing_offset_start;
                     let outgoing_offset = state.outgoing_direction * 24.0;
                     overlay
-                        .with_animation(
+                        .with_spring(
                             format!("space-switch-sidebar-out-{serial}"),
-                            ui::motion::space_switch().animation(),
-                            move |overlay, progress| {
+                            ui::motion::space_switch().between(1.0, 0.0),
+                            move |overlay, remaining| {
+                                let remaining = ui::motion::clamp_percentage(remaining);
+                                let progress = 1.0 - remaining;
                                 overlay
-                                    .left(px(initial_offset * (1.0 - progress)
-                                        + outgoing_offset * progress))
+                                    .left(px(initial_offset * remaining + outgoing_offset * progress))
                                     .opacity(ui::motion::clamp_percentage(
-                                        initial_alpha * (1.0 - progress),
+                                        initial_alpha * remaining,
                                     ))
                             },
                         )

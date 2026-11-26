@@ -131,6 +131,7 @@ impl Anarc {
             .flex()
             .flex_col()
             .gap_2()
+            .active(|s| s.opacity(0.92))
             .cursor_pointer()
             .on_click(cx.listener(|this, _, _, cx| {
                 this.app_page = Some(AppPage::Downloads);
@@ -174,6 +175,8 @@ impl Anarc {
                                     0x40,
                                 ))
                             })
+                            .active(|s| s.opacity(0.8))
+                            .cursor_pointer()
                             .text_color(rgb(visual::panel_muted(theme)))
                             .text_xs()
                             .child("✕")
@@ -218,6 +221,18 @@ impl Anarc {
                 )
             });
 
+        let toast = toast.with_spring(
+            format!("download-toast-entrance-{download_id}"),
+            ui::motion::popover().enter(),
+            |toast, progress| {
+                let p = ui::motion::clamp_percentage(progress);
+                toast
+                    .top(px(
+                        visual::active_topbar_height() + (4.0 - 8.0 * (1.0 - p)) * UI_SCALE,
+                    ))
+                    .opacity(p)
+            },
+        );
         Some(toast.into_any_element())
     }
 
@@ -227,9 +242,40 @@ impl Anarc {
         downloads: &[engine::DownloadRecord],
         cx: &mut Context<Self>,
     ) -> Option<gpui_kit::AnyElement> {
-        if !self.downloads_bubble_open || !crate::plugins::downloads_enabled() {
-            return None;
+        if self.downloads_bubble_open && crate::plugins::downloads_enabled() {
+            if !self.downloads_bubble_was_open {
+                self.downloads_bubble_serial = self.downloads_bubble_serial.wrapping_add(1);
+                self.downloads_bubble_was_open = true;
+                self.downloads_bubble_closing = None;
+            }
+        } else if self.downloads_bubble_was_open {
+            self.downloads_bubble_was_open = false;
+            self.downloads_bubble_serial = self.downloads_bubble_serial.wrapping_add(1);
+            let serial = self.downloads_bubble_serial;
+            if !ui::motion::reduced_motion() {
+                self.downloads_bubble_closing = Some(serial);
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(ui::motion::popover().duration())
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.downloads_bubble_closing == Some(serial) {
+                            this.downloads_bubble_closing = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
         }
+
+        let (is_closing, serial) = if self.downloads_bubble_open
+            && crate::plugins::downloads_enabled()
+        {
+            (false, self.downloads_bubble_serial)
+        } else {
+            (true, self.downloads_bubble_closing?)
+        };
         // The dismiss layer covers the page, so it is the drop target
         // for a file dragged out of the bubble (the WebViewport's own
         // file-drop listener is occluded while the bubble is open).
@@ -327,6 +373,8 @@ impl Anarc {
                                     0x40,
                                 ))
                             })
+                            .active(|s| s.opacity(0.8))
+                            .cursor_pointer()
                             .text_color(rgb(visual::panel_muted(theme)))
                             .text_xs()
                             .child("✕")
@@ -357,6 +405,8 @@ impl Anarc {
                             0x40,
                         ))
                     })
+                    .active(|s| s.opacity(0.85))
+                    .cursor_pointer()
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(theme.accent))
@@ -369,8 +419,15 @@ impl Anarc {
                     })),
             )
             .with_spring(
-                "downloads-bubble-entrance",
-                ui::motion::popover().enter(),
+                format!(
+                    "downloads-bubble-{}-{serial}",
+                    if is_closing { "exit" } else { "enter" }
+                ),
+                if is_closing {
+                    ui::motion::popover().between(1.0, 0.0)
+                } else {
+                    ui::motion::popover().enter()
+                },
                 |panel, progress| {
                     panel
                         .w(px(340.0 * UI_SCALE * (0.96 + 0.04 * progress)))
@@ -378,7 +435,11 @@ impl Anarc {
                 },
             );
 
-        Some(dismiss.child(panel).into_any_element())
+        if is_closing {
+            Some(panel.into_any_element())
+        } else {
+            Some(dismiss.child(panel).into_any_element())
+        }
     }
 }
 

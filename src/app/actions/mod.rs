@@ -14,6 +14,7 @@ mod tabs;
 pub(in crate::app) use navigation::single_line_paste;
 
 use super::*;
+use crate::app::state::OverlayTransition;
 
 /// Kept tabs remember the page they were pinned on independently of where the
 /// user navigates later. Legacy tabs predate that field, so their current URL
@@ -291,6 +292,7 @@ impl Anarc {
             kept_section_drag_hovered: false,
             sidebar_width,
             sidebar_resizing: false,
+            sidebar_resize_tracker: ui::motion::VelocityTracker1D::new(),
             sidebar_width_transition: None,
             sidebar_transition_serial: 0,
             theme_transition: None,
@@ -342,11 +344,16 @@ impl Anarc {
             engine,
             space_modal: None,
             space_context_menu: None,
+            space_menu_transition: OverlayTransition::default(),
             sidebar_context_menu: None,
+            sidebar_menu_transition: OverlayTransition::default(),
             theme_editor: None,
+            theme_editor_transition: OverlayTransition::default(),
             tab_context_menu: None,
+            tab_menu_transition: OverlayTransition::default(),
             web_context_menu: None,
             folder_context_menu: None,
+            folder_menu_transition: OverlayTransition::default(),
             folder_modal: None,
             split_group_expanded: false,
             added_tab: None,
@@ -358,8 +365,23 @@ impl Anarc {
             fullscreen_tab: None,
             fullscreen_window_was_fullscreen: None,
             app_page: None,
+            app_page_was_open: None,
+            app_page_closing: None,
+            app_page_serial: 0,
+            command_palette_was_open: false,
+            command_palette_closing: None,
+            command_palette_serial: 0,
+            find_was_open: false,
+            find_closing: None,
+            find_serial: 0,
+            peek_last: None,
+            peek_closing: None,
+            peek_closing_serial: 0,
             plugins_menu_open: false,
             downloads_bubble_open: false,
+            downloads_bubble_was_open: false,
+            downloads_bubble_closing: None,
+            downloads_bubble_serial: 0,
             dismissed_download_toast_id: None,
             settings_section: SettingsSection::default(),
             last_spaces_mtime: std::sync::atomic::AtomicU64::new(

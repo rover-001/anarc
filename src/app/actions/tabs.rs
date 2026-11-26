@@ -402,11 +402,13 @@ impl Anarc {
             self.recently_closed_tabs.drain(..excess);
         }
         let mut activated_new_tab = None;
+        let mut spawned_fallback_tab = false;
         if space.tabs.is_empty() {
             let id = next_tab_id(space);
             space.tabs.push(Tab::new(&id, "New tab", "about:blank"));
             space.active = Some(id.clone());
             activated_new_tab = Some(id);
+            spawned_fallback_tab = true;
         } else if let Some(act) = split_fallback.flatten() {
             space.active = Some(act.clone());
             activated_new_tab = Some(act);
@@ -428,12 +430,13 @@ impl Anarc {
                 space.tabs.push(Tab::new(&id, "New tab", "about:blank"));
                 space.active = Some(id.clone());
                 activated_new_tab = Some(id);
+                spawned_fallback_tab = true;
             }
         }
         let is_empty_tab = closing_snapshot.url == "about:blank"
             || closing_snapshot.url == "lumen://welcome"
             || closing_snapshot.url.trim().is_empty();
-        if !is_empty_tab {
+        if !is_empty_tab || !spawned_fallback_tab {
             self.closing_tab_serial = self.closing_tab_serial.wrapping_add(1);
             self.closing_tab = Some((
                 closing_space_id,
@@ -721,7 +724,9 @@ impl Anarc {
         duplicate.id = id.clone();
         duplicate.state = TabState::Discarded;
         space.tabs.push(duplicate);
-        space.active = Some(id);
+        space.active = Some(id.clone());
+        let active_space = self.active_space.clone();
+        self.added_tab = Some((active_space, id, Instant::now()));
         self.tab_context_menu = None;
         self.save_state();
     }
@@ -738,8 +743,9 @@ impl Anarc {
             let mut tab = tab;
             tab.id = id.clone();
             space.tabs.push(tab);
-            space.active = Some(id);
+            space.active = Some(id.clone());
             let _ = space;
+            self.added_tab = Some((space_id.clone(), id, Instant::now()));
             self.activate_space(&space_id);
         }
         self.save_state();

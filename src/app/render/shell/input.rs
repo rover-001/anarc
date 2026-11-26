@@ -332,7 +332,24 @@ pub(super) fn with_pointer_handlers(
                 } else {
                     f32::from(event.position.x) - CONTENT_BEZEL_X
                 };
-                this.sidebar_width = new_width.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+                this.sidebar_resize_tracker.push(Instant::now(), new_width);
+                this.sidebar_width = if new_width < SIDEBAR_MIN_WIDTH {
+                    SIDEBAR_MIN_WIDTH
+                        + ui::motion::rubber_band(
+                            new_width - SIDEBAR_MIN_WIDTH,
+                            48.0 * UI_SCALE,
+                            ui::motion::RUBBER_BAND_COEFFICIENT,
+                        )
+                } else if new_width > SIDEBAR_MAX_WIDTH {
+                    SIDEBAR_MAX_WIDTH
+                        + ui::motion::rubber_band(
+                            new_width - SIDEBAR_MAX_WIDTH,
+                            64.0 * UI_SCALE,
+                            ui::motion::RUBBER_BAND_COEFFICIENT,
+                        )
+                } else {
+                    new_width
+                };
                 cx.notify();
             }
         }),
@@ -382,10 +399,33 @@ pub(super) fn with_pointer_handlers(
                 );
             }
             if this.sidebar_resizing || this.split_resizing || this.split_resizing_horizontal {
+                let was_sidebar = this.sidebar_resizing;
                 this.sidebar_resizing = false;
                 this.split_resizing = false;
                 this.split_resizing_horizontal = false;
-                this.save_state();
+                let release_velocity = this.sidebar_resize_tracker.velocity(Instant::now());
+                this.sidebar_resize_tracker.clear();
+                if was_sidebar
+                    && (this.sidebar_width < SIDEBAR_MIN_WIDTH
+                        || this.sidebar_width > SIDEBAR_MAX_WIDTH)
+                {
+                    let from = this.sidebar_width;
+                    let target = from.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+                    this.sidebar_width = target;
+                    this.animate_sidebar_width_from(
+                        gpui_kit::SpringState {
+                            position: from,
+                            velocity: release_velocity,
+                        },
+                        target,
+                        false,
+                        ui::motion::spring(0.4, 1.0),
+                        _window,
+                        cx,
+                    );
+                } else {
+                    this.save_state();
+                }
                 cx.notify();
             }
         }),

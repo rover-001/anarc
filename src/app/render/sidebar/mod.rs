@@ -76,13 +76,9 @@ impl Anarc {
         let stored_split_pair = crate::plugins::split_view_enabled()
             .then(|| self.stored_split_pair())
             .flatten();
-        let sidebar_width_f32 = self.sidebar_width_transition.map_or_else(
-            || self.effective_sidebar_width(),
-            |(from, to, started, _)| {
-                let progress = ui::motion::sidebar().progress(started.elapsed());
-                from + (to - from) * progress
-            },
-        );
+        let sidebar_width_f32 = self
+            .sidebar_width_transition
+            .map_or_else(|| self.effective_sidebar_width(), |transition| transition.width());
         let space_switch_transition = self
             .space_switch_transition
             .clone()
@@ -251,10 +247,11 @@ impl Anarc {
             let start_alpha = state.incoming_opacity_start;
             let start_offset = state.incoming_offset_start;
             sidebar_content
-                .with_animation(
+                .with_spring(
                     format!("space-switch-sidebar-in-{serial}"),
-                    ui::motion::space_switch().animation(),
+                    ui::motion::space_switch().enter(),
                     move |sidebar, progress| {
+                        let progress = ui::motion::clamp_percentage(progress);
                         sidebar.left(px(start_offset * (1.0 - progress))).opacity(
                             ui::motion::clamp_percentage(
                                 start_alpha + (1.0 - start_alpha) * progress,
@@ -263,13 +260,24 @@ impl Anarc {
                     },
                 )
                 .into_any_element()
-        } else if let Some((from, to, _, serial)) = self.sidebar_width_transition {
+        } else if let Some(transition) = self.sidebar_width_transition {
+            let from = transition.initial.position;
+            let to = transition.target;
+            let span = (to - from).abs();
             sidebar_content
-                .with_animation(
-                    format!("sidebar-width-transition-{serial}"),
-                    ui::motion::sidebar().animation(),
-                    move |sidebar, progress| {
-                        let progress = progress.clamp(0.0, 1.0);
+                .with_spring(
+                    format!("sidebar-width-transition-{}", transition.serial),
+                    SpringAnimation::new(transition.config)
+                        .to(to)
+                        .from(from)
+                        .with_epsilon(0.5),
+                    move |sidebar, width| {
+                        let width = width.max(0.0);
+                        let progress = if span > 1e-3 {
+                            ((width - from) / (to - from)).clamp(0.0, 1.0)
+                        } else {
+                            1.0
+                        };
                         let opacity = if to == 0.0 && from > 0.0 {
                             1.0 - progress
                         } else if from == 0.0 && to > 0.0 {
@@ -278,7 +286,7 @@ impl Anarc {
                             1.0
                         };
                         sidebar
-                            .w(px(from + (to - from) * progress))
+                            .w(px(width))
                             .opacity(ui::motion::clamp_percentage(opacity))
                     },
                 )

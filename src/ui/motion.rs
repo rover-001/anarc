@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gpui_kit::{Animation, SpringAnimation, SpringConfig, SpringState, sampled_easing};
+use gpui_kit::{SpringAnimation, SpringConfig, SpringState, sampled_easing};
 
 /// Settling tolerance used when deriving a duration from a spring.
 const SPRING_EPSILON: f32 = 0.001;
@@ -96,13 +96,6 @@ impl SpringSpec {
         sampled_easing(self.config, SPRING_EPSILON).1
     }
 
-    /// A duration-based animation whose shape is this spring. Use it for
-    /// interpolations driven by an external `Instant` (theme colours, browser
-    /// frames) where a stateful spring has nowhere to store its velocity.
-    pub fn animation(&self) -> Animation {
-        Animation::new(self.duration()).with_easing(self.easing())
-    }
-
     /// Spring animation for an entrance: mounts at 0 and settles at the target.
     ///
     /// Under reduced motion the element mounts already settled, so the entrance
@@ -163,7 +156,7 @@ pub fn content() -> SpringSpec {
 
 /// Full page-level transitions such as switching spaces.
 pub fn space_switch() -> SpringSpec {
-    spec(0.40, 0.90)
+    spec(0.28, 0.92)
 }
 
 /// Large surfaces that resize: the sidebar and its browser panes.
@@ -189,6 +182,100 @@ pub fn row_exit() -> SpringSpec {
 /// Theme colour interpolation: passive, so critically damped.
 pub fn theme() -> SpringSpec {
     spec(0.28, 1.0)
+}
+
+/// Default iOS rubber-band coefficient (`UIScrollView` standard).
+pub const RUBBER_BAND_COEFFICIENT: f32 = 0.55;
+
+/// Normal deceleration rate per millisecond (`UIScrollView.DecelerationRate.normal`).
+#[cfg(test)]
+pub const DECELERATION_NORMAL: f32 = 0.998;
+
+/// Asymptotic rubber-band resistance for an overshoot past a boundary.
+///
+/// `offset = sign(x) * (1 - 1 / (|x| * c / d + 1)) * d`, matching iOS
+/// `UIScrollView` boundary elasticity. Returns `0.0` when `dimension <= 0.0`.
+pub fn rubber_band(overshoot: f32, dimension: f32, coefficient: f32) -> f32 {
+    if !overshoot.is_finite() || !dimension.is_finite() || dimension <= 0.0 {
+        return 0.0;
+    }
+    let c = if coefficient.is_finite() && coefficient > 0.0 {
+        coefficient
+    } else {
+        RUBBER_BAND_COEFFICIENT
+    };
+    let abs_x = overshoot.abs();
+    overshoot.signum() * (1.0 - 1.0 / (abs_x * c / dimension + 1.0)) * dimension
+}
+
+/// Projects where a motion at `position` with `velocity` (units/sec) would
+/// naturally come to rest under exponential deceleration `deceleration_rate`.
+#[cfg(test)]
+pub fn project(position: f32, velocity: f32, deceleration_rate: f32) -> f32 {
+    if !position.is_finite() || !velocity.is_finite() {
+        return position;
+    }
+    let rate = deceleration_rate.clamp(0.0, 0.9999);
+    let travel = (velocity / 1000.0) * rate / (1.0 - rate);
+    position + travel
+}
+
+/// Momentum-proportional damping ratio: critically damped (`1.0`) at rest,
+/// dropping smoothly to `0.7` on hard flicks (`>= 2000` px/s).
+#[cfg(test)]
+pub fn momentum_zeta(velocity: f32) -> f32 {
+    if !velocity.is_finite() {
+        return 1.0;
+    }
+    (1.0 - 0.3 * (velocity.abs() / 2000.0).min(1.0)).clamp(0.7, 1.0)
+}
+
+/// Tracks pointer velocity over a ~100ms sliding window for flick handoff.
+#[derive(Clone, Debug, Default)]
+pub struct VelocityTracker1D {
+    samples: Vec<(std::time::Instant, f32)>,
+}
+
+impl VelocityTracker1D {
+    const WINDOW: Duration = Duration::from_millis(100);
+    const PAUSE_THRESHOLD: Duration = Duration::from_millis(50);
+    const MAX_VELOCITY: f32 = 8000.0;
+
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn clear(&mut self) {
+        self.samples.clear();
+    }
+
+    pub fn push(&mut self, time: std::time::Instant, position: f32) {
+        if !position.is_finite() {
+            return;
+        }
+        self.samples.push((time, position));
+        self.samples
+            .retain(|(t, _)| time.saturating_duration_since(*t) <= Self::WINDOW);
+    }
+
+    /// Returns the estimated release velocity in units/sec, or `0.0` if the
+    /// pointer paused for more than ~50ms before release.
+    pub fn velocity(&self, now: std::time::Instant) -> f32 {
+        let Some(&(last_t, last_pos)) = self.samples.last() else {
+            return 0.0;
+        };
+        if now.saturating_duration_since(last_t) > Self::PAUSE_THRESHOLD {
+            return 0.0;
+        }
+        let Some(&(first_t, first_pos)) = self.samples.first() else {
+            return 0.0;
+        };
+        let dt = last_t.saturating_duration_since(first_t).as_secs_f32();
+        if dt <= 1e-4 {
+            return 0.0;
+        }
+        ((last_pos - first_pos) / dt).clamp(-Self::MAX_VELOCITY, Self::MAX_VELOCITY)
+    }
 }
 
 #[cfg(test)]
@@ -293,5 +380,38 @@ mod tests {
         assert_eq!(clamp_percentage(f32::NAN), 0.0);
         assert_eq!(clamp_percentage(f32::INFINITY), 1.0);
         assert_eq!(clamp_percentage(f32::NEG_INFINITY), 0.0);
+    }
+
+    #[test]
+    fn rubber_band_is_monotonic_bounded_and_zero_at_rest() {
+        assert_eq!(rubber_band(0.0, 100.0, RUBBER_BAND_COEFFICIENT), 0.0);
+        let a = rubber_band(20.0, 100.0, RUBBER_BAND_COEFFICIENT);
+        let b = rubber_band(100.0, 100.0, RUBBER_BAND_COEFFICIENT);
+        let c = rubber_band(-50.0, 100.0, RUBBER_BAND_COEFFICIENT);
+        assert!(a > 0.0 && a < 20.0);
+        assert!(b > a && b < 100.0);
+        assert!(c < 0.0 && c > -50.0);
+    }
+
+    #[test]
+    fn project_and_momentum_zeta_behave_per_ios_laws() {
+        assert_close(project(100.0, 0.0, DECELERATION_NORMAL), 100.0, 1e-4);
+        let landed = project(0.0, 1200.0, DECELERATION_NORMAL);
+        assert!((landed - 598.8).abs() < 2.0, "landed={landed}");
+        assert_close(momentum_zeta(0.0), 1.0, 1e-5);
+        assert_close(momentum_zeta(2000.0), 0.7, 1e-5);
+        assert_close(momentum_zeta(5000.0), 0.7, 1e-5);
+    }
+
+    #[test]
+    fn velocity_tracker_zeroes_after_pause_and_tracks_motion() {
+        let mut tracker = VelocityTracker1D::new();
+        let t0 = std::time::Instant::now();
+        tracker.push(t0, 100.0);
+        tracker.push(t0 + Duration::from_millis(50), 200.0);
+        let v = tracker.velocity(t0 + Duration::from_millis(60));
+        assert!((v - 2000.0).abs() < 50.0, "v={v}");
+        let paused = tracker.velocity(t0 + Duration::from_millis(120));
+        assert_eq!(paused, 0.0);
     }
 }

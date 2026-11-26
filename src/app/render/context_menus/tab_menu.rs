@@ -1,6 +1,6 @@
 //! Tab context menu, split-target picker, and folder/pin actions.
 
-use super::{context_menu_item, dismiss_backdrop};
+use super::{context_menu_item, dismiss_backdrop, sync_overlay_transition};
 use super::super::*;
 
 impl Anarc {
@@ -14,8 +14,21 @@ impl Anarc {
         )],
         cx: &mut Context<Self>,
     ) -> Option<gpui_kit::AnyElement> {
-        let menu = self.tab_context_menu.as_ref()?;
-        let target_id = menu.tab_id.clone();
+        let mut transition = std::mem::take(&mut self.tab_menu_transition);
+        let synced = sync_overlay_transition(
+            &mut transition,
+            self.tab_context_menu.as_ref(),
+            ui::motion::popover(),
+            |this, serial| {
+                if this.tab_menu_transition.closing.as_ref().is_some_and(|(_, s)| *s == serial) {
+                    this.tab_menu_transition.closing = None;
+                }
+            },
+            cx,
+        );
+        self.tab_menu_transition = transition;
+        let (menu, is_closing, serial) = synced?;
+        let target_id = menu.tab_id;
         let menu_width = menu.width;
         let showing_split_targets = menu.showing_split_targets;
         let menu_x = menu.x;
@@ -58,15 +71,26 @@ impl Anarc {
         }
 
         let panel = panel.with_spring(
-            format!("tab-menu-entrance-{target_id}"),
-            ui::motion::popover().enter(),
+            format!(
+                "tab-menu-{}-{target_id}-{serial}",
+                if is_closing { "exit" } else { "enter" }
+            ),
+            if is_closing {
+                ui::motion::popover().between(1.0, 0.0)
+            } else {
+                ui::motion::popover().enter()
+            },
             move |panel, progress| {
                 panel
                     .w(px(menu_width * (0.96 + 0.04 * progress)))
                     .opacity(ui::motion::clamp_percentage(progress))
             },
         );
-        Some(menu_layer.child(panel).into_any_element())
+        if is_closing {
+            Some(panel.into_any_element())
+        } else {
+            Some(menu_layer.child(panel).into_any_element())
+        }
     }
 
     fn append_split_target_items(

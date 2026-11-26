@@ -107,6 +107,7 @@ pub(crate) fn render_permission_review(
     };
 
     div()
+        .id("plugin-permission-review")
         .w_full()
         .max_w(px(520.0))
         .mx_auto()
@@ -200,6 +201,14 @@ pub(crate) fn render_permission_review(
                         .child(install_label)
                         .into_any_element()
                 }),
+        )
+        .with_spring(
+            "plugin-permission-review-entrance",
+            crate::ui::motion::sheet().enter(),
+            |card, progress| {
+                let p = crate::ui::motion::clamp_percentage(progress);
+                card.max_w(px(520.0 * (0.97 + 0.03 * p))).opacity(p)
+            },
         )
         .into_any_element()
 }

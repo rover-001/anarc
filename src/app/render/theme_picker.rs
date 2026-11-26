@@ -123,6 +123,7 @@ fn color_position(color: u32) -> (f32, f32) {
 }
 
 impl Anarc {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn render_theme_picker(
         &self,
         _theme: visual::SpaceTheme,
@@ -130,9 +131,12 @@ impl Anarc {
         y: f32,
         selected: usize,
         colors: &[u32],
+        bounds: PickerBounds,
+        panel_bounds: std::rc::Rc<std::cell::Cell<gpui_kit::Bounds<gpui_kit::Pixels>>>,
+        is_closing: bool,
+        serial: u64,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
-        let bounds = self.theme_editor.as_ref().unwrap().bounds.clone();
         let space = self.theme_picker_space();
         let picker_theme = visual::theme_for_space(space);
         let mut modes = div()
@@ -151,6 +155,7 @@ impl Anarc {
                     .items_center()
                     .justify_center()
                     .text_color(rgb(picker_theme.text))
+                    .active(|style| style.opacity(0.85))
                     .cursor_pointer()
                     .when(space.theme_appearance == mode as u8, |d| {
                         d.bg(rgb(0x77727f))
@@ -253,6 +258,7 @@ impl Anarc {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .active(|style| style.opacity(0.8))
                     .cursor_pointer()
                     .text_color(rgb(picker_theme.text))
                     .child("−")
@@ -280,6 +286,7 @@ impl Anarc {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .active(|style| style.opacity(0.8))
                     .cursor_pointer()
                     .text_color(rgb(picker_theme.text))
                     .child("+")
@@ -319,6 +326,7 @@ impl Anarc {
                     .size(px(19.0 * UI_SCALE))
                     .rounded_full()
                     .bg(rgb(color))
+                    .active(|style| style.opacity(0.8))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(editor) = this.theme_editor.as_mut() {
@@ -399,7 +407,6 @@ impl Anarc {
         let move_entity = cx.entity().downgrade();
         let up_entity = move_entity.clone();
         let dismiss_entity = move_entity.clone();
-        let panel_bounds = self.theme_editor.as_ref().unwrap().panel_bounds.clone();
         let tracking = canvas(
             move |area, _, _| panel_bounds.set(area),
             move |_, _, window, _| {
@@ -467,7 +474,7 @@ impl Anarc {
         .inset_0();
         div()
             .id("theme-editor-panel")
-            .occlude()
+            .when(!is_closing, |el| el.occlude())
             .absolute()
             .left(px(x))
             .top(px(y))
@@ -491,6 +498,22 @@ impl Anarc {
             .child(buttons)
             .child(presets)
             .child(controls)
+            .with_spring(
+                format!(
+                    "theme-editor-{}-{serial}",
+                    if is_closing { "exit" } else { "enter" }
+                ),
+                if is_closing {
+                    crate::ui::motion::popover().between(1.0, 0.0)
+                } else {
+                    crate::ui::motion::popover().enter()
+                },
+                |panel, progress| {
+                    panel
+                        .w(px((304.0 * UI_SCALE + 2.0) * (0.96 + 0.04 * progress)))
+                        .opacity(crate::ui::motion::clamp_percentage(progress))
+                },
+            )
             .into_any_element()
     }
 }

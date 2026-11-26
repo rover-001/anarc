@@ -170,8 +170,26 @@ impl Anarc {
         let active_space = self.active_space();
         let mut regular_tabs = div().id("regular-tabs").w_full().flex().flex_col();
         let mut has_regular_tabs = false;
+        let inline_closing = self.closing_tab.as_ref().filter(|(space, tab, _, started, _)| {
+            space == active_space_id
+                && !tab.is_pinned()
+                && tab.folder.is_none()
+                && started.elapsed() < ui::motion::row_exit().duration()
+        });
+        let mut inserted_closing = false;
 
-        for (id, title, favicon) in tabs {
+        for (tab_index, (id, title, favicon)) in tabs.iter().enumerate() {
+            if let Some((_, closing_tab, closing_index, _, serial)) = inline_closing
+                && !inserted_closing
+                && tab_index >= *closing_index
+            {
+                inserted_closing = true;
+                regular_tabs = regular_tabs.child(render_inline_closing_tab_row(
+                    closing_tab,
+                    *serial,
+                    theme,
+                ));
+            }
             let is_split =
                 stored_split_pair.is_some_and(|pair| pair.panes().contains(&id.as_str()));
             let is_sectioned = active_space
@@ -192,6 +210,15 @@ impl Anarc {
                 in_space_transition,
                 theme,
                 cx,
+            ));
+        }
+        if let Some((_, closing_tab, _, _, serial)) = inline_closing
+            && !inserted_closing
+        {
+            regular_tabs = regular_tabs.child(render_inline_closing_tab_row(
+                closing_tab,
+                *serial,
+                theme,
             ));
         }
 
@@ -411,6 +438,7 @@ impl Anarc {
                 move |row, progress| {
                     let progress = ui::motion::clamp_percentage(progress);
                     row.h(px(visual::TAB_ROW_HEIGHT * progress))
+                        .pl(px(8.0 * UI_SCALE * (1.0 - progress)))
                         .opacity(progress)
                 },
             )
@@ -429,7 +457,9 @@ impl Anarc {
     ) -> Option<impl IntoElement> {
         let (closing_space, closing_tab, closing_index, started, serial) =
             self.closing_tab.as_ref()?;
-        if closing_space != active_space_id || started.elapsed() >= ui::motion::row_exit().duration()
+        if (!closing_tab.is_pinned() && closing_tab.folder.is_none())
+            || closing_space != active_space_id
+            || started.elapsed() >= ui::motion::row_exit().duration()
         {
             return None;
         }
@@ -470,12 +500,51 @@ impl Anarc {
                     ui::motion::row_exit().between(1.0, 0.0),
                     move |row, remaining| {
                         let remaining = ui::motion::clamp_percentage(remaining);
-                        row.h(px(visual::TAB_ROW_HEIGHT * remaining))
+                        row.left(px(row_rect.left - 12.0 * UI_SCALE * (1.0 - remaining)))
+                            .h(px(visual::TAB_ROW_HEIGHT * remaining))
                             .opacity(remaining)
                     },
                 ),
         )
     }
+}
+
+fn render_inline_closing_tab_row(
+    closing_tab: &Tab,
+    serial: u64,
+    theme: visual::SpaceTheme,
+) -> gpui_kit::AnyElement {
+    div()
+        .id(format!("closing-tab-inline-{}-{serial}", closing_tab.id))
+        .w_full()
+        .h(px(visual::TAB_ROW_HEIGHT))
+        .overflow_hidden()
+        .rounded_lg()
+        .bg(crate::ui::visual::translucent_surface(theme.surface, 0x30))
+        .child(
+            div()
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .gap(px(visual::SIDEBAR_ROW_GAP))
+                .px(px(visual::SIDEBAR_ROW_PADDING_X))
+                .text_sm()
+                .text_color(rgb(theme.muted))
+                .child(tab_list::favicon(None))
+                .child(closing_tab.title.clone()),
+        )
+        .with_spring(
+            format!("tab-row-close-inline-{}-{serial}", closing_tab.id),
+            ui::motion::row_exit().between(1.0, 0.0),
+            move |row, remaining| {
+                let remaining = ui::motion::clamp_percentage(remaining);
+                row.h(px(visual::TAB_ROW_HEIGHT * remaining))
+                    .pl(px(12.0 * UI_SCALE * (1.0 - remaining)))
+                    .opacity(remaining)
+            },
+        )
+        .into_any_element()
 }
 
 fn render_split_member_row(

@@ -164,6 +164,7 @@ impl Anarc {
                                             s.bg(crate::ui::visual::translucent_surface(modal_theme.surface_hover, 0x60))
                                                 .text_color(rgb(visual::tint_rgb(modal_theme.accent, 0xffffff, 0.3)))
                                         })
+                                        .active(|s| s.opacity(0.85))
                                         .cursor_pointer()
                                         .child(space_switcher::render_space_icon(icon))
                                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -198,6 +199,7 @@ impl Anarc {
                                 .bg(crate::ui::visual::translucent_surface(modal_theme.surface_hover, 0x40))
                                 .text_color(rgb(modal_theme.text))
                                 .text_sm()
+                                .active(|s| s.opacity(0.85))
                                 .cursor_pointer()
                                 .child("Edit theme…")
                                 .on_click(cx.listener(
@@ -228,6 +230,7 @@ impl Anarc {
                                     s.bg(crate::ui::visual::translucent_surface(modal_theme.surface_hover, 0x40))
                                         .text_color(rgb(modal_theme.text))
                                 })
+                                .active(|s| s.opacity(0.85))
                                 .cursor_pointer()
                                 .child("Cancel")
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -250,6 +253,7 @@ impl Anarc {
                                 .hover(|s| {
                                     s.bg(rgb(visual::tint_rgb(modal_theme.accent, 0xffffff, 0.25)))
                                 })
+                                .active(|s| s.opacity(0.85))
                                 .cursor_pointer()
                                 .child(action_label)
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -383,6 +387,7 @@ impl Anarc {
                                         .bg(crate::ui::visual::translucent_surface(theme.surface_hover, 0x40))
                                         .text_color(rgb(theme.text))
                                 })
+                                .active(|s| s.opacity(0.85))
                                 .cursor_pointer()
                                 .child("Cancel")
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -402,6 +407,7 @@ impl Anarc {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(theme.base))
                                 .hover(|style| style.bg(rgb(0xb4bcff)))
+                                .active(|s| s.opacity(0.85))
                                 .cursor_pointer()
                                 .child(action_label)
                                 .on_click(cx.listener(|this, _, _, cx| {

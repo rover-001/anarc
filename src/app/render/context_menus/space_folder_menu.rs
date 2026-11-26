@@ -1,6 +1,6 @@
 //! Sidebar, theme editor, space, and folder context menu overlays.
 
-use super::{context_menu_item, dismiss_backdrop};
+use super::{context_menu_item, dismiss_backdrop, sync_overlay_transition};
 use super::super::*;
 
 impl Anarc {
@@ -9,7 +9,20 @@ impl Anarc {
         theme: visual::SpaceTheme,
         cx: &mut Context<Self>,
     ) -> Option<gpui_kit::AnyElement> {
-        let menu = self.sidebar_context_menu.as_ref()?;
+        let mut transition = std::mem::take(&mut self.sidebar_menu_transition);
+        let synced = sync_overlay_transition(
+            &mut transition,
+            self.sidebar_context_menu.as_ref(),
+            ui::motion::popover(),
+            |this, serial| {
+                if this.sidebar_menu_transition.closing.as_ref().is_some_and(|(_, s)| *s == serial) {
+                    this.sidebar_menu_transition.closing = None;
+                }
+            },
+            cx,
+        );
+        self.sidebar_menu_transition = transition;
+        let (menu, is_closing, serial) = synced?;
         let x = menu.x;
         let y = menu.y;
         let width = menu.width;
@@ -69,7 +82,26 @@ impl Anarc {
                         },
                     )),
             );
-        Some(dismiss.child(panel).into_any_element())
+        let panel = panel.with_spring(
+            format!(
+                "sidebar-menu-{}-{serial}",
+                if is_closing { "exit" } else { "enter" }
+            ),
+            if is_closing {
+                ui::motion::popover().between(1.0, 0.0)
+            } else {
+                ui::motion::popover().enter()
+            },
+            move |menu, progress| {
+                menu.w(px(width * (0.96 + 0.04 * progress)))
+                    .opacity(ui::motion::clamp_percentage(progress))
+            },
+        );
+        if is_closing {
+            Some(panel.into_any_element())
+        } else {
+            Some(dismiss.child(panel).into_any_element())
+        }
     }
 
     pub(super) fn render_theme_editor_overlay(
@@ -77,10 +109,30 @@ impl Anarc {
         theme: visual::SpaceTheme,
         cx: &mut Context<Self>,
     ) -> Option<gpui_kit::AnyElement> {
-        let editor = self.theme_editor.as_ref()?;
+        let mut transition = std::mem::take(&mut self.theme_editor_transition);
+        let synced = sync_overlay_transition(
+            &mut transition,
+            self.theme_editor.as_ref(),
+            ui::motion::popover(),
+            |this, serial| {
+                if this
+                    .theme_editor_transition
+                    .closing
+                    .as_ref()
+                    .is_some_and(|(_, s)| *s == serial)
+                {
+                    this.theme_editor_transition.closing = None;
+                }
+            },
+            cx,
+        );
+        self.theme_editor_transition = transition;
+        let (editor, is_closing, serial) = synced?;
         let x = editor.x;
         let y = editor.y;
         let selected = editor.selected_color;
+        let bounds = editor.bounds.clone();
+        let panel_bounds = editor.panel_bounds.clone();
         let colors = if self.theme_picker_space().theme_colors.is_empty() {
             vec![self.theme_picker_space().color]
         } else {
@@ -93,8 +145,23 @@ impl Anarc {
             },
             cx,
         );
-        let panel = self.render_theme_picker(theme, x, y, selected, &colors, cx);
-        Some(dismiss.child(panel).into_any_element())
+        let panel = self.render_theme_picker(
+            theme,
+            x,
+            y,
+            selected,
+            &colors,
+            bounds,
+            panel_bounds,
+            is_closing,
+            serial,
+            cx,
+        );
+        if is_closing {
+            Some(panel)
+        } else {
+            Some(dismiss.child(panel).into_any_element())
+        }
     }
 
     pub(super) fn render_space_context_menu(
@@ -102,7 +169,25 @@ impl Anarc {
         theme: visual::SpaceTheme,
         cx: &mut Context<Self>,
     ) -> Option<gpui_kit::AnyElement> {
-        let menu = self.space_context_menu.as_ref()?;
+        let mut transition = std::mem::take(&mut self.space_menu_transition);
+        let synced = sync_overlay_transition(
+            &mut transition,
+            self.space_context_menu.as_ref(),
+            ui::motion::popover(),
+            |this, serial| {
+                if this
+                    .space_menu_transition
+                    .closing
+                    .as_ref()
+                    .is_some_and(|(_, s)| *s == serial)
+                {
+                    this.space_menu_transition.closing = None;
+                }
+            },
+            cx,
+        );
+        self.space_menu_transition = transition;
+        let (menu, is_closing, serial) = synced?;
         let target_space = self.spaces.iter().find(|s| s.id == menu.space_id)?;
         let target_id = target_space.id.clone();
         let target_id_edit = target_id.clone();
@@ -173,6 +258,7 @@ impl Anarc {
                     .text_sm()
                     .text_color(rgb(0xff6b6b))
                     .hover(|style| style.bg(rgb(0x381e22)))
+                    .active(|style| style.opacity(0.85))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -187,14 +273,25 @@ impl Anarc {
         }
 
         let ctx_menu = ctx_menu.with_spring(
-            format!("space-menu-entrance-{target_id}"),
-            ui::motion::popover().enter(),
+            format!(
+                "space-menu-{}-{target_id}-{serial}",
+                if is_closing { "exit" } else { "enter" }
+            ),
+            if is_closing {
+                ui::motion::popover().between(1.0, 0.0)
+            } else {
+                ui::motion::popover().enter()
+            },
             |menu, progress| {
                 menu.w(px(224.0 * UI_SCALE * (0.96 + 0.04 * progress)))
                     .opacity(ui::motion::clamp_percentage(progress))
             },
         );
-        Some(menu_layer.child(ctx_menu).into_any_element())
+        if is_closing {
+            Some(ctx_menu.into_any_element())
+        } else {
+            Some(menu_layer.child(ctx_menu).into_any_element())
+        }
     }
 
     pub(super) fn render_folder_context_menu(
@@ -202,8 +299,26 @@ impl Anarc {
         theme: visual::SpaceTheme,
         cx: &mut Context<Self>,
     ) -> Option<gpui_kit::AnyElement> {
-        let menu = self.folder_context_menu.as_ref()?;
-        let folder_id = menu.folder_id.clone();
+        let mut transition = std::mem::take(&mut self.folder_menu_transition);
+        let synced = sync_overlay_transition(
+            &mut transition,
+            self.folder_context_menu.as_ref(),
+            ui::motion::popover(),
+            |this, serial| {
+                if this
+                    .folder_menu_transition
+                    .closing
+                    .as_ref()
+                    .is_some_and(|(_, s)| *s == serial)
+                {
+                    this.folder_menu_transition.closing = None;
+                }
+            },
+            cx,
+        );
+        self.folder_menu_transition = transition;
+        let (menu, is_closing, serial) = synced?;
+        let folder_id = menu.folder_id;
         let x = menu.x;
         let y = menu.y;
         let width = menu.width;
@@ -223,7 +338,7 @@ impl Anarc {
             cx,
         );
         let rename_id = folder_id.clone();
-        let delete_id = folder_id;
+        let delete_id = folder_id.clone();
         let panel = div()
             .id("folder-context-menu")
             .occlude()
@@ -270,7 +385,26 @@ impl Anarc {
                         this.folder_context_menu = None;
                         cx.notify();
                     })),
+            )
+            .with_spring(
+                format!(
+                    "folder-menu-{}-{folder_id}-{serial}",
+                    if is_closing { "exit" } else { "enter" }
+                ),
+                if is_closing {
+                    ui::motion::popover().between(1.0, 0.0)
+                } else {
+                    ui::motion::popover().enter()
+                },
+                move |menu, progress| {
+                    menu.w(px(width * (0.96 + 0.04 * progress)))
+                        .opacity(ui::motion::clamp_percentage(progress))
+                },
             );
-        Some(menu_layer.child(panel).into_any_element())
+        if is_closing {
+            Some(panel.into_any_element())
+        } else {
+            Some(menu_layer.child(panel).into_any_element())
+        }
     }
 }

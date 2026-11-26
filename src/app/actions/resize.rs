@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::app::state::SidebarWidthTransition;
 
 impl Anarc {
     pub(in crate::app) fn animate_sidebar_toggle(
@@ -41,22 +42,54 @@ impl Anarc {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let initial = self.sidebar_width_transition.map_or_else(
+            || gpui_kit::SpringState {
+                position: self.effective_sidebar_width(),
+                velocity: 0.0,
+            },
+            |transition| transition.state(),
+        );
+        self.animate_sidebar_width_from(
+            initial,
+            target,
+            collapsed,
+            ui::motion::sidebar(),
+            window,
+            cx,
+        );
+    }
+
+    pub(in crate::app) fn animate_sidebar_width_from(
+        &mut self,
+        initial: gpui_kit::SpringState,
+        target: f32,
+        collapsed: bool,
+        spec: ui::motion::SpringSpec,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         #[cfg(test)]
         let _ = window;
-        let from = self.sidebar_width_transition.map_or_else(
-            || self.effective_sidebar_width(),
-            |(from, to, started, _)| {
-                let progress = ui::motion::sidebar().progress(started.elapsed());
-                from + (to - from) * progress
-            },
-        );
         #[cfg(not(test))]
         self.begin_browser_resize_drag(window, false, true);
         #[cfg(not(test))]
         let final_sizes = self.browser_sizes_for_sidebar(window, target);
         self.sidebar_transition_serial = self.sidebar_transition_serial.wrapping_add(1);
         let serial = self.sidebar_transition_serial;
-        self.sidebar_width_transition = Some((from, target, Instant::now(), serial));
+        let config = spec.config();
+        #[cfg(not(test))]
+        let settle = if ui::motion::reduced_motion() {
+            std::time::Duration::ZERO
+        } else {
+            config.settle_time(initial, target, 0.5)
+        };
+        self.sidebar_width_transition = Some(SidebarWidthTransition {
+            initial,
+            target,
+            config,
+            started: Instant::now(),
+            serial,
+        });
         let collapsed_changed = self.sidebar_collapsed != collapsed;
         self.sidebar_collapsed = collapsed;
         if collapsed_changed {
@@ -65,9 +98,7 @@ impl Anarc {
 
         #[cfg(not(test))]
         cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(ui::motion::sidebar().duration())
-                .await;
+            cx.background_executor().timer(settle).await;
             let _ = this.update(cx, |this, cx| {
                 if this.sidebar_transition_serial == serial {
                     this.sidebar_width_transition = None;

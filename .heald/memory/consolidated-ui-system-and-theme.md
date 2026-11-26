@@ -1,7 +1,7 @@
 ---
 type: decision
 title: "Consolidated: UI System & Theme"
-timestamp: 2026-11-26T04:14:16.293374138+00:00
+timestamp: 2026-11-26T05:34:44.149133+00:00
 tags: [consolidated, "ui-system-&-theme"]
 ---
 
@@ -11,6 +11,7 @@ Consolidated architectural decisions, system invariants, and implementation patt
 
 ## Core System Decisions & Invariants
 
+- **iOS Fluid Motion UX upgrades: rubber-band resize, velocity-preserving sidebar springs, and overlay entrances**: Added rubber_band, project, momentum_zeta, and VelocityTracker1D to src/ui/motion.rs; upgraded SidebarWidthTransition to preserve SpringState (position+velocity) across interruptions and added rubber-band + spring-back to sidebar resize; converted web_view, sidebar, space-switch, and theme transitions from with_animation to with_spring; added spring entrances and instant .active() press-down feedback across overlays, menus, dialogs, and buttons.
 - **Modularize shield, plugin distribution/wasm_host, context_menus/sidebar, and agent act parse/exec**: Split 7 monolithic files (>870 lines each) into focused submodules with shared helpers and zero behavioral/UI changes: src/shield/, src/plugin/distribution/, src/plugin/wasm_host/, src/app/render/context_menus/, src/app/render/sidebar/, src/agent/act/parse/, src/agent/act/exec/.
 - **Plugins settings page uses 4-column grid layout**: Updated src/ui/plugin_manager.rs to render plugin cards in a 4-column grid (.grid().grid_cols(4).gap_3()) with card headers (name, kind, version, toggle/Required badge), wrapped text, and bottom action buttons (Open/Remove) while preserving all existing click handlers and debug selectors.
 - **Smooth favicon and logo rendering via RGSS minification and 48px Triangle pre-downscale**: Fixed aliased/overly-sharp favicons and Anarc logo caused by single-tap bilinear sampling of un-mipmapped atlas textures during heavy downscaling (96px->20px logo, 128-512px->14px favicons) and Lanczos3 ringing. Added 4-tap rotated-grid supersampling (RGSS) in fs_poly_sprite (vendor/gpui-pre-wgpu/src/shaders.wgsl) when texel footprint > 1.25, downscaled anarc_logo to 48x48 with FilterType::Triangle in src/ui/visual.rs, and unified favicon RenderImage creation via render_image_from_rgba in src/engine/mod.rs capping uploaded favicons at 48x48 with Triangle filtering.
@@ -50,8 +51,9 @@ Consolidated architectural decisions, system invariants, and implementation patt
 - `src/ui/visual.rs`
 - `tools/install-cef-codecs.sh`
 
-## Consolidated Evolution History (24 items archived)
+## Consolidated Evolution History (25 items archived)
 
+- 2026-11-26 — iOS Fluid Motion UX upgrades: rubber-band resize, velocity-preserving sidebar springs, and overlay entrances (`ios-fluid-motion-ux-upgrades-rubber-band-resize-velocity-preserving-sidebar-springs-and-overlay-entrances.md`)
 - 2026-11-26 — Modularize shield, plugin distribution/wasm_host, context_menus/sidebar, and agent act parse/exec (`modularize-shield-plugin-distributionwasmhost-contextmenussidebar-and-agent-act-parseexec.md`)
 - 2026-11-26 — Plugins settings page uses 4-column grid layout (`plugins-settings-page-uses-4-column-grid-layout.md`)
 - 2026-11-26 — Smooth favicon and logo rendering via RGSS minification and 48px Triangle pre-downscale (`smooth-favicon-and-logo-rendering-via-rgss-minification-and-48px-triangle-pre-downscale.md`)

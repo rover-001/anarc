@@ -7,6 +7,7 @@ mod tab_menu;
 mod web_menu;
 
 use super::*;
+use crate::app::state::OverlayTransition;
 
 pub(super) fn dismiss_backdrop(
     id: impl Into<gpui_kit::ElementId>,
@@ -49,12 +50,49 @@ pub(super) fn context_menu_item(
                 0x40,
             ))
         })
+        .active(|style| style.opacity(0.85))
         .cursor_pointer()
         .flex()
         .items_center()
         .gap_2()
         .child(Icon::new(icon))
         .child(label.into())
+}
+
+pub(super) fn sync_overlay_transition<T: Clone + 'static>(
+    transition: &mut OverlayTransition<T>,
+    current: Option<&T>,
+    spec: ui::motion::SpringSpec,
+    clear: impl Fn(&mut Anarc, u64) + 'static,
+    cx: &mut Context<Anarc>,
+) -> Option<(T, bool, u64)> {
+    if let Some(value) = current {
+        if transition.last.is_none() {
+            transition.serial = transition.serial.wrapping_add(1);
+        }
+        transition.last = Some(value.clone());
+        transition.closing = None;
+        return Some((value.clone(), false, transition.serial));
+    }
+    if let Some(prev) = transition.last.take() {
+        transition.serial = transition.serial.wrapping_add(1);
+        let serial = transition.serial;
+        if !ui::motion::reduced_motion() {
+            transition.closing = Some((prev, serial));
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(spec.duration()).await;
+                let _ = this.update(cx, |this, cx| {
+                    clear(this, serial);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+    transition
+        .closing
+        .as_ref()
+        .map(|(value, serial)| (value.clone(), true, *serial))
 }
 
 impl Anarc {

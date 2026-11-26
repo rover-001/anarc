@@ -37,10 +37,29 @@ pub(super) struct SpaceModal {
     pub(super) theme_draft: Space,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct OverlayTransition<T> {
+    pub(super) last: Option<T>,
+    pub(super) closing: Option<(T, u64)>,
+    pub(super) serial: u64,
+}
+
+impl<T> Default for OverlayTransition<T> {
+    fn default() -> Self {
+        Self {
+            last: None,
+            closing: None,
+            serial: 0,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub(super) struct SpaceContextMenu {
     pub(super) space_id: String,
 }
 
+#[derive(Clone)]
 pub(super) struct SidebarContextMenu {
     pub(super) x: f32,
     pub(super) y: f32,
@@ -48,6 +67,7 @@ pub(super) struct SidebarContextMenu {
     pub(super) height: f32,
 }
 
+#[derive(Clone)]
 pub(super) struct ThemeEditor {
     pub(super) x: f32,
     pub(super) y: f32,
@@ -61,6 +81,7 @@ pub(super) struct ThemeEditor {
     pub(super) bounds: std::rc::Rc<std::cell::Cell<[gpui_kit::Bounds<gpui_kit::Pixels>; 3]>>,
 }
 
+#[derive(Clone)]
 pub(super) struct TabContextMenu {
     pub(super) tab_id: String,
     pub(super) showing_split_targets: bool,
@@ -90,6 +111,7 @@ pub(super) struct PeekState {
     pub(super) url: String,
 }
 
+#[derive(Clone)]
 pub(super) struct FolderContextMenu {
     pub(super) folder_id: String,
     pub(super) x: f32,
@@ -112,6 +134,32 @@ pub(super) struct FolderModal {
     pub(super) anchor_y: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SidebarWidthTransition {
+    pub(super) initial: gpui_kit::SpringState,
+    pub(super) target: f32,
+    pub(super) config: gpui_kit::SpringConfig,
+    pub(super) started: Instant,
+    pub(super) serial: u64,
+}
+
+impl SidebarWidthTransition {
+    pub(super) fn state(&self) -> gpui_kit::SpringState {
+        if ui::motion::reduced_motion() {
+            return gpui_kit::SpringState {
+                position: self.target,
+                velocity: 0.0,
+            };
+        }
+        self.config
+            .step(self.initial, self.target, self.started.elapsed().as_secs_f32())
+    }
+
+    pub(super) fn width(&self) -> f32 {
+        self.state().position.max(0.0)
+    }
+}
+
 pub(crate) struct Anarc {
     pub(super) spaces: Vec<Space>,
     pub(super) active_space: String,
@@ -123,7 +171,8 @@ pub(crate) struct Anarc {
     pub(crate) kept_section_drag_hovered: bool,
     pub(super) sidebar_width: f32,
     pub(super) sidebar_resizing: bool,
-    pub(super) sidebar_width_transition: Option<(f32, f32, Instant, u64)>,
+    pub(super) sidebar_resize_tracker: ui::motion::VelocityTracker1D,
+    pub(super) sidebar_width_transition: Option<SidebarWidthTransition>,
     pub(super) sidebar_transition_serial: u64,
     pub(super) theme_transition: Option<(visual::SpaceTheme, Instant, u64)>,
     pub(super) theme_transition_id: u64,
@@ -172,11 +221,16 @@ pub(crate) struct Anarc {
     pub(super) split_resizing_horizontal: bool,
     pub(super) space_modal: Option<SpaceModal>,
     pub(super) space_context_menu: Option<SpaceContextMenu>,
+    pub(super) space_menu_transition: OverlayTransition<SpaceContextMenu>,
     pub(super) sidebar_context_menu: Option<SidebarContextMenu>,
+    pub(super) sidebar_menu_transition: OverlayTransition<SidebarContextMenu>,
     pub(super) theme_editor: Option<ThemeEditor>,
+    pub(super) theme_editor_transition: OverlayTransition<ThemeEditor>,
     pub(super) tab_context_menu: Option<TabContextMenu>,
+    pub(super) tab_menu_transition: OverlayTransition<TabContextMenu>,
     pub(super) web_context_menu: Option<WebContextMenu>,
     pub(super) folder_context_menu: Option<FolderContextMenu>,
+    pub(super) folder_menu_transition: OverlayTransition<FolderContextMenu>,
     pub(super) folder_modal: Option<FolderModal>,
     pub(super) split_group_expanded: bool,
     /// (space id, tab id, when) of the tab just created via add_tab; only it plays the row entrance.
@@ -190,8 +244,23 @@ pub(crate) struct Anarc {
     pub(super) fullscreen_tab: Option<String>,
     pub(super) fullscreen_window_was_fullscreen: Option<bool>,
     pub(super) app_page: Option<AppPage>,
+    pub(super) app_page_was_open: Option<AppPage>,
+    pub(super) app_page_closing: Option<(AppPage, u64)>,
+    pub(super) app_page_serial: u64,
+    pub(super) command_palette_was_open: bool,
+    pub(super) command_palette_closing: Option<u64>,
+    pub(super) command_palette_serial: u64,
+    pub(super) find_was_open: bool,
+    pub(super) find_closing: Option<u64>,
+    pub(super) find_serial: u64,
+    pub(super) peek_last: Option<PeekState>,
+    pub(super) peek_closing: Option<(PeekState, u64)>,
+    pub(super) peek_closing_serial: u64,
     pub(super) plugins_menu_open: bool,
     pub(super) downloads_bubble_open: bool,
+    pub(super) downloads_bubble_was_open: bool,
+    pub(super) downloads_bubble_closing: Option<u64>,
+    pub(super) downloads_bubble_serial: u64,
     pub(super) dismissed_download_toast_id: Option<u32>,
     pub(crate) settings_section: SettingsSection,
     #[allow(dead_code)]

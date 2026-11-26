@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use gpui_kit::{
-    Context, FontWeight, StatefulInteractiveElement, assets::IconName, component::Icon,
-    component::scroll::ScrollableElement, div, prelude::*, px, rgb,
+    AnimationExt as _, Context, FontWeight, StatefulInteractiveElement, assets::IconName,
+    component::Icon, div, prelude::*, px, rgb,
 };
 
 use crate::app::SettingsSection;
@@ -116,9 +116,10 @@ pub fn render(
         )
         .child(
             div()
+                .id("app-page-scroll")
                 .flex_1()
                 .w_full()
-                .overflow_y_scrollbar()
+                .overflow_y_scroll()
                 .child(content),
         )
         .into_any_element()
@@ -514,7 +515,20 @@ fn settings_content(
                 .child("Browser preferences"),
         )
         .child(tabs)
-        .child(content)
+        .child(
+            div()
+                .id(format!("settings-tab-content-{selected_section:?}"))
+                .w_full()
+                .child(content)
+                .with_spring(
+                    format!("settings-tab-spring-{selected_section:?}"),
+                    crate::ui::motion::content().enter(),
+                    |panel, progress| {
+                        let p = crate::ui::motion::clamp_percentage(progress);
+                        panel.pt(px(10.0 * UI_SCALE * (1.0 - p))).opacity(p)
+                    },
+                ),
+        )
         .into_any_element()
 }
 
