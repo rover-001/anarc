@@ -1074,6 +1074,10 @@ fn download_toast_and_button_active_when_downloading(cx: &mut gpui::TestAppConte
         );
         app.downloads_bubble_open = false;
         app.dismissed_download_toast_id = Some(101);
+        // The bubble plays a short close animation; once it finishes, neither
+        // the bubble nor the dismissed toast should render.
+        app.downloads_bubble_was_open = false;
+        app.downloads_bubble_closing = None;
         assert_eq!(app.render_context_menus(theme, &[], cx).len(), 0);
         crate::plugins::set_downloads_enabled_for_test(false);
     });
