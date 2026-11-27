@@ -964,7 +964,9 @@ fn cef_key_event(
     focus_on_editable_field: bool,
     is_repeat: bool,
 ) -> KeyEvent {
-    let mut flags = 0;
+    // CEF defines `modifiers` as i32 on Linux and u32 on Windows; keep the
+    // accumulator unsigned and cast at the assignment so either binding works.
+    let mut flags: u32 = 0;
     if modifiers.shift {
         flags |= 1 << 1;
     }
@@ -978,7 +980,7 @@ fn cef_key_event(
         flags |= 1 << 7;
     }
     if is_repeat {
-        flags |= cef::sys::cef_event_flags_t::EVENTFLAG_IS_REPEAT.0;
+        flags |= cef::sys::cef_event_flags_t::EVENTFLAG_IS_REPEAT.0 as u32;
     }
     let code = if event_type == KeyEventType::CHAR && character != 0 {
         character as i32
@@ -993,7 +995,7 @@ fn cef_key_event(
     KeyEvent {
         size: std::mem::size_of::<KeyEvent>(),
         type_: event_type,
-        modifiers: flags,
+        modifiers: flags as _,
         windows_key_code: code,
         native_key_code: native_code,
         is_system_key: 0,
