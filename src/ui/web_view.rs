@@ -14,8 +14,8 @@ use scroll::ScrollMotion;
 #[cfg(test)]
 use scroll::step_scroll_accum;
 
-/// Wheel scroll scale. Default is 1.0 (53px per notch, matching standard 3-line scroll).
-/// Can be overridden via ANARC_SCROLL_SCALE env var.
+/// Wheel scroll scale. Default is 1.0 (120px per notch, matching Chromium's
+/// 120-tick wheel delta). Can be overridden via ANARC_SCROLL_SCALE env var.
 pub fn wheel_scroll_scale() -> f32 {
     static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
     *SCALE.get_or_init(|| {
@@ -23,6 +23,21 @@ pub fn wheel_scroll_scale() -> f32 {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(1.0)
+    })
+}
+
+/// GPUI's Wayland backend multiplies continuous/finger axis deltas by 3 before
+/// emitting `ScrollDelta::Pixels`; Chromium passes the raw device pixels to
+/// Blink. Undo that factor only on Wayland so trackpad scrolling matches other
+/// browsers. Discrete wheel notches arrive as `Lines` and are unaffected.
+pub fn wayland_pixel_scale() -> f32 {
+    static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| {
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            1.0 / 3.0
+        } else {
+            1.0
+        }
     })
 }
 

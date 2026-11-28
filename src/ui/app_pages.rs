@@ -18,6 +18,7 @@ pub fn render(
     downloads: Vec<DownloadRecord>,
     page_zoom: f64,
     ad_blocker_enabled: bool,
+    uncapped_fps: bool,
     has_web_site: bool,
     settings_section: SettingsSection,
     search_engine: SearchEngine,
@@ -38,6 +39,7 @@ pub fn render(
             theme,
             page_zoom,
             ad_blocker_enabled,
+            uncapped_fps,
             has_web_site,
             settings_section,
             search_engine,
@@ -130,6 +132,7 @@ fn settings_content(
     theme: SpaceTheme,
     page_zoom: f64,
     ad_blocker_enabled: bool,
+    uncapped_fps: bool,
     has_web_site: bool,
     selected_section: SettingsSection,
     search_engine: SearchEngine,
@@ -262,6 +265,23 @@ fn settings_content(
             } else {
                 "Off"
             };
+            let uncapped_control = crate::ui::plugin_manager::toggle_switch(
+                "settings-uncapped-fps".to_owned(),
+                uncapped_fps,
+                theme,
+                {
+                    let next = !uncapped_fps;
+                    cx.listener(move |this, _, _, cx| {
+                        this.set_uncapped_fps(next);
+                        cx.notify();
+                    })
+                },
+            );
+            let fps_text = if uncapped_fps {
+                "Uncapped after restart"
+            } else {
+                "Matches your screen refresh rate"
+            };
             div()
                 .flex()
                 .flex_col()
@@ -278,6 +298,13 @@ fn settings_content(
                     "Ad & tracker shield",
                     protection_text,
                     shield_control,
+                    theme,
+                ))
+                .child(setting_card(
+                    "Performance",
+                    "Uncapped frame rate",
+                    fps_text,
+                    uncapped_control,
                     theme,
                 ))
                 .child(setting_card(

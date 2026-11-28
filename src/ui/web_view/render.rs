@@ -292,6 +292,8 @@ impl Render for WebViewport {
                 10 => gpui_kit::CursorStyle::DragLink,
                 11 => gpui_kit::CursorStyle::DragCopy,
                 12 => gpui_kit::CursorStyle::ContextualMenu,
+                13 => gpui_kit::CursorStyle::ResizeUpRightDownLeft,
+                14 => gpui_kit::CursorStyle::ResizeUpLeftDownRight,
                 _ => gpui_kit::CursorStyle::Arrow,
             })
             .drag_over::<TabDrag>(move |style, _, _, _| {
@@ -809,17 +811,31 @@ impl Render for WebViewport {
                         this.scroll_motion.cancel();
                         return;
                     }
-                    let (dx, dy, is_precision) = match event.delta {
+                    // `discrete` marks whole-line mouse notches. Chromium sends
+                    // one 120-tick wheel event per notch and does not add app-side
+                    // momentum, so they must never take the precision/fling path.
+                    let (dx, dy, is_precision, discrete) = match event.delta {
                         gpui_kit::ScrollDelta::Pixels(p) => {
-                            (f32::from(p.x), f32::from(p.y), true)
+                            let scale = wayland_pixel_scale();
+                            (
+                                f32::from(p.x) * scale,
+                                f32::from(p.y) * scale,
+                                true,
+                                false,
+                            )
                         }
                         gpui_kit::ScrollDelta::Lines(l) => {
-                            let continuous = l.x.fract().abs().max(l.y.fract().abs()) > 0.001
-                                || this.scroll_motion.continuous_recent();
-                            // GPUI on Linux emits 3.0 lines per discrete mouse wheel notch.
-                            // 1 line = 17.67px -> 3 lines = 53.0px total per notch (scaled).
-                            let px_per_line = (53.0 / 3.0) * wheel_scroll_scale();
-                            (l.x * px_per_line, l.y * px_per_line, continuous)
+                            let discrete = l.x.fract().abs() <= 0.001
+                                && l.y.fract().abs() <= 0.001;
+                            // GPUI emits 3.0 lines per discrete mouse wheel notch;
+                            // Chromium's notch is 120 wheel ticks (~120 CSS px).
+                            let px_per_line = 40.0 * wheel_scroll_scale();
+                            (
+                                l.x * px_per_line,
+                                l.y * px_per_line,
+                                !discrete,
+                                discrete,
+                            )
                         }
                     };
                     if dx == 0.0 && dy == 0.0 {
@@ -841,7 +857,8 @@ impl Render for WebViewport {
                         this.pan_image((-dx, -dy), viewport_size, cx);
                         return;
                     }
-                    let (step_x, step_y) = if is_precision
+                    let (step_x, step_y) = if !discrete
+                        && is_precision
                         && event.source == gpui_kit::ScrollSource::Pointer
                     {
                         this.scroll_motion.record_pointer_scroll(

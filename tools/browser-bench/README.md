@@ -23,7 +23,7 @@ Five 8-second stages, repeated rAF-driven work:
 4. DOM mutation and layout thrash (160 nodes rebuilt per frame)
 5. JIT compute (84x84 matrix multiply + 120,000-sample Monte Carlo)
 
-All browsers run uncapped: Chromium/Brave get `--disable-gpu-vsync --disable-frame-rate-limit`, Firefox gets `layout.frame_rate = 0`, and Anarc gets native CEF OSR with the same GPU/frame-limit switches plus ANGLE/Vulkan on GPUs that support it (`ANARC_NO_VULKAN=1` opts out). The harness also sets `ANARC_OSR_HEADROOM_PERCENT=0` and `ANARC_CEF_INIT_DELAY_MS=0` for Anarc, matching the zero-headroom/low-latency setup given to the other browsers. A dropped frame is any rAF interval above `1000/144 * 1.5 = 10.42 ms`.
+All browsers run uncapped: Chromium/Brave get `--disable-gpu-vsync --disable-frame-rate-limit`, Firefox gets `layout.frame_rate = 0`, and Anarc gets native CEF OSR with the same GPU/frame-limit switches via `ANARC_UNCAPPED_FPS=1` (the browser defaults to screen-refresh capping) plus ANGLE/Vulkan on GPUs that support it (`ANARC_NO_VULKAN=1` opts out). The harness also sets `ANARC_OSR_HEADROOM_PERCENT=0` and `ANARC_CEF_INIT_DELAY_MS=0` for Anarc, matching the zero-headroom/low-latency setup given to the other browsers. A dropped frame is any rAF interval above `1000/144 * 1.5 = 10.42 ms`.
 
 Anarc paints are throttled to one full-frame copy per display refresh by default; `ANARC_OSR_MIN_PAINT_INTERVAL_MS` overrides it (0 disables throttling). Page rAF is unaffected because the timer is not coupled to CEF's paint acknowledgements.
 

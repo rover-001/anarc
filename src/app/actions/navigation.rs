@@ -10,6 +10,16 @@ impl Anarc {
             .save_preferences(&self.preferences);
     }
 
+    /// CEF vsync and frame-limit switches are process-wide, so this takes
+    /// effect on the next launch rather than restarting CEF in place.
+    pub(crate) fn set_uncapped_fps(&mut self, enabled: bool) {
+        self.preferences.uncapped_fps = enabled;
+        self.plugins
+            .service(crate::plugin::SETTINGS)
+            .expect("core settings service is mounted")
+            .save_preferences(&self.preferences);
+    }
+
     pub(crate) fn toggle_shield_for_active_tab(&mut self) {
         let id = self.active_tab_id().to_owned();
         let url = self

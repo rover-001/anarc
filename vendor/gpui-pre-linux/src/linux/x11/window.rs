@@ -774,6 +774,9 @@ impl X11WindowState {
                     // If the window appearance changes, then the renderer will get updated
                     // too
                     transparent: false,
+                    // Keep FIFO here: with OSR paints arriving off-vsync,
+                    // Mailbox replaces queued frames and produces uneven
+                    // presentation intervals that read as scroll stutter.
                     preferred_present_mode: None,
                 };
                 WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu)?

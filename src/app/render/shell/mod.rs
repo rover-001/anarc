@@ -196,6 +196,7 @@ impl Anarc {
                 self.engine.downloads(),
                 zoom,
                 self.engine.ad_blocker_enabled(),
+                self.preferences.uncapped_fps,
                 has_web_site,
                 self.settings_section,
                 self.preferences.search_engine,

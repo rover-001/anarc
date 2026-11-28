@@ -35,7 +35,7 @@ And a local control layer that lets agents drive the real, visible browser.</p>
 Most Linux browsers give you tabs and a toolbar. Anarc gives you a **workspace**.
 
 - **Organized by default.** Group tabs into spaces, each with its own color, folders, and isolated profile.
-- **Fast and native.** A Rust interface on GPUI Kit, with 240 fps hardware rendering and spring-based motion.
+- **Fast and native.** A Rust interface on GPUI Kit, with display-refresh-synced hardware rendering (optional uncapped mode in Settings) and spring-based motion.
 - **Quiet.** Ads, trackers, and YouTube ad overlays are blocked out of the box.
 - **Agent-ready.** A local MCP server and `anarc-ctl` CLI let Claude, Codex, and other harnesses control the same browser you are looking at.
 
@@ -61,7 +61,7 @@ Also included: trackpad pinch-to-zoom and right-click menus for tabs, spaces, fo
 ### Performance and platform
 
 - **Spring-based motion** with reduced-motion support.
-- **240 fps hardware OSR rendering**, vsync-aligned frame dispatch, and full-rate rendering in background windows.
+- **Display-refresh-synced OSR rendering**, up to 240 fps with the optional uncapped mode in Settings > General (requires restart), and no redundant frame copies for hidden tabs.
 - **Windows support** with native minimize, maximize, and close controls in the top bar.
 
 

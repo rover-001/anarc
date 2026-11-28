@@ -125,6 +125,7 @@ def run_single(browser):
         ]
         b_proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     elif browser == "anarc":
+        env["ANARC_UNCAPPED_FPS"] = "1"
         env["ANARC_OSR_HEADROOM_PERCENT"] = "0"
         env["ANARC_CEF_INIT_DELAY_MS"] = "0"
         cmd = [

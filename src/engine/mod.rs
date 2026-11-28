@@ -443,13 +443,16 @@ static OSR_MIN_PAINT_INTERVAL: std::sync::OnceLock<Duration> = std::sync::OnceLo
 
 /// Minimum spacing between accepted OSR frame copies. CEF can paint far more
 /// often than the display can show; skipping redundant full-frame copies frees
-/// CPU without changing the page's rAF cadence.
+/// CPU without changing the page's rAF cadence. The default is half a display
+/// interval, not the full interval: CEF and the window run on separate clocks,
+/// so a full-interval gate drops frames whenever paint phase drifts and can
+/// stall scroll presentation. Input frames bypass this gate entirely.
 pub(super) fn osr_min_paint_interval() -> Duration {
     *OSR_MIN_PAINT_INTERVAL.get_or_init(|| {
         let ms = std::env::var("ANARC_OSR_MIN_PAINT_INTERVAL_MS")
             .ok()
             .and_then(|value| value.trim().parse::<f64>().ok())
-            .unwrap_or_else(|| 1000.0 / display_refresh_rate(None).max(1) as f64);
+            .unwrap_or_else(|| 500.0 / display_refresh_rate(None).max(1) as f64);
         Duration::from_secs_f64((ms.clamp(0.0, 1000.0) / 1000.0).max(0.0))
     })
 }
@@ -480,19 +483,30 @@ pub fn display_refresh_rate(refresh_interval: Option<std::time::Duration>) -> i3
 }
 
 pub fn frame_rate_for_refresh(refresh_interval: Option<std::time::Duration>) -> i32 {
-    let refresh_rate = display_refresh_rate(refresh_interval).clamp(1, OSR_MAX_FRAME_RATE);
-    // CEF and the compositor run on separate clocks. Ask CEF for extra frames
-    // so a fresh OSR image is more likely to be ready for each display tick.
-    // This is configurable because oversampling trades additional CPU/GPU work
-    // for lower frame age on fast displays.
-    let default_headroom_percent = if refresh_rate >= 120 { 5 } else { 0 };
+    // Default to the display refresh rate, like other browsers: Web content
+    // must not render more frames than the screen can present. Headroom is an
+    // explicit opt-in for benchmarking; it oversamples OSR to lower frame age
+    // at the cost of extra CPU/GPU work.
     let headroom_percent = std::env::var("ANARC_OSR_HEADROOM_PERCENT")
         .ok()
         .and_then(|value| value.trim().parse::<i32>().ok())
-        .unwrap_or(default_headroom_percent)
-        .clamp(0, 100);
-    let requested = refresh_rate + (refresh_rate * headroom_percent + 99) / 100;
+        .unwrap_or(0);
+    frame_rate_for_refresh_with_headroom(refresh_interval, headroom_percent)
+}
+
+fn frame_rate_for_refresh_with_headroom(
+    refresh_interval: Option<std::time::Duration>,
+    headroom_percent: i32,
+) -> i32 {
+    let refresh_rate = display_refresh_rate(refresh_interval).clamp(1, OSR_MAX_FRAME_RATE);
+    let requested = refresh_rate + (refresh_rate * headroom_percent.clamp(0, 100) + 99) / 100;
     requested.min(osr_frame_rate_cap())
+}
+
+/// Uncapped rendering is opt-in, either from a benchmark environment or the
+/// persisted Settings toggle. Both require a CEF restart to take effect.
+fn uncapped_fps_requested(env: Option<&std::ffi::OsStr>, preference: bool) -> bool {
+    env.is_some_and(|value| value == "1") || preference
 }
 
 /// Identity providers and OAuth endpoints a sign-in popup points at.
@@ -616,13 +630,22 @@ cef::wrap_app! {
                         "enable-gpu-rasterization",
                         "ignore-gpu-blocklist",
                         "enable-zero-copy",
-                        // Benchmark parity with uncapped Chromium/Brave: CEF's
-                        // OSR rAF is otherwise pinned to the display refresh.
-                        "disable-gpu-vsync",
-                        "disable-frame-rate-limit",
                     ] {
                         let name = CefString::from(name);
                         command_line.append_switch(Some(&name));
+                    }
+                    // By default Web content is capped to the screen refresh
+                    // rate, as in Chromium/Firefox. Users can opt into the
+                    // uncapped compositor in Settings (or benchmarks via env);
+                    // both are applied here at CEF process startup only.
+                    if uncapped_fps_requested(
+                        std::env::var_os("ANARC_UNCAPPED_FPS").as_deref(),
+                        crate::settings::load_preferences().uncapped_fps,
+                    ) {
+                        for name in ["disable-gpu-vsync", "disable-frame-rate-limit"] {
+                            let name = CefString::from(name);
+                            command_line.append_switch(Some(&name));
+                        }
                     }
                     // ANGLE/Vulkan keeps the GPU compositor and Canvas 2D raster
                     // on the native driver path instead of the GL translation
@@ -1060,7 +1083,12 @@ fn cef_key_event(
         flags |= 1 << 7;
     }
     if is_repeat {
-        flags |= cef::sys::cef_event_flags_t::EVENTFLAG_IS_REPEAT.0 as u32;
+        // Windows bindings use c_int here, Linux uses c_uint; the cast is a
+        // no-op on the latter and is therefore flagged by clippy there.
+        #[allow(clippy::unnecessary_cast)]
+        {
+            flags |= cef::sys::cef_event_flags_t::EVENTFLAG_IS_REPEAT.0 as u32;
+        }
     }
     let code = if event_type == KeyEventType::CHAR && character != 0 {
         character as i32
@@ -1212,6 +1240,7 @@ mod tests {
 
     #[test]
     fn frame_rate_uses_refresh_with_fallback_and_cap() {
+        let at = |hz: f64| Some(std::time::Duration::from_secs_f64(1.0 / hz));
         assert_eq!(frame_rate_for_refresh(None), 60);
         assert_eq!(
             frame_rate_for_refresh(Some(std::time::Duration::from_millis(144))),
@@ -1221,13 +1250,24 @@ mod tests {
             frame_rate_for_refresh(Some(std::time::Duration::from_millis(240))),
             4
         );
-        // A 240 Hz panel asks for 240 fps of full-frame OSR copies, the engine
-        // ceiling; pacing follows the display refresh below that.
+        // Default pacing matches the screen exactly; headroom is opt-in only.
+        assert_eq!(frame_rate_for_refresh_with_headroom(at(144.0), 0), 144);
+        assert_eq!(frame_rate_for_refresh_with_headroom(at(144.0), 5), 152);
+        // Above the engine ceiling, pacing is clamped to the configured cap.
         assert_eq!(
-            frame_rate_for_refresh(Some(std::time::Duration::from_millis(4))),
+            frame_rate_for_refresh_with_headroom(at(250.0), 0),
             osr_frame_rate_cap()
         );
         assert_eq!(OSR_MAX_FRAME_RATE, 240);
+    }
+
+    #[test]
+    fn uncapped_fps_requires_an_explicit_opt_in() {
+        use std::ffi::OsStr;
+        assert!(!uncapped_fps_requested(None, false));
+        assert!(!uncapped_fps_requested(Some(OsStr::new("0")), false));
+        assert!(uncapped_fps_requested(Some(OsStr::new("1")), false));
+        assert!(uncapped_fps_requested(None, true));
     }
 
     #[test]

@@ -86,8 +86,16 @@ impl Engine {
             );
 
             let mut window_info = WindowInfo::default().set_as_windowless(empty_window_handle());
-            // Let CEF pace OSR from windowless_frame_rate. External BeginFrames
-            // can be dropped while a previous compositor frame is in flight.
+            // Drive CEF's compositor clock from GPUI's per-frame pump so OSR
+            // paints land in the same display frame as the wheel delta. A free
+            // running CEF timer drifts against the window and produces
+            // alternating fresh/stale frames during a fling. Uncapped mode
+            // keeps CEF's own free-running clock for benchmark parity.
+            let vsync_paced = !super::uncapped_fps_requested(
+                std::env::var_os("ANARC_UNCAPPED_FPS").as_deref(),
+                crate::settings::load_preferences().uncapped_fps,
+            );
+            window_info.external_begin_frame_enabled = i32::from(vsync_paced);
             window_info.runtime_style = cef::RuntimeStyle::ALLOY;
             let start_url = CefString::from(url);
 
@@ -383,10 +391,13 @@ impl Engine {
             .and_then(|entry| entry.state.lock().ok())
             .map(|mut state| {
                 state.dirty = false;
-                if let Some(image) = state.pending_image.take()
-                    && let Some(previous) = state.image.replace(image)
-                {
-                    retired_images.push(previous);
+                if let Some(image) = state.pending_image.take() {
+                    // The forced paint has now been published; allow the
+                    // normal interval gate to resume.
+                    state.force_next_paint = false;
+                    if let Some(previous) = state.image.replace(image) {
+                        retired_images.push(previous);
+                    }
                 }
                 (state.image.clone(), state.cursor)
             })
@@ -573,6 +584,18 @@ impl Engine {
             host.send_mouse_move_event(Some(&event), mouse_leave as i32);
         }
     }
+    /// Drive CEF's compositor clock from the GPUI frame pump. Hidden tabs are
+    /// left alone: CEF does not paint them and an unaligned BeginFrame would
+    /// only queue work.
+    pub fn send_external_begin_frame(&self, tab_id: &str) {
+        if let Some(entry) = self.browsers.get(tab_id)
+            && entry.state.lock().is_ok_and(|state| state.visible)
+            && let Some(host) = entry.browser.host()
+        {
+            host.send_external_begin_frame();
+        }
+    }
+
     pub fn send_mouse_wheel(
         &self,
         tab_id: &str,
@@ -586,6 +609,12 @@ impl Engine {
         if let Some(entry) = self.browsers.get(tab_id)
             && let Some(host) = entry.browser.host()
         {
+            // A wheel event means a fresh frame is imminent. Never let the
+            // paint-interval throttle discard it: that would leave scroll
+            // input with no visible frame at the end of a gesture.
+            if let Ok(mut state) = entry.state.lock() {
+                state.force_next_paint = true;
+            }
             let mut flags = cef_mouse_modifiers(modifiers);
             if precision {
                 #[allow(clippy::unnecessary_cast)]

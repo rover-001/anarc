@@ -7,9 +7,11 @@ use super::WebViewport;
 const MIN_INPUT_GAP_SECS: f32 = 0.010;
 const MAX_INPUT_GAP_SECS: f32 = 0.022;
 const DEFAULT_INPUT_INTERVAL_SECS: f32 = 0.012;
-const MAX_FLING_STEP: Duration = Duration::from_millis(24);
+const MAX_FLING_STEP: Duration = Duration::from_millis(48);
 const DECAY_SECONDS: f32 = 0.28;
-const MIN_FLING_PIXELS_PER_FRAME: f32 = 0.5;
+/// Stop at one whole pixel per frame. At 0.5 px/frame the integer wheel delta
+/// alternates 1px/0px and every skipped frame is a visible hold in the fling.
+const MIN_FLING_PIXELS_PER_FRAME: f32 = 1.0;
 
 #[derive(Default)]
 pub(super) struct ScrollMotion {
@@ -26,13 +28,6 @@ pub(super) struct ScrollMotion {
 }
 
 impl ScrollMotion {
-    pub(super) fn continuous_recent(&self) -> bool {
-        self.running
-            && self
-                .last_event
-                .is_some_and(|time| time.elapsed() < Duration::from_millis(100))
-    }
-
     pub(super) fn accumulate(&mut self, delta: (f32, f32)) -> (i32, i32) {
         (
             step_scroll_accum(&mut self.accum_x, delta.0),
@@ -122,33 +117,24 @@ impl WebViewport {
         let now = Instant::now();
         let previous_frame = motion.last_frame.replace(now).unwrap_or(now);
         let last_event = motion.last_event.unwrap_or(now);
-        let input_gap = motion.input_gap();
-        let mut delta = (0.0, 0.0);
-        // Integrate only the portion of this frame after direct input ceased.
-        // Bound recovery after a delayed frame so inertia continues smoothly
-        // without either a large catch-up jump or abruptly killing the fling.
-        if now.duration_since(last_event) > input_gap {
-            let start = previous_frame.max(last_event + input_gap);
-            let elapsed = now
-                .saturating_duration_since(start)
-                .min(MAX_FLING_STEP);
-            let seconds = elapsed.as_secs_f32();
-            let (dx, vx) = decay_step(motion.velocity.0, seconds);
-            let (dy, vy) = decay_step(motion.velocity.1, seconds);
-            delta = (dx, dy);
-            motion.velocity = (vx, vy);
-        }
-        let position = motion.last_position;
-        let modifiers = motion.modifiers;
-        let steps = motion.accumulate(delta);
-        // CEF accepts integer wheel deltas. Stop below half a display pixel per
-        // frame so the end of the fling doesn't alternate between 0px and 1px.
         let display_interval = window
             .refresh_interval(cx)
             .unwrap_or(Duration::from_millis(16));
+        let (delta, velocity) = integrate_fling(
+            motion.velocity,
+            previous_frame,
+            last_event,
+            now,
+            display_interval,
+        );
+        motion.velocity = velocity;
+        let position = motion.last_position;
+        let modifiers = motion.modifiers;
+        let steps = motion.accumulate(delta);
+        // CEF accepts integer wheel deltas. Stop at a whole pixel per frame so
+        // the tail never alternates between a 1px step and no wheel event.
         let stop_speed = (MIN_FLING_PIXELS_PER_FRAME / display_interval.as_secs_f32()).max(2.0);
-        let keep_running = now.duration_since(last_event) <= input_gap
-            || motion.velocity.0.abs().max(motion.velocity.1.abs()) >= stop_speed;
+        let keep_running = motion.velocity.0.abs().max(motion.velocity.1.abs()) >= stop_speed;
         motion.running = keep_running;
 
         if steps != (0, 0) {
@@ -166,6 +152,36 @@ impl WebViewport {
             });
         }
     }
+}
+
+/// Integrate only the slice of this frame after the latest input event: direct
+/// input was already delivered, so counting it again would double the fling.
+/// Starting at `last_event` (instead of waiting for an adaptive gap) makes
+/// inertia begin on the first frame after lift-off. The cap prevents a delayed
+/// frame from producing a large catch-up jump.
+fn integrate_fling(
+    velocity: (f32, f32),
+    previous_frame: Instant,
+    last_event: Instant,
+    now: Instant,
+    display_interval: Duration,
+) -> ((f32, f32), (f32, f32)) {
+    let start = previous_frame.max(last_event);
+    let elapsed = now.saturating_duration_since(start);
+    // Once input has stopped, advance by a fixed display interval instead of
+    // the measured callback gap. Irregular GPUI frames otherwise turn into
+    // uneven wheel deltas, which reads as a jerky coast. An event arriving
+    // mid-frame still contributes only the time after it; a badly delayed
+    // frame still catches up, bounded by MAX_FLING_STEP.
+    let step = if last_event > previous_frame || elapsed > display_interval * 2 {
+        elapsed.min(MAX_FLING_STEP)
+    } else {
+        display_interval
+    };
+    let seconds = step.as_secs_f32();
+    let (dx, vx) = decay_step(velocity.0, seconds);
+    let (dy, vy) = decay_step(velocity.1, seconds);
+    ((dx, dy), (vx, vy))
 }
 
 fn input_velocity(previous: f32, delta: f32, seconds: f32, fresh: bool) -> f32 {
@@ -210,6 +226,52 @@ mod tests {
     fn reversing_input_replaces_previous_direction_immediately() {
         assert!(input_velocity(800.0, -2.0, 0.016, false) < 0.0);
         assert!(input_velocity(-800.0, 2.0, 0.016, false) > 0.0);
+    }
+
+    #[test]
+    fn fling_begins_on_the_first_frame_after_lift_off_without_double_counting() {
+        let now = Instant::now();
+        let last_event = now - Duration::from_millis(4);
+        let previous_frame = now - Duration::from_millis(16);
+        let interval = Duration::from_millis(7);
+        let (delta, _) = integrate_fling((800.0, 0.0), previous_frame, last_event, now, interval);
+        assert!((delta.0 - decay_step(800.0, 0.004).0).abs() < 0.001);
+        assert!(delta.0 > 0.0);
+
+        // An event arriving midway through a frame still gets its full direct
+        // delta; only the time after it contributes to inertia.
+        let mid_event = now - Duration::from_millis(2);
+        let (delta, _) = integrate_fling((800.0, 0.0), previous_frame, mid_event, now, interval);
+        assert!((delta.0 - decay_step(800.0, 0.002).0).abs() < 0.001);
+
+        // After lift-off a steady display interval is used rather than the
+        // measured callback gap, so pacing jitter doesn't become delta jitter.
+        let settled_event = now - Duration::from_millis(20);
+        let settled_frame = now - Duration::from_millis(6);
+        let (delta, _) = integrate_fling((800.0, 0.0), settled_frame, settled_event, now, interval);
+        assert!((delta.0 - decay_step(800.0, 0.007).0).abs() < 0.001);
+    }
+
+    #[test]
+    fn fling_tail_never_skips_a_whole_frame() {
+        let interval = Duration::from_millis(7);
+        let seconds = interval.as_secs_f32();
+        let stop_speed = (MIN_FLING_PIXELS_PER_FRAME / seconds).max(2.0);
+        let mut velocity = 500.0_f32;
+        let mut accum = 0.0_f32;
+        let mut frames = 0;
+        while velocity >= stop_speed {
+            let (delta, next) = decay_step(velocity, seconds);
+            velocity = next;
+            assert_ne!(
+                step_scroll_accum(&mut accum, delta),
+                0,
+                "zero-delta frame at velocity {velocity}"
+            );
+            frames += 1;
+            assert!(frames < 1000, "fling failed to settle");
+        }
+        assert!(frames > 10, "fling ended too early");
     }
 
     #[test]

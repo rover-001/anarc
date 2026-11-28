@@ -55,6 +55,7 @@ impl Render for Anarc {
                 this.engine.set_windowless_frame_rate(paint_cap);
             })
             .detach();
+            schedule_frame_pump(cx, _window);
 
             // Synthetic input for repeatable OSR benchmarks on Wayland, where X11
             // window automation cannot target this GPUI window.
@@ -1131,6 +1132,18 @@ fn consent_button(
         .on_click(on_click)
 }
 
+/// Promote accepted OSR frames at the start of every display frame. Wheel
+/// deltas are injected in `WebViewport`'s own next-frame callback, so pumping
+/// from there would re-enter that entity; this runs on the `Anarc` entity
+/// instead and simply publishes whatever CEF has already accepted.
+#[cfg(not(test))]
+fn schedule_frame_pump(cx: &mut Context<Anarc>, window: &mut Window) {
+    cx.on_next_frame(window, |this, window, cx| {
+        this.pump_visible_frames(cx);
+        schedule_frame_pump(cx, window);
+    });
+}
+
 #[cfg(not(test))]
 impl Anarc {
     fn visible_browser_panes(&self) -> (smallvec::SmallVec<[String; 5]>, bool, Option<String>) {
@@ -1153,6 +1166,21 @@ impl Anarc {
             visible_ids.push(peek_id);
         }
         (visible_ids, split_active, peek_id)
+    }
+
+    fn pump_visible_frames(&mut self, cx: &mut Context<Self>) {
+        let (visible_ids, split_active, peek_id) = self.visible_browser_panes();
+        for tab_id in &visible_ids {
+            self.engine.send_external_begin_frame(tab_id);
+        }
+        let dirty_tabs: Vec<&str> = visible_ids.iter().map(String::as_str).collect();
+        self.update_browser_panes(
+            &visible_ids,
+            &dirty_tabs,
+            split_active,
+            peek_id.as_deref(),
+            cx,
+        );
     }
 
     fn update_browser_panes(

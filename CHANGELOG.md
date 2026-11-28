@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.3
+
+- Web content is capped to the display refresh rate by default; an opt-in
+  "Uncapped frame rate" toggle in Settings > General removes the cap after a
+  restart (`ANARC_UNCAPPED_FPS=1` remains available for benchmarks).
+- Scrolling: discrete wheel notches no longer add app-side momentum, Wayland
+  continuous deltas match Chromium's raw pixel values, fling coasting starts on
+  the first frame after lift-off with no zero-step tail, and OSR paints are
+  phase-locked to display frames via GPUI-driven BeginFrames.
+- Web-page cursors map to the matching system-theme shapes for diagonal resize,
+  panning, cell, and drag states.
+
 ## Unreleased — Telemetry schema version 1
 
 - Added opt-in, default-off daily agent-control telemetry (`schema_version = 1`):

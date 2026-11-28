@@ -285,6 +285,10 @@ pub(crate) struct BrowserPreferences {
     pub(crate) sidebar_mode: SidebarMode,
     #[serde(default = "default_ad_blocker_enabled")]
     pub(crate) ad_blocker_enabled: bool,
+    /// Removes CEF's display-refresh cap. Requires a restart to take effect
+    /// because the compositor switches are applied at process startup.
+    #[serde(default)]
+    pub(crate) uncapped_fps: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -307,6 +311,7 @@ impl Default for BrowserPreferences {
             search_engine: SearchEngine::Google,
             sidebar_mode: SidebarMode::Icons,
             ad_blocker_enabled: true,
+            uncapped_fps: false,
         }
     }
 }
@@ -420,6 +425,17 @@ mod tests {
         let old =
             serde_json::from_str::<BrowserPreferences>(r#"{"search_engine":"google"}"#).unwrap();
         assert!(old.ad_blocker_enabled);
+    }
+
+    #[test]
+    fn uncapped_fps_defaults_to_off_even_for_legacy_preferences() {
+        assert!(!BrowserPreferences::default().uncapped_fps);
+        let old =
+            serde_json::from_str::<BrowserPreferences>(r#"{"search_engine":"google"}"#).unwrap();
+        assert!(!old.uncapped_fps);
+        let enabled = serde_json::from_str::<BrowserPreferences>(r#"{"uncapped_fps":true}"#)
+            .expect("uncapped_fps round-trips");
+        assert!(enabled.uncapped_fps);
     }
 
     #[test]

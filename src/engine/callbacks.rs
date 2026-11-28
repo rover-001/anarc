@@ -762,7 +762,10 @@ cef::wrap_render_handler! {
                     state.last_edge_color_instant = Some(now);
                 }
                 state.pending_image = Some(render_image);
-                state.force_next_paint = false;
+                // Do not clear the input override here: the pixel copy above
+                // released the mutex, so a newer wheel event could set it
+                // during the copy and be cleared with this paint. It is cleared
+                // when the UI actually publishes the frame instead.
                 state.last_accepted_paint = Some(now);
                 state.dirty = true;
                 drop(state);
@@ -938,6 +941,27 @@ cef::wrap_display_handler! {
                 CursorType::HAND => 3,
                 CursorType::EASTWESTRESIZE | CursorType::COLUMNRESIZE => 5,
                 CursorType::NORTHSOUTHRESIZE | CursorType::ROWRESIZE => 6,
+                // Diagonal resizes and panning must keep the system theme's
+                // matching cursor instead of silently falling back to Arrow.
+                CursorType::NORTHEASTSOUTHWESTRESIZE
+                | CursorType::NORTHEASTRESIZE
+                | CursorType::SOUTHWESTRESIZE => 13,
+                CursorType::NORTHWESTSOUTHEASTRESIZE
+                | CursorType::NORTHWESTRESIZE
+                | CursorType::SOUTHEASTRESIZE => 14,
+                CursorType::MOVE
+                | CursorType::MIDDLEPANNING
+                | CursorType::EASTPANNING
+                | CursorType::NORTHPANNING
+                | CursorType::NORTHEASTPANNING
+                | CursorType::NORTHWESTPANNING
+                | CursorType::SOUTHPANNING
+                | CursorType::SOUTHEASTPANNING
+                | CursorType::SOUTHWESTPANNING
+                | CursorType::WESTPANNING
+                | CursorType::MIDDLE_PANNING_VERTICAL
+                | CursorType::MIDDLE_PANNING_HORIZONTAL => 7,
+                CursorType::CELL => 2,
                 CursorType::GRAB => 7,
                 CursorType::GRABBING => 8,
                 CursorType::NOTALLOWED | CursorType::NODROP => 9,
