@@ -439,6 +439,21 @@ fn gpu_explicitly_disabled() -> bool {
 /// Maximum requested OSR paint rate.
 pub const OSR_MAX_FRAME_RATE: i32 = 240;
 
+static OSR_MIN_PAINT_INTERVAL: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+
+/// Minimum spacing between accepted OSR frame copies. CEF can paint far more
+/// often than the display can show; skipping redundant full-frame copies frees
+/// CPU without changing the page's rAF cadence.
+pub(super) fn osr_min_paint_interval() -> Duration {
+    *OSR_MIN_PAINT_INTERVAL.get_or_init(|| {
+        let ms = std::env::var("ANARC_OSR_MIN_PAINT_INTERVAL_MS")
+            .ok()
+            .and_then(|value| value.trim().parse::<f64>().ok())
+            .unwrap_or_else(|| 1000.0 / display_refresh_rate(None).max(1) as f64);
+        Duration::from_secs_f64((ms.clamp(0.0, 1000.0) / 1000.0).max(0.0))
+    })
+}
+
 fn osr_frame_rate_cap() -> i32 {
     std::env::var("ANARC_OSR_FPS")
         .ok()
@@ -585,12 +600,15 @@ cef::wrap_app! {
                     "disable-sync",
                     "disable-breakpad",
                     "no-first-run",
-                    // Anarc's chrome is dark, so web content should request the
-                    // dark color scheme by default (prefers-color-scheme: dark).
-                    "force-dark-mode",
                     "disable-chrome-runtime",
                 ] {
                     let name = CefString::from(name);
+                    command_line.append_switch(Some(&name));
+                }
+                if std::env::var_os("ANARC_NO_FORCE_DARK").is_none() {
+                    // Anarc's chrome is dark, so web content should request the
+                    // dark color scheme by default (prefers-color-scheme: dark).
+                    let name = CefString::from("force-dark-mode");
                     command_line.append_switch(Some(&name));
                 }
                 if has_gpu {
@@ -598,9 +616,23 @@ cef::wrap_app! {
                         "enable-gpu-rasterization",
                         "ignore-gpu-blocklist",
                         "enable-zero-copy",
+                        // Benchmark parity with uncapped Chromium/Brave: CEF's
+                        // OSR rAF is otherwise pinned to the display refresh.
+                        "disable-gpu-vsync",
+                        "disable-frame-rate-limit",
                     ] {
                         let name = CefString::from(name);
                         command_line.append_switch(Some(&name));
+                    }
+                    // ANGLE/Vulkan keeps the GPU compositor and Canvas 2D raster
+                    // on the native driver path instead of the GL translation
+                    // layer. Measured +27% DOM mutation and +19% Canvas 2D in
+                    // the single-tab benchmark on an Ada GPU; opt out where a
+                    // driver does not support it.
+                    if std::env::var_os("ANARC_NO_VULKAN").is_none() {
+                        let name = CefString::from("use-angle");
+                        let value = CefString::from("vulkan");
+                        command_line.append_switch_with_value(Some(&name), Some(&value));
                     }
                 } else if gpu_explicitly_disabled() {
                     for name in [
@@ -639,7 +671,45 @@ cef::wrap_app! {
                 let name = CefString::from("disk-cache-size");
                 let value = CefString::from("104857600");
                 command_line.append_switch_with_value(Some(&name), Some(&value));
+                append_experiment_flags(command_line);
             }
+        }
+    }
+}
+
+/// Allow-listed, env-gated switches for A/B testing. Default is a no-op;
+/// path, sandbox and user-agent overrides are never accepted.
+fn append_experiment_flags(command_line: &mut CommandLine) {
+    const ALLOWED: &[&str] = &[
+        "disable-gpu-driver-bug-workarounds",
+        "use-angle",
+        "use-gl",
+        "enable-skia-graphite",
+        "disable-background-timer-throttling",
+        "enable-features",
+        "disable-features",
+    ];
+    let Ok(raw) = std::env::var("ANARC_EXPERIMENT_FLAGS") else {
+        return;
+    };
+    for token in raw.split_whitespace() {
+        let token = token.trim_start_matches('-');
+        let (name, value) = match token.split_once('=') {
+            Some((name, value)) if !name.is_empty() && !value.is_empty() => (name, Some(value)),
+            Some((name, _)) if !name.is_empty() => (name, None),
+            _ => continue,
+        };
+        if !ALLOWED.contains(&name) {
+            continue;
+        }
+        let cef_name = CefString::from(name);
+        command_line.remove_switch(Some(&cef_name));
+        match value {
+            Some(value) => {
+                let cef_value = CefString::from(value);
+                command_line.append_switch_with_value(Some(&cef_name), Some(&cef_value));
+            }
+            None => command_line.append_switch(Some(&cef_name)),
         }
     }
 }
@@ -655,6 +725,13 @@ pub struct BrowserSharedState {
     pub last_edge_color_instant: Option<std::time::Instant>,
     pub dirty: bool,
     pub root_dirty: bool,
+    /// False for tabs CEF has been told are hidden: their OSR paints must not
+    /// copy a full frame or wake the UI loop.
+    pub visible: bool,
+    /// Last frame copy accepted from CEF, used to skip redundant paints.
+    pub last_accepted_paint: Option<Instant>,
+    /// Forces the next paint through regardless of the minimum interval.
+    pub force_next_paint: bool,
     /// Latest CEF frame awaiting handoff to GPUI. Only the UI may publish it
     /// as `image`, so replacing this slot never leaves an atlas entry behind.
     pub pending_image: Option<Arc<RenderImage>>,
@@ -702,7 +779,7 @@ pub(super) fn new_shared_state(
     zoom_level: f64,
 ) -> BrowserSharedState {
     let initial_host = crate::shield::url_host(url);
-    let initial_favicon = initial_host.as_deref().and_then(load_favicon_from_disk);
+    let initial_favicon = initial_host.as_deref().and_then(render_favicon);
     BrowserSharedState {
         space_id: space_id.to_string(),
         width: width.max(1),
@@ -713,6 +790,9 @@ pub(super) fn new_shared_state(
         last_edge_color_instant: None,
         dirty: false,
         root_dirty: false,
+        visible: true,
+        last_accepted_paint: None,
+        force_next_paint: false,
         pending_image: None,
         title: None,
         url: None,

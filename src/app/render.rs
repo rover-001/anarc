@@ -23,7 +23,9 @@ impl Render for Anarc {
             modal.theme_draft.theme_auto_light = auto_light;
         }
         for space in &mut self.spaces {
-            space.theme_auto_light = auto_light;
+            if space.theme_auto_light != auto_light {
+                space.theme_auto_light = auto_light;
+            }
         }
         // TEMPORARY benchmark hook.
         if std::env::var_os("ANARC_BENCH_URL").is_some()
@@ -92,10 +94,22 @@ impl Render for Anarc {
                 .detach();
             }
             let ui_update_receiver = self.engine.ui_update_receiver();
+            static CEF_INIT_DELAY_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+            let cef_init_delay_ms = *CEF_INIT_DELAY_MS.get_or_init(|| {
+                std::env::var("ANARC_CEF_INIT_DELAY_MS")
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+                    .unwrap_or(180)
+                    .min(5000)
+            });
             cx.spawn(async move |this, cx| {
                 cx.background_executor()
-                    .timer(std::time::Duration::from_millis(180))
+                    .timer(std::time::Duration::from_millis(cef_init_delay_ms))
                     .await;
+                let config_dir = crate::paths::config_dir();
+                let spaces_path = config_dir.join("spaces.json");
+                let cookies_path = config_dir.join("shared-cookies.json");
+                let session_path = config_dir.join("live-share-session.json");
                 let mut had_peer_cursors = false;
                 let mut last_periodic_housekeeping = Instant::now() - std::time::Duration::from_secs(1);
                 loop {
@@ -272,7 +286,8 @@ impl Render for Anarc {
                             >= std::time::Duration::from_millis(250);
                         if run_periodic {
                             last_periodic_housekeeping = std::time::Instant::now();
-                            if let Some(mtime) = crate::persist::spaces_mtime()
+                            if let Ok(meta) = std::fs::metadata(&spaces_path)
+                                && let Ok(mtime) = meta.modified()
                                 && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
                             {
                                 let mtime_ms = d.as_millis() as u64;
@@ -286,7 +301,6 @@ impl Render for Anarc {
                                 }
                             }
 
-                            let cookies_path = crate::paths::config_dir().join("shared-cookies.json");
                             if let Ok(meta) = std::fs::metadata(&cookies_path)
                                 && let Ok(mtime) = meta.modified()
                                 && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
@@ -305,7 +319,6 @@ impl Render for Anarc {
                             // Live Share publishes session transitions as a tiny file.
                             // Export the host's full account/session snapshot the moment
                             // sharing starts, before any peer connects.
-                            let session_path = crate::paths::config_dir().join("live-share-session.json");
                             if let Ok(meta) = std::fs::metadata(&session_path)
                                 && let Ok(mtime) = meta.modified()
                                 && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
@@ -336,6 +349,13 @@ impl Render for Anarc {
                                         }
                                     }
                                 }
+                            }
+
+                            if this.last_lifecycle_check.elapsed()
+                                >= std::time::Duration::from_secs(5)
+                            {
+                                this.last_lifecycle_check = std::time::Instant::now();
+                                this.reap_expired_tabs();
                             }
                         }
 
@@ -403,7 +423,7 @@ impl Render for Anarc {
                                     }
                                 }
                             }
-                            this.save_state();
+                            this.schedule_browser_state_save(cx);
                             cx.notify();
                         }
                         if run_periodic || has_root_updates {
@@ -475,25 +495,7 @@ impl Render for Anarc {
                         tab.url = u;
                     }
                 }
-                self.save_state();
-            }
-        }
-
-        let expired_tabs = if self.plugins.is_active("lumen.lifecycle") {
-            self.engine.discard_inactive()
-        } else {
-            Vec::new()
-        };
-        if !expired_tabs.is_empty() {
-            for space in &mut self.spaces {
-                for tab in &mut space.tabs {
-                    if expired_tabs.iter().any(|id| id == &tab.id) {
-                        tab.state = TabState::Discarded;
-                    }
-                }
-            }
-            for tab_id in expired_tabs {
-                self.emit_plugin_text("tab.discarded", tab_id);
+                self.schedule_browser_state_save(cx);
             }
         }
 

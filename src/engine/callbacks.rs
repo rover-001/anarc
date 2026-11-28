@@ -1,6 +1,6 @@
 use super::*;
 
-const MAX_RECYCLED_FRAME_BYTES: usize = 32 * 1024 * 1024;
+const MAX_RECYCLED_FRAME_BYTES: usize = 256 * 1024 * 1024;
 static RECYCLED_FRAME_PIXELS: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 
 fn recycle_frame_pixels(pixels: Vec<u8>) {
@@ -8,7 +8,7 @@ fn recycle_frame_pixels(pixels: Vec<u8>) {
         return;
     };
     let retained_bytes: usize = pool.iter().map(Vec::capacity).sum();
-    if pool.len() < 3 && pixels.capacity() <= MAX_RECYCLED_FRAME_BYTES - retained_bytes {
+    if pool.len() < 6 && pixels.capacity() <= MAX_RECYCLED_FRAME_BYTES - retained_bytes {
         pool.push(pixels);
     }
 }
@@ -107,7 +107,8 @@ cef::wrap_load_handler! {
                             }
                             host.invalidate(PaintElementType::VIEW);
                         }
-            inject_clipboard_script(frame);
+            // The clipboard script is injected once at on_load_start; running it
+            // again here only recompiles a guarded no-op script.
             let url = CefStringUtf16::from(&frame.url()).to_string();
             if super::panel_scheme::is_live_share_page(&url) {
                 super::panel_scheme::run_live_share_script(frame, "\
@@ -712,6 +713,33 @@ cef::wrap_render_handler! {
             if width <= 0 || height <= 0 || buffer.is_null() {
                 return;
             }
+            let now = std::time::Instant::now();
+            let (accept, frame_size_changed) = {
+                let Ok(state) = self.shared.lock() else { return; };
+                // Hidden tabs must not pay for a full-frame copy or wake the UI
+                // loop. CEF's was_hidden() normally stops their paints, but an
+                // explicit invalidate can still deliver a stale buffer.
+                if !state.visible {
+                    return;
+                }
+                // OSR buffers are physical pixels; pane dimensions are DIPs.
+                // Compare consecutive buffers so HiDPI does not resample every paint.
+                let size_changed = state.pending_image.as_ref().or(state.image.as_ref()).is_none_or(|image| {
+                    let size = image.size(0);
+                    u32::from(size.width) != width as u32
+                        || u32::from(size.height) != height as u32
+                });
+                let elapsed = state.last_accepted_paint.map(|t| now.duration_since(t));
+                let accept = state.force_next_paint
+                    || size_changed
+                    || elapsed.is_none()
+                    || elapsed.is_some_and(|dt| dt >= super::osr_min_paint_interval())
+                    || elapsed.is_some_and(|dt| dt >= std::time::Duration::from_millis(250));
+                (accept, size_changed)
+            };
+            if !accept {
+                return;
+            }
             let len = (width as usize) * (height as usize) * 4;
             let slice = unsafe { std::slice::from_raw_parts(buffer, len) };
             let pixels = copy_frame_pixels(slice);
@@ -724,23 +752,18 @@ cef::wrap_render_handler! {
                 let render_image =
                     Arc::new(RenderImage::with_recycled_pixels(frame, recycle_frame_pixels));
                 let mut state = self.shared.lock().unwrap();
-                // OSR buffers are physical pixels; pane dimensions are DIPs.
-                // Compare consecutive buffers so HiDPI does not resample every paint.
-                let frame_size_changed = state.pending_image.as_ref().or(state.image.as_ref()).is_none_or(|image| {
-                    let size = image.size(0);
-                    u32::from(size.width) != width as u32
-                        || u32::from(size.height) != height as u32
-                });
                 let should_calc_edge = state.edge_color.is_none()
                     || frame_size_changed
                     || state.last_edge_color_instant.is_none_or(|t| {
-                        std::time::Instant::now().duration_since(t) >= std::time::Duration::from_millis(1000)
+                        now.duration_since(t) >= std::time::Duration::from_millis(1000)
                     });
                 if should_calc_edge {
                     state.edge_color = median_edge_color_bgra(slice, width as usize, height as usize);
-                    state.last_edge_color_instant = Some(std::time::Instant::now());
+                    state.last_edge_color_instant = Some(now);
                 }
                 state.pending_image = Some(render_image);
+                state.force_next_paint = false;
+                state.last_accepted_paint = Some(now);
                 state.dirty = true;
                 drop(state);
                 // CEF paces paints and the bounded wake channel coalesces
@@ -968,20 +991,31 @@ cef::wrap_display_handler! {
                         state.favicon_host = None;
                         state.favicon_preferred = false;
                         if let Some(ref host) = new_host
-                            && let Some(cached) = load_favicon_from_disk(host) {
+                            && let Some(cached) = super::render_favicon(host) {
                                 state.favicon = Some(cached);
                                 state.favicon_host = Some(host.clone());
                             }
                     } else if state.favicon.is_none()
                         && let Some(ref host) = new_host
-                            && let Some(cached) = load_favicon_from_disk(host) {
+                            && let Some(cached) = super::render_favicon(host) {
                                 state.favicon = Some(cached);
                                 state.favicon_host = Some(host.clone());
                                 state.favicon_preferred = false;
                             }
-                    crate::history::record_visit(&page_url, "");
                     state.dirty = true;
                     state.root_dirty = true;
+                    state.force_next_paint = true;
+                    state.last_accepted_paint = None;
+                }
+                // SQLite must not run while the shared state mutex is held: the
+                // UI thread takes that lock on every paint wake.
+                crate::history::record_visit(&page_url, "");
+                // A hidden->visible cycle re-arms CEF's sustained OSR paint
+                // loop. Without it a page can settle at a low frame cadence
+                // even though CEF is idle and able to paint much faster.
+                if let Some(host) = browser.as_ref().and_then(|browser| browser.host()) {
+                    host.was_hidden(0);
+                    host.invalidate(PaintElementType::VIEW);
                 }
                 let _ = self.ui_update_wake.try_send(());
                 if let Some(favicon_url) = origin_favicon_url(&page_url)

@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Browser Performance Benchmark</title>
+<style>
+  :root {
+    --bg: #07090f;
+    --panel: rgba(15, 23, 42, 0.88);
+    --border: rgba(148, 163, 184, 0.2);
+    --text: #f8fafc;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --good: #34d399;
+    --warn: #fbbf24;
+    --bad: #f87171;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  #hud {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    background: var(--panel);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .hud-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .browser-badge {
+    background: linear-gradient(135deg, #0ea5e9, #6366f1);
+    color: #fff;
+    font-weight: 700;
+    font-size: 14px;
+    padding: 4px 12px;
+    border-radius: 6px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .stage-label {
+    font-size: 15px;
+    font-weight: 600;
+    color: #e2e8f0;
+  }
+  .stopwatch {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+    background: rgba(2, 6, 23, 0.75);
+    padding: 2px 14px;
+    border-radius: 8px;
+    border: 1px solid rgba(56, 189, 248, 0.35);
+  }
+  .telemetry-grid {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .metric {
+    background: rgba(2, 6, 23, 0.6);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+  }
+  .metric-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  .metric-val {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 16px;
+    font-weight: 700;
+    margin-top: 2px;
+    color: var(--text);
+  }
+  .progress-track {
+    width: 100%;
+    height: 4px;
+    background: rgba(148, 163, 184, 0.15);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #38bdf8, #818cf8, #34d399);
+  }
+  #stage-root {
+    position: fixed;
+    inset: 0;
+    padding-top: 106px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas.full {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  #css3d-container {
+    width: 100%;
+    height: 100%;
+    perspective: 900px;
+    display: none;
+    flex-wrap: wrap;
+    align-content: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 16px;
+    overflow: hidden;
+  }
+  .card3d {
+    width: 48px;
+    height: 48px;
+    border-radius: 6px;
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.85), rgba(168, 85, 247, 0.85));
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+    will-change: transform;
+  }
+  #dom-container {
+    width: 100%;
+    height: 100%;
+    display: none;
+    grid-template-columns: repeat(16, 1fr);
+    gap: 4px;
+    padding: 16px;
+    align-content: start;
+    overflow: hidden;
+  }
+  .dom-cell {
+    height: 28px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: monospace;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+  }
+  #summary-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(2, 6, 23, 0.82);
+    backdrop-filter: blur(8px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+  .summary-card {
+    background: #0f172a;
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    border-radius: 14px;
+    padding: 24px 30px;
+    width: 680px;
+    max-width: 92vw;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
+  }
+  .summary-card h2 {
+    font-size: 22px;
+    margin-bottom: 14px;
+    color: var(--accent);
+  }
+  .summary-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .summary-table th, .summary-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+  }
+  .summary-table th { color: var(--muted); font-weight: 600; }
+</style>
+</head>
+<body>
+  <div id="hud">
+    <div class="hud-top">
+      <div class="brand">
+        <span class="browser-badge" id="browser-name">BROWSER</span>
+        <span class="stage-label" id="stage-label">Initializing...</span>
+      </div>
+      <div class="stopwatch" id="stopwatch">00:00.000</div>
+    </div>
+    <div class="telemetry-grid">
+      <div class="metric"><div class="metric-label">Instant FPS</div><div class="metric-val" id="m-fps">--</div></div>
+      <div class="metric"><div class="metric-label">Mean FPS</div><div class="metric-val" id="m-mean">--</div></div>
+      <div class="metric"><div class="metric-label">1% Low FPS</div><div class="metric-val" id="m-1low">--</div></div>
+      <div class="metric"><div class="metric-label">Total Frames</div><div class="metric-val" id="m-frames">0</div></div>
+      <div class="metric"><div class="metric-label">Dropped %</div><div class="metric-val" id="m-drop">0.0%</div></div>
+      <div class="metric"><div class="metric-label">Cold Startup</div><div class="metric-val" id="m-startup">-- ms</div></div>
+      <div class="metric"><div class="metric-label">Peak RAM (RSS)</div><div class="metric-val" id="m-ram">-- MB</div></div>
+    </div>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+
+  <div id="stage-root">
+    <canvas id="gl-canvas" class="full"></canvas>
+    <canvas id="c2d-canvas" class="full" style="display:none"></canvas>
+    <div id="css3d-container"></div>
+    <div id="dom-container"></div>
+    <canvas id="jit-canvas" class="full" style="display:none"></canvas>
+  </div>
+
+  <div id="summary-modal">
+    <div class="summary-card">
+      <h2 id="summary-title">Benchmark Complete</h2>
+      <table class="summary-table" id="summary-table"></table>
+    </div>
+  </div>
+
+  <script>
+  (() => {
+    const params = new URLSearchParams(location.search);
+    const browserId = params.get('browser') || 'unknown';
+    const launchTs = Number(params.get('launch_ts') || 0);
+    const TARGET_REFRESH_HZ = 144;
+    const DROP_THRESHOLD_MS = (1000 / TARGET_REFRESH_HZ) * 1.5; // 10.42ms for 144Hz
+    const STAGE_DURATION_MS = 8000;
+    const TOTAL_DURATION_MS = 40000;
+
+    document.getElementById('browser-name').textContent = browserId.toUpperCase();
+
+    const elStopwatch = document.getElementById('stopwatch');
+    const elStage = document.getElementById('stage-label');
+    const elFps = document.getElementById('m-fps');
+    const elMean = document.getElementById('m-mean');
+    const el1Low = document.getElementById('m-1low');
+    const elFrames = document.getElementById('m-frames');
+    const elDrop = document.getElementById('m-drop');
+    const elStartup = document.getElementById('m-startup');
+    const elRam = document.getElementById('m-ram');
+    const elProg = document.getElementById('progress-fill');
+
+    const glCanvas = document.getElementById('gl-canvas');
+    const c2dCanvas = document.getElementById('c2d-canvas');
+    const cssContainer = document.getElementById('css3d-container');
+    const domContainer = document.getElementById('dom-container');
+    const jitCanvas = document.getElementById('jit-canvas');
+
+    let peakRssMb = 0;
+    let currentRssMb = 0;
+    async function pollRam() {
+      try {
+        const res = await fetch(`/api/ram?browser=${encodeURIComponent(browserId)}`);
+        const d = await res.json();
+        currentRssMb = d.currentRssMb || 0;
+        peakRssMb = Math.max(peakRssMb, d.peakRssMb || 0);
+        elRam.textContent = `${peakRssMb.toFixed(0)} MB`;
+      } catch {}
+    }
+    const ramTimer = setInterval(pollRam, 500);
+    pollRam();
+
+    function resizeCanvases() {
+      const w = window.innerWidth;
+      const h = Math.max(200, window.innerHeight - 106);
+      for (const c of [glCanvas, c2dCanvas, jitCanvas]) {
+        c.width = w;
+        c.height = h;
+      }
+    }
+    resizeCanvases();
+    window.addEventListener('resize', resizeCanvases);
+
+    // --- STAGE 1: WebGL 3D Particle Cloud (12,000 particles) ---
+    const GL_COUNT = 12000;
+    const gl = glCanvas.getContext('webgl2') || glCanvas.getContext('webgl');
+    let glProg, glPosLoc, glTimeLoc, glResLoc, glBuf;
+    if (gl) {
+      const vsSrc = `
+        attribute vec3 aPos;
+        uniform float uTime;
+        uniform vec2 uRes;
+        varying vec3 vColor;
+        void main() {
+          float a = uTime * 0.65 + length(aPos.xy) * 0.4;
+          float ca = cos(a), sa = sin(a);
+          vec3 p = aPos;
+          p.xz = mat2(ca, -sa, sa, ca) * p.xz;
+          p.xy = mat2(cos(uTime*0.3), -sin(uTime*0.3), sin(uTime*0.3), cos(uTime*0.3)) * p.xy;
+          float z = p.z + 2.8;
+          float aspect = uRes.x / max(uRes.y, 1.0);
+          gl_Position = vec4(p.x / (z * aspect) * 1.8, p.y / z * 1.8, p.z * 0.1, 1.0);
+          gl_PointSize = clamp(8.0 / z, 1.5, 6.0);
+          vColor = 0.5 + 0.5 * cos(uTime + aPos.xyz * 2.5 + vec3(0.0, 2.0, 4.0));
+        }
+      `;
+      const fsSrc = `
+        precision mediump float;
+        varying vec3 vColor;
+        void main() {
+          vec2 d = gl_PointCoord - vec2(0.5);
+          float r = dot(d, d);
+          if (r > 0.25) discard;
+          gl_FragColor = vec4(vColor, 0.85 * (1.0 - r * 4.0));
+        }
+      `;
+      const compile = (type, src) => {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, src);
+        gl.compileShader(s);
+        return s;
+      };
+      glProg = gl.createProgram();
+      gl.attachShader(glProg, compile(gl.VERTEX_SHADER, vsSrc));
+      gl.attachShader(glProg, compile(gl.FRAGMENT_SHADER, fsSrc));
+      gl.linkProgram(glProg);
+      glPosLoc = gl.getAttribLocation(glProg, 'aPos');
+      glTimeLoc = gl.getUniformLocation(glProg, 'uTime');
+      glResLoc = gl.getUniformLocation(glProg, 'uRes');
+
+      const pts = new Float32Array(GL_COUNT * 3);
+      for (let i = 0; i < GL_COUNT; i++) {
+        const u = Math.random() * 2 - 1;
+        const theta = Math.random() * Math.PI * 2;
+        const r = Math.cbrt(Math.random()) * 1.5;
+        const s = Math.sqrt(1 - u * u);
+        pts[i * 3] = r * s * Math.cos(theta);
+        pts[i * 3 + 1] = r * s * Math.sin(theta);
+        pts[i * 3 + 2] = r * u;
+      }
+      glBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, pts, gl.STATIC_DRAW);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+    }
+
+    function runStage1(tSec) {
+      if (!gl) return;
+      gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+      gl.clearColor(0.02, 0.03, 0.06, 1.0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.useProgram(glProg);
+      gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
+      gl.enableVertexAttribArray(glPosLoc);
+      gl.vertexAttribPointer(glPosLoc, 3, gl.FLOAT, false, 0, 0);
+      gl.uniform1f(glTimeLoc, tSec);
+      gl.uniform2f(glResLoc, glCanvas.width, glCanvas.height);
+      gl.drawArrays(gl.POINTS, 0, GL_COUNT);
+    }
+
+    // --- STAGE 2: Canvas 2D Particle Storm (32,000 subpixel particles) ---
+    const C2D_COUNT = 32000;
+    const c2d = c2dCanvas.getContext('2d', { alpha: false });
+    const pX = new Float32Array(C2D_COUNT);
+    const pY = new Float32Array(C2D_COUNT);
+    const pVX = new Float32Array(C2D_COUNT);
+    const pVY = new Float32Array(C2D_COUNT);
+    for (let i = 0; i < C2D_COUNT; i++) {
+      pX[i] = Math.random() * c2dCanvas.width;
+      pY[i] = Math.random() * c2dCanvas.height;
+      pVX[i] = (Math.random() - 0.5) * 4.5;
+      pVY[i] = (Math.random() - 0.5) * 4.5;
+    }
+
+    function runStage2(tSec) {
+      const w = c2dCanvas.width, h = c2dCanvas.height;
+      c2d.fillStyle = 'rgba(7, 9, 15, 0.28)';
+      c2d.fillRect(0, 0, w, h);
+      const colors = ['#38bdf8', '#818cf8', '#34d399', '#f472b6'];
+      const chunk = C2D_COUNT / 4;
+      for (let b = 0; b < 4; b++) {
+        c2d.fillStyle = colors[b];
+        const start = b * chunk;
+        const end = start + chunk;
+        for (let i = start; i < end; i++) {
+          let x = pX[i] + pVX[i];
+          let y = pY[i] + pVY[i];
+          if (x < 0 || x >= w) { pVX[i] *= -1; x = Math.max(0, Math.min(w - 1, x)); }
+          if (y < 0 || y >= h) { pVY[i] *= -1; y = Math.max(0, Math.min(h - 1, y)); }
+          pX[i] = x; pY[i] = y;
+          c2d.fillRect(x, y, 1.5, 1.5);
+        }
+      }
+    }
+
+    // --- STAGE 3: CSS 3D Engine (450 continuously rotating 3D cards) ---
+    const CSS_COUNT = 450;
+    const cssCards = [];
+    for (let i = 0; i < CSS_COUNT; i++) {
+      const el = document.createElement('div');
+      el.className = 'card3d';
+      cssContainer.appendChild(el);
+      cssCards.push(el);
+    }
+
+    function runStage3(tSec) {
+      const deg = tSec * 140;
+      for (let i = 0; i < CSS_COUNT; i++) {
+        const rx = deg + i * 3.1;
+        const ry = deg * 1.3 + i * 2.7;
+        const rz = deg * 0.7 + i;
+        cssCards[i].style.transform = `rotateX(${rx}deg) rotateY(${ry}deg) rotateZ(${rz}deg) translateZ(12px)`;
+      }
+    }
+
+    // --- STAGE 4: DOM Mutation (Rapid insertion, modification, deletion + layout thrash) ---
+    let domTick = 0;
+    function runStage4(tSec) {
+      domTick++;
+      // Clear & rebuild 160 nodes every frame + mutate & force layout read
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < 160; i++) {
+        const cell = document.createElement('div');
+        cell.className = 'dom-cell';
+        const hue = (domTick * 7 + i * 5) % 360;
+        cell.style.backgroundColor = `hsla(${hue}, 70%, 42%, 0.85)`;
+        cell.textContent = `${(domTick + i) & 255}`;
+        frag.appendChild(cell);
+      }
+      domContainer.replaceChildren(frag);
+      // Modify subset and trigger layout read
+      const children = domContainer.children;
+      for (let i = 0; i < 32 && i < children.length; i++) {
+        children[i].style.width = `${85 + ((domTick + i) % 15)}%`;
+      }
+      void domContainer.offsetHeight;
+    }
+
+    // --- STAGE 5: JIT Compute (Matrix Mul + Monte Carlo) ---
+    const jitCtx = jitCanvas.getContext('2d');
+    const N = 84;
+    const matA = new Float64Array(N * N);
+    const matB = new Float64Array(N * N);
+    const matC = new Float64Array(N * N);
+    for (let i = 0; i < N * N; i++) {
+      matA[i] = Math.sin(i * 0.13);
+      matB[i] = Math.cos(i * 0.17);
+    }
+    let jitOpsTotal = 0;
+    let seed = 1337;
+    function xorshift32() {
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      return (seed >>> 0) / 4294967296;
+    }
+
+    function runStage5(tSec) {
+      // Matrix multiply N x N
+      for (let i = 0; i < N; i++) {
+        const rowOff = i * N;
+        for (let j = 0; j < N; j++) {
+          let sum = 0;
+          for (let k = 0; k < N; k++) {
+            sum += matA[rowOff + k] * matB[k * N + j];
+          }
+          matC[rowOff + j] = sum;
+        }
+      }
+      // Monte Carlo Pi estimation (120,000 samples)
+      let inside = 0;
+      const samples = 120000;
+      for (let s = 0; s < samples; s++) {
+        const x = xorshift32();
+        const y = xorshift32();
+        if (x * x + y * y <= 1.0) inside++;
+      }
+      const piEst = (4.0 * inside) / samples;
+      jitOpsTotal += N * N * N + samples;
+
+      const w = jitCanvas.width, h = jitCanvas.height;
+      jitCtx.fillStyle = '#07090f';
+      jitCtx.fillRect(0, 0, w, h);
+      jitCtx.strokeStyle = '#34d399';
+      jitCtx.lineWidth = 2;
+      jitCtx.beginPath();
+      for (let x = 0; x < w; x += 6) {
+        const idx = (x * 7) % (N * N);
+        const y = h * 0.5 + Math.sin(tSec * 6 + x * 0.02 + matC[idx] * 0.05) * (h * 0.25);
+        if (x === 0) jitCtx.moveTo(x, y);
+        else jitCtx.lineTo(x, y);
+      }
+      jitCtx.stroke();
+      jitCtx.fillStyle = '#e2e8f0';
+      jitCtx.font = 'bold 20px monospace';
+      jitCtx.fillText(`JIT Matrix ${N}x${N} + Monte Carlo (${samples}/frame) | Pi ≈ ${piEst.toFixed(5)} | Ops: ${(jitOpsTotal / 1e6).toFixed(1)}M`, 32, 64);
+    }
+
+    // --- Orchestrator ---
+    const stageNames = [
+      'Stage 1/5: WebGL 3D Particle Cloud (12,000 pts)',
+      'Stage 2/5: Canvas 2D Particle Storm (32,000 pts)',
+      'Stage 3/5: CSS 3D Engine (450 rotating cards)',
+      'Stage 4/5: DOM Mutation & Layout Thrash',
+      'Stage 5/5: JIT Compute (Matrix + Monte Carlo)'
+    ];
+    const stageEls = [glCanvas, c2dCanvas, cssContainer, domContainer, jitCanvas];
+    let activeStage = -1;
+
+    function switchStage(idx) {
+      if (idx === activeStage) return;
+      activeStage = idx;
+      elStage.textContent = stageNames[idx];
+      for (let i = 0; i < stageEls.length; i++) {
+        stageEls[i].style.display = i === idx ? (i === 2 ? 'flex' : i === 3 ? 'grid' : 'block') : 'none';
+      }
+    }
+
+    function formatStopwatch(ms) {
+      const clamped = Math.min(TOTAL_DURATION_MS, Math.max(0, ms));
+      const mins = Math.floor(clamped / 60000);
+      const secs = Math.floor((clamped % 60000) / 1000);
+      const millis = Math.floor(clamped % 1000);
+      return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(millis).padStart(3, '0')}`;
+    }
+
+    let startPerf = null;
+    let prevPerf = null;
+    let coldStartupMs = null;
+    const allFrameDts = [];
+    const stageFrameDts = [[], [], [], [], []];
+    let droppedFrames = 0;
+    let totalFrames = 0;
+    let instantFps = 0;
+    let finished = false;
+
+    function calcStats(dts) {
+      if (!dts.length) return { meanFps: 0, p1LowFps: 0, frames: 0, dropPct: 0 };
+      const sum = dts.reduce((a, b) => a + b, 0);
+      const meanFps = (dts.length / (sum / 1000));
+      const sorted = [...dts].sort((a, b) => a - b);
+      const p99 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.99))];
+      const p1LowFps = p99 > 0 ? 1000 / p99 : 0;
+      const drops = dts.filter(dt => dt > DROP_THRESHOLD_MS).length;
+      return {
+        meanFps: Number(meanFps.toFixed(2)),
+        p1LowFps: Number(p1LowFps.toFixed(2)),
+        frames: dts.length,
+        dropPct: Number(((drops / dts.length) * 100).toFixed(2))
+      };
+    }
+
+    async function finishBenchmark() {
+      if (finished) return;
+      finished = true;
+      clearInterval(ramTimer);
+      await pollRam();
+      elStopwatch.textContent = '00:40.000';
+      elProg.style.width = '100%';
+
+      const overall = calcStats(allFrameDts);
+      const stages = stageFrameDts.map((dts, i) => ({
+        stage: stageNames[i],
+        ...calcStats(dts)
+      }));
+
+      // Composite score: weighted blend of Mean FPS (50%), 1% Low FPS (30%), low drop rate (10%), low startup/RAM (10%)
+      const fpsScore = (overall.meanFps / TARGET_REFRESH_HZ) * 500;
+      const lowScore = (overall.p1LowFps / TARGET_REFRESH_HZ) * 300;
+      const stabilityScore = Math.max(0, 100 - overall.dropPct * 2);
+      const startupPenalty = Math.min(50, (coldStartupMs || 500) / 40);
+      const ramPenalty = Math.min(50, (peakRssMb || 500) / 40);
+      const compositeScore = Number((fpsScore + lowScore + stabilityScore + (100 - startupPenalty - ramPenalty)).toFixed(1));
+
+      const report = {
+        browser: browserId,
+        userAgent: navigator.userAgent,
+        targetRefreshHz: TARGET_REFRESH_HZ,
+        coldStartupMs,
+        meanFps: overall.meanFps,
+        p1LowFps: overall.p1LowFps,
+        totalFrames: overall.frames,
+        droppedPct: overall.dropPct,
+        peakRssMb,
+        compositeScore,
+        stages,
+        timestamp: new Date().toISOString()
+      };
+
+      try {
+        await fetch('/api/report', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(report)
+        });
+      } catch {}
+
+      document.getElementById('summary-title').textContent = `${browserId.toUpperCase()} — Composite Score: ${compositeScore}`;
+      const tbl = document.getElementById('summary-table');
+      tbl.innerHTML = `
+        <tr><th>Metric</th><th>Value</th></tr>
+        <tr><td>Cold Startup Latency</td><td>${coldStartupMs} ms</td></tr>
+        <tr><td>40s Mean FPS</td><td>${overall.meanFps} FPS</td></tr>
+        <tr><td>1% Low FPS</td><td>${overall.p1LowFps} FPS</td></tr>
+        <tr><td>Total Frames Rendered</td><td>${overall.frames}</td></tr>
+        <tr><td>Dropped Frame Rate (&gt;${DROP_THRESHOLD_MS.toFixed(1)}ms)</td><td>${overall.dropPct}%</td></tr>
+        <tr><td>Peak RAM (RSS)</td><td>${peakRssMb.toFixed(1)} MB</td></tr>
+      `;
+      document.getElementById('summary-modal').style.display = 'flex';
+    }
+
+    function frame(now) {
+      if (startPerf === null) {
+        startPerf = now;
+        prevPerf = now;
+        const firstPaintEpoch = Date.now();
+        coldStartupMs = launchTs > 0 ? Math.max(1, firstPaintEpoch - launchTs) : Math.round(performance.now());
+        elStartup.textContent = `${coldStartupMs} ms`;
+      }
+
+      const elapsed = now - startPerf;
+      if (elapsed >= TOTAL_DURATION_MS) {
+        finishBenchmark();
+        return;
+      }
+
+      const dt = now - prevPerf;
+      prevPerf = now;
+      if (totalFrames > 0 && dt > 0) {
+        allFrameDts.push(dt);
+        const sIdx = Math.min(4, Math.floor(elapsed / STAGE_DURATION_MS));
+        stageFrameDts[sIdx].push(dt);
+        if (dt > DROP_THRESHOLD_MS) droppedFrames++;
+        const curFps = 1000 / dt;
+        instantFps = instantFps === 0 ? curFps : instantFps * 0.85 + curFps * 0.15;
+      }
+      totalFrames++;
+
+      const stageIdx = Math.min(4, Math.floor(elapsed / STAGE_DURATION_MS));
+      switchStage(stageIdx);
+      const tSec = elapsed / 1000;
+
+      if (stageIdx === 0) runStage1(tSec);
+      else if (stageIdx === 1) runStage2(tSec);
+      else if (stageIdx === 2) runStage3(tSec);
+      else if (stageIdx === 3) runStage4(tSec);
+      else runStage5(tSec);
+
+      elStopwatch.textContent = formatStopwatch(elapsed);
+      elProg.style.width = `${(elapsed / TOTAL_DURATION_MS) * 100}%`;
+      elFrames.textContent = String(totalFrames);
+
+      if (totalFrames % 6 === 0 && allFrameDts.length > 0) {
+        const mean = allFrameDts.length / (elapsed / 1000);
+        elFps.textContent = instantFps.toFixed(1);
+        elMean.textContent = mean.toFixed(1);
+        elDrop.textContent = `${((droppedFrames / allFrameDts.length) * 100).toFixed(1)}%`;
+      }
+      if (totalFrames % 24 === 0 && allFrameDts.length > 10) {
+        const sorted = [...allFrameDts].sort((a, b) => a - b);
+        const p99 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.99))];
+        el1Low.textContent = (1000 / p99).toFixed(1);
+      }
+
+      requestAnimationFrame(frame);
+    }
+
+    requestAnimationFrame(frame);
+  })();
+  </script>
+</body>
+</html>

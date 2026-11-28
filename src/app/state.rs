@@ -267,6 +267,11 @@ pub(crate) struct Anarc {
     pub(crate) last_spaces_mtime: std::sync::atomic::AtomicU64,
     pub(crate) last_shared_cookies_mtime: std::sync::atomic::AtomicU64,
     pub(crate) last_cookie_sync: std::time::Instant,
+    /// Debounce state writes triggered by CEF title/URL updates; explicit user
+    /// actions still persist synchronously via `save_state`.
+    pub(crate) last_browser_state_save: std::time::Instant,
+    pub(crate) deferred_browser_state_save: bool,
+    pub(crate) last_lifecycle_check: std::time::Instant,
     // Live Share session state mirrored from the daemon's live-share-session.json.
     pub(crate) last_live_share_session_mtime: std::sync::atomic::AtomicU64,
     pub(crate) live_share_session_generation: u64,

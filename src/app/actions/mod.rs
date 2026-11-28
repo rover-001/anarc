@@ -392,6 +392,9 @@ impl Anarc {
             ),
             last_shared_cookies_mtime: std::sync::atomic::AtomicU64::new(0),
             last_cookie_sync: std::time::Instant::now(),
+            last_browser_state_save: std::time::Instant::now(),
+            deferred_browser_state_save: false,
+            last_lifecycle_check: std::time::Instant::now(),
             last_live_share_session_mtime: std::sync::atomic::AtomicU64::new(0),
             live_share_session_generation: 0,
             live_share_is_host: false,
@@ -679,6 +682,54 @@ impl Anarc {
         }
         #[cfg(test)]
         let _ = self;
+    }
+    /// Coalesce writes caused by CEF title/URL updates. A trailing save keeps
+    /// the final state even when updates keep arriving inside the window.
+    pub(crate) fn schedule_browser_state_save(&mut self, cx: &mut Context<Self>) {
+        const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(600);
+        if self.deferred_browser_state_save {
+            return;
+        }
+        let elapsed = self.last_browser_state_save.elapsed();
+        if elapsed >= DEBOUNCE {
+            self.save_state();
+            self.last_browser_state_save = std::time::Instant::now();
+            return;
+        }
+        self.deferred_browser_state_save = true;
+        let delay = DEBOUNCE.saturating_sub(elapsed);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = this.update(cx, |this, cx| {
+                this.deferred_browser_state_save = false;
+                this.save_state();
+                this.last_browser_state_save = std::time::Instant::now();
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+    /// Tab expiry has a 30-minute window; checking it on every UI render was
+    /// pure overhead. The caller throttles this to a 5-second cadence.
+    pub(crate) fn reap_expired_tabs(&mut self) {
+        let expired = if self.plugins.is_active("lumen.lifecycle") {
+            self.engine.discard_inactive()
+        } else {
+            Vec::new()
+        };
+        if expired.is_empty() {
+            return;
+        }
+        for space in &mut self.spaces {
+            for tab in &mut space.tabs {
+                if expired.iter().any(|id| id == &tab.id) {
+                    tab.state = TabState::Discarded;
+                }
+            }
+        }
+        for tab_id in expired {
+            self.emit_plugin_text("tab.discarded", tab_id);
+        }
     }
     pub(crate) fn focus_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.browser_focused = true;

@@ -147,6 +147,16 @@ impl Engine {
         self.set_visible_tabs(&[tab_id]);
     }
     pub fn set_visible_tabs(&mut self, tab_ids: &[&str]) {
+        // Steady state is one visible tab on every paint wake; avoid rebuilding
+        // the owned Vec before discovering nothing changed.
+        if tab_ids.len() == self.visible.len()
+            && tab_ids
+                .iter()
+                .zip(self.visible.iter())
+                .all(|(id, current)| *id == current.as_str())
+        {
+            return;
+        }
         let next = tab_ids
             .iter()
             .filter(|id| self.browsers.contains_key(**id))
@@ -162,8 +172,20 @@ impl Engine {
             }
         }
         for (id, entry) in &self.browsers {
+            let visible = next.contains(id);
+            if let Ok(mut state) = entry.state.lock() {
+                let was_visible = state.visible;
+                if !visible && was_visible {
+                    state.pending_image = None;
+                }
+                state.visible = visible;
+                if visible && !was_visible {
+                    state.force_next_paint = true;
+                    state.last_accepted_paint = None;
+                }
+            }
             if let Some(host) = entry.browser.host() {
-                host.was_hidden((!next.contains(id)) as i32);
+                host.was_hidden((!visible) as i32);
             }
         }
         for tab_id in &next {
@@ -183,6 +205,10 @@ impl Engine {
             self.lifecycle.deactivated(&id, now);
         }
         for entry in self.browsers.values() {
+            if let Ok(mut state) = entry.state.lock() {
+                state.visible = false;
+                state.pending_image = None;
+            }
             if let Some(host) = entry.browser.host() {
                 host.was_hidden(1);
             }

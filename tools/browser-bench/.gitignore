@@ -1,0 +1,4 @@
+results/
+recordings/
+__pycache__/
+*.pyc
